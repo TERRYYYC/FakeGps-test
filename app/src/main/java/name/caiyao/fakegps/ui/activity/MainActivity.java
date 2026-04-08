@@ -49,6 +49,7 @@ import name.caiyao.fakegps.hook.ScreenListener;
 import name.caiyao.fakegps.ui.fragment.CollectionFragment;
 import name.caiyao.fakegps.ui.fragment.HelpFragment;
 import name.caiyao.fakegps.ui.fragment.OneFragment;
+import name.caiyao.fakegps.ui.fragment.ProfileEditorFragment;
 import name.caiyao.fakegps.ui.fragment.SettingFragment;
 import name.caiyao.fakegps.util.MyToast;
 
@@ -141,6 +142,19 @@ public class MainActivity extends AppCompatActivity implements CollectionFragmen
 
         fabAdd();
         fabdel();
+
+        // Refresh map markers when returning from profile editor
+        getSupportFragmentManager().addOnBackStackChangedListener(new androidx.fragment.app.FragmentManager.OnBackStackChangedListener() {
+            @Override
+            public void onBackStackChanged() {
+                if (getSupportFragmentManager().getBackStackEntryCount() == 0) {
+                    loadMarkers();
+                    dao = new TempDao(getApplicationContext());
+                    list = dao.selectAllData();
+                    tv_count.setText(String.valueOf(list.size()));
+                }
+            }
+        });
     }
 
     public void setUpMap() {
@@ -309,19 +323,15 @@ public class MainActivity extends AppCompatActivity implements CollectionFragmen
                     if (tempGeoPoint == null) {
                         Toast.makeText(getApplicationContext(), "Resolving coordinates, please wait...", Toast.LENGTH_SHORT).show();
                     } else {
-                        dao = new TempDao(getApplicationContext());
-                        Address address = new Address();
-                        address.setLatitude(tempGeoPoint.getLatitude());
-                        address.setLongitude(tempGeoPoint.getLongitude());
-                        address.setAddname(addressName != null ? addressName :
-                                String.format("%.6f, %.6f", tempGeoPoint.getLatitude(), tempGeoPoint.getLongitude()));
-                        dao.insertAdd(address);
+                        double lat = tempGeoPoint.getLatitude();
+                        double lon = tempGeoPoint.getLongitude();
 
-                        refreshPolyline();
-
-                        dao = new TempDao(getApplicationContext());
-                        list = dao.selectAllData();
-                        tv_count.setText(String.valueOf(list.size()));
+                        // Open profile editor with lat/lon pre-filled
+                        ProfileEditorFragment editor = ProfileEditorFragment.newInstance(-1, lat, lon);
+                        getSupportFragmentManager().beginTransaction()
+                                .replace(R.id.frame_content, editor)
+                                .addToBackStack(null)
+                                .commit();
 
                         tempGeoPoint = null;
                         addressName = null;

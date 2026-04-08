@@ -18,5 +18,12 @@
     <string name="navigation_drawer_open" translatable="false">close drawer</string>
     <string name="navigation_drawer_close" translatable="false">open drawer</string>
 
+    <!-- Profile Editor -->
+    <string name="profile_editor_title_new">New Profile</string>
+    <string name="profile_editor_title_edit">Edit Profile</string>
+    <string name="profile_save">Save</string>
+    <string name="bool_passthrough">Passthrough</string>
+    <string name="bool_yes">Yes</string>
+    <string name="bool_no">No</string>
 
 </resources>
