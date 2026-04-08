@@ -1118,7 +1118,85 @@ class HookUtils {
                         param.setResult(Collections.enumeration(modified));
                     }
                 }));
+
+        // LinkProperties.getRoutes() — replace gateway address
+        tryHook(() -> XposedHelpers.findAndHookMethod(
+                "android.net.LinkProperties", cl,
+                "getRoutes", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Snapshot s = MainHook.CURRENT.get();
+                        if (s.gateway == null) return;
+                        try {
+                            @SuppressWarnings("unchecked")
+                            List<Object> original = (List<Object>) param.getResult();
+                            if (original == null || original.isEmpty()) return;
+                            ArrayList<Object> fakeRoutes = new ArrayList<>();
+                            java.net.InetAddress fakeGw = java.net.InetAddress.getByName(s.gateway);
+                            Class<?> routeInfoClass = XposedHelpers.findClass(
+                                    "android.net.RouteInfo", cl);
+                            for (Object route : original) {
+                                java.net.InetAddress gw = (java.net.InetAddress)
+                                        XposedHelpers.callMethod(route, "getGateway");
+                                if (gw != null && !gw.isAnyLocalAddress()) {
+                                    // Replace route with same destination but fake gateway
+                                    Object dest = XposedHelpers.callMethod(route, "getDestination");
+                                    String iface = (String) XposedHelpers.callMethod(route, "getInterface");
+                                    try {
+                                        Object fake = XposedHelpers.newInstance(routeInfoClass,
+                                                dest, fakeGw, iface);
+                                        fakeRoutes.add(fake);
+                                        continue;
+                                    } catch (Throwable ignored) {}
+                                }
+                                fakeRoutes.add(route);
+                            }
+                            param.setResult(fakeRoutes);
+                        } catch (Throwable t) {
+                            XposedBridge.log(TAG + ": Route/gateway override failed: " + t);
+                        }
+                    }
+                }));
+
+        // WifiManager.getDhcpInfo() — override gateway + subnet mask
+        tryHook(() -> XposedHelpers.findAndHookMethod(
+                "android.net.wifi.WifiManager", cl,
+                "getDhcpInfo", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Snapshot s = MainHook.CURRENT.get();
+                        if (s.gateway == null && s.subnetMask == null
+                                && s.localIpv4 == null && s.dnsPrimary == null) return;
+                        Object dhcp = param.getResult();
+                        if (dhcp == null) return;
+                        try {
+                            if (s.gateway != null) {
+                                XposedHelpers.setIntField(dhcp, "gateway",
+                                        ipToInt(s.gateway));
+                            }
+                            if (s.subnetMask != null) {
+                                XposedHelpers.setIntField(dhcp, "netmask",
+                                        ipToInt(s.subnetMask));
+                            }
+                            if (s.localIpv4 != null) {
+                                XposedHelpers.setIntField(dhcp, "ipAddress",
+                                        ipToInt(s.localIpv4));
+                            }
+                            if (s.dnsPrimary != null) {
+                                XposedHelpers.setIntField(dhcp, "dns1",
+                                        ipToInt(s.dnsPrimary));
+                            }
+                            if (s.dnsSecondary != null) {
+                                XposedHelpers.setIntField(dhcp, "dns2",
+                                        ipToInt(s.dnsSecondary));
+                            }
+                        } catch (Throwable t) {
+                            XposedBridge.log(TAG + ": DhcpInfo override failed: " + t);
+                        }
+                    }
+                }));
     }
+
 
     // ==========================================================================
     // N. PHYSICAL CHANNEL CONFIG (API 29+) — getter hooks + callback interception
@@ -1711,6 +1789,56 @@ class HookUtils {
                 list.add(nr);
             } catch (Throwable t) {
                 XposedBridge.log(TAG + ": NR CellInfo creation failed: " + t);
+            }
+        }
+
+        // Neighbor cells from JSON
+        // Format: [{"type":"gsm","mcc":460,"mnc":0,"lac":1234,"cid":5678,"rssi":-85}, ...]
+        // Supported types: gsm, lte, wcdma
+        if (s.neighborCellsJson != null && !s.neighborCellsJson.isEmpty()) {
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(s.neighborCellsJson);
+                for (int i = 0; i < arr.length(); i++) {
+                    try {
+                        org.json.JSONObject obj = arr.getJSONObject(i);
+                        String type = obj.optString("type", "gsm");
+                        int nMcc = obj.optInt("mcc", mcc);
+                        int nMnc = obj.optInt("mnc", mnc);
+                        if ("lte".equals(type)) {
+                            CellInfoLte lte = (CellInfoLte) XposedHelpers.newInstance(CellInfoLte.class);
+                            Object id = XposedHelpers.newInstance(CellIdentityLte.class,
+                                    nMcc, nMnc,
+                                    obj.optInt("ci", 0),
+                                    obj.optInt("pci", 0),
+                                    obj.optInt("tac", 0));
+                            XposedHelpers.callMethod(lte, "setCellIdentity", id);
+                            XposedHelpers.callMethod(lte, "setCellConnectionStatus", 0); // NONE
+                            list.add(lte);
+                        } else if ("wcdma".equals(type)) {
+                            CellInfoWcdma w = (CellInfoWcdma) XposedHelpers.newInstance(CellInfoWcdma.class);
+                            Object id = XposedHelpers.newInstance(CellIdentityWcdma.class,
+                                    nMcc, nMnc,
+                                    obj.optInt("lac", 0),
+                                    obj.optInt("cid", 0),
+                                    obj.optInt("psc", 0));
+                            XposedHelpers.callMethod(w, "setCellIdentity", id);
+                            list.add(w);
+                        } else {
+                            // Default: GSM
+                            CellInfoGsm gsm = (CellInfoGsm) XposedHelpers.newInstance(CellInfoGsm.class);
+                            Object id = XposedHelpers.newInstance(CellIdentityGsm.class,
+                                    nMcc, nMnc,
+                                    obj.optInt("lac", 0),
+                                    obj.optInt("cid", 0));
+                            XposedHelpers.callMethod(gsm, "setCellIdentity", id);
+                            list.add(gsm);
+                        }
+                    } catch (Throwable t) {
+                        XposedBridge.log(TAG + ": Neighbor cell " + i + " creation failed: " + t);
+                    }
+                }
+            } catch (Throwable t) {
+                XposedBridge.log(TAG + ": Neighbor cells JSON parse failed: " + t);
             }
         }
 
