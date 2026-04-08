@@ -84,7 +84,7 @@ public class TempDao {
 
         SQLiteDatabase db = dbHelper.getReadableDatabase();
         db.beginTransaction();
-        String sql = "drop table temp";
+        String sql = "DELETE FROM temp";
         try {
             db.execSQL(sql);
             db.setTransactionSuccessful();

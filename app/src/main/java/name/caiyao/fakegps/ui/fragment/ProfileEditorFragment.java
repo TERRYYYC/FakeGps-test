@@ -86,7 +86,10 @@ public class ProfileEditorFragment extends Fragment {
             ContentValues existing = profileDao.loadProfile(profileId);
             workingValues.putAll(existing);
             for (String key : existing.keySet()) {
-                activeColumns.add(key);
+                // Exclude addname from activeColumns - it's auto-generated on save
+                if (!"addname".equals(key)) {
+                    activeColumns.add(key);
+                }
             }
         } else if (args != null) {
             // New profile from map tap - pre-fill lat/lon
@@ -284,8 +287,9 @@ public class ProfileEditorFragment extends Fragment {
                     break;
             }
         } catch (NumberFormatException e) {
-            // Keep text as string until valid
-            workingValues.put(spec.dbColumn, text);
+            // Invalid number: remove from active columns so it won't be saved
+            workingValues.remove(spec.dbColumn);
+            activeColumns.remove(spec.dbColumn);
         }
     }
 
@@ -328,13 +332,11 @@ public class ProfileEditorFragment extends Fragment {
             else if (val instanceof Float) cv.put(col, (Float) val);
         }
 
-        // Auto-generate addname if not set
-        if (!cv.containsKey("addname")) {
-            Double lat = cv.getAsDouble("latitude");
-            Double lon = cv.getAsDouble("longitude");
-            if (lat != null && lon != null) {
-                cv.put("addname", String.format("%.6f, %.6f", lat, lon));
-            }
+        // Always regenerate addname from current lat/lon
+        Double lat = cv.getAsDouble("latitude");
+        Double lon = cv.getAsDouble("longitude");
+        if (lat != null && lon != null) {
+            cv.put("addname", String.format("%.6f, %.6f", lat, lon));
         }
 
         if (profileId > 0) {

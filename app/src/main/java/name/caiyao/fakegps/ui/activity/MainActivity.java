@@ -217,27 +217,25 @@ public class MainActivity extends AppCompatActivity implements CollectionFragmen
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        switch (item.getItemId()) {
-            case R.id.clear:
-                onClear();
-                break;
-            case R.id.search:
-                View view = LayoutInflater.from(this).inflate(R.layout.dialog_search, null, false);
-                final EditText et_key = (EditText) view.findViewById(R.id.key);
-                new AlertDialog.Builder(this).setView(view)
-                        .setTitle("Search Location")
-                        .setPositiveButton("Search", new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface dialog, int which) {
-                                searchByCoordinates(et_key.getText().toString());
-                            }
-                        }).setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        dialog.dismiss();
-                    }
-                }).show();
-                break;
+        int id = item.getItemId();
+        if (id == R.id.clear) {
+            onClear();
+        } else if (id == R.id.search) {
+            View view = LayoutInflater.from(this).inflate(R.layout.dialog_search, null, false);
+            final EditText et_key = (EditText) view.findViewById(R.id.key);
+            new AlertDialog.Builder(this).setView(view)
+                    .setTitle("Search Location")
+                    .setPositiveButton("Search", new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            searchByCoordinates(et_key.getText().toString());
+                        }
+                    }).setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    dialog.dismiss();
+                }
+            }).show();
         }
         return super.onOptionsItemSelected(item);
     }
@@ -428,37 +426,32 @@ public class MainActivity extends AppCompatActivity implements CollectionFragmen
         mNavView.setNavigationItemSelectedListener(new NavigationView.OnNavigationItemSelectedListener() {
             @Override
             public boolean onNavigationItemSelected(MenuItem item) {
-                switch (item.getItemId()) {
-                    case R.id.nav_item1:
-                        dao = new TempDao(getApplicationContext());
-                        List<String> list = dao.selectAllData();
-                        tv_count.setText(String.valueOf(list.size()));
-                        loadMarkers();
-                        getSupportFragmentManager().beginTransaction()
-                                .replace(R.id.frame_content, new OneFragment()).commit();
-                        invalidateOptionsMenu();
-                        break;
-                    case R.id.nav_item2:
-                        toolbar.setTitle(R.string.Collection);
-                        getSupportFragmentManager().beginTransaction()
-                                .replace(R.id.frame_content, new CollectionFragment()).commit();
-                        invalidateOptionsMenu();
-                        break;
-                    case R.id.nav_set:
-                        toolbar.setTitle(R.string.setting);
-                        getSupportFragmentManager().beginTransaction()
-                                .replace(R.id.frame_content, new SettingFragment()).commit();
-                        invalidateOptionsMenu();
-                        break;
-                    case R.id.menu_share:
-                        toolbar.setTitle(R.string.help);
-                        getSupportFragmentManager().beginTransaction()
-                                .replace(R.id.frame_content, new HelpFragment()).commit();
-                        invalidateOptionsMenu();
-                        break;
-                    case R.id.nav_about:
-                        toolbar.setTitle(R.string.about);
-                        break;
+                int id = item.getItemId();
+                if (id == R.id.nav_item1) {
+                    dao = new TempDao(getApplicationContext());
+                    List<String> list = dao.selectAllData();
+                    tv_count.setText(String.valueOf(list.size()));
+                    loadMarkers();
+                    getSupportFragmentManager().beginTransaction()
+                            .replace(R.id.frame_content, new OneFragment()).commit();
+                    invalidateOptionsMenu();
+                } else if (id == R.id.nav_item2) {
+                    toolbar.setTitle(R.string.Collection);
+                    getSupportFragmentManager().beginTransaction()
+                            .replace(R.id.frame_content, new CollectionFragment()).commit();
+                    invalidateOptionsMenu();
+                } else if (id == R.id.nav_set) {
+                    toolbar.setTitle(R.string.setting);
+                    getSupportFragmentManager().beginTransaction()
+                            .replace(R.id.frame_content, new SettingFragment()).commit();
+                    invalidateOptionsMenu();
+                } else if (id == R.id.menu_share) {
+                    toolbar.setTitle(R.string.help);
+                    getSupportFragmentManager().beginTransaction()
+                            .replace(R.id.frame_content, new HelpFragment()).commit();
+                    invalidateOptionsMenu();
+                } else if (id == R.id.nav_about) {
+                    toolbar.setTitle(R.string.about);
                 }
                 invalidateOptionsMenu();
                 item.setChecked(true);

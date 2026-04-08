@@ -186,7 +186,7 @@ public class SwitchButton extends CompoundButton {
             Bitmap stateBitmap = getBitmapFromDrawable(stateDrawable);
             if (stateMaskDrawable != null && stateBitmap != null && !stateBitmap.isRecycled()) {
                 // 保存并创建一个新的透明层，如果不这样做的话，画出来的背景会是黑的
-                int src = canvas.saveLayer(0, 0, getWidth(), getHeight(), paint, Canvas.MATRIX_SAVE_FLAG | Canvas.CLIP_SAVE_FLAG | Canvas.HAS_ALPHA_LAYER_SAVE_FLAG | Canvas.FULL_COLOR_LAYER_SAVE_FLAG | Canvas.CLIP_TO_LAYER_SAVE_FLAG);
+                int src = canvas.saveLayer(0, 0, getWidth(), getHeight(), paint);
                 // 绘制遮罩层
                 stateMaskDrawable.draw(canvas);
                 // 绘制状态图片按并应用遮罩效果

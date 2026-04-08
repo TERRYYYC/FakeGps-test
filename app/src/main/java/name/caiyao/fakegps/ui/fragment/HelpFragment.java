@@ -13,7 +13,7 @@ import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import name.caiyao.fakegps.R;
 import name.caiyao.fakegps.data.DbHelper;
-import static androidx.recyclerview.widget.StaggeredGridLayoutManager.TAG;
+import static android.content.ContentValues.TAG;
 
 public class HelpFragment extends Fragment {
     Toolbar toolbar;

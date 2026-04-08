@@ -40,11 +40,6 @@ public class SettingFragment extends Fragment {
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        switch (item.getItemId()) {
-//                case R.id.star:
-//                    Toast.makeText(getActivity(), "FragmentMenuItem1", Toast.LENGTH_SHORT).show();
-//                    break;
-        }
         return true;
     }
 

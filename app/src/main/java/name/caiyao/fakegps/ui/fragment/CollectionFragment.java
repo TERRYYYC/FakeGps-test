@@ -208,17 +208,10 @@ public class CollectionFragment extends Fragment {
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        switch (item.getItemId()) {
-            case R.id.start:
-
-                Toast.makeText(getActivity(), "FragmentMenuItem1", Toast.LENGTH_SHORT).show();
-                break;
-            case R.id.menu_clear:
-
-                clearall();
-                break;
+        int id = item.getItemId();
+        if (id == R.id.menu_clear) {
+            clearall();
         }
-
         return true;
     }
 
