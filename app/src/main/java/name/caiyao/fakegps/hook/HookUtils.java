@@ -44,6 +44,12 @@ class HookUtils {
     private static final Random RND = new Random();
     /** Guards against re-hooking methods discovered at runtime (e.g. inside constructors). */
     private static final Set<String> HOOKED = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    /**
+     * Neighbor cell bypass: CellIdentity* / CellSignalStrength* instances created from
+     * neighbor_cells_json are added here. Global getter hooks (Section C/D) skip these
+     * objects so their constructor-set values aren't overwritten by serving cell snapshot.
+     */
+    private static final Set<Object> NEIGHBOR_BYPASS = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     /**
      * Single entry point: registers ALL hooks exactly once.
@@ -1668,6 +1674,8 @@ class HookUtils {
      */
     @SuppressWarnings("unchecked")
     private static ArrayList buildCellInfoList(Snapshot s) {
+        // Clear previous neighbor bypass set — fresh build each call
+        NEIGHBOR_BYPASS.clear();
         ArrayList list = new ArrayList();
         int mcc = s.mcc != null ? s.mcc : 460;
         int mnc = s.mnc != null ? s.mnc : 0;
@@ -1812,6 +1820,7 @@ class HookUtils {
                                     obj.optInt("ci", 0),
                                     obj.optInt("pci", 0),
                                     obj.optInt("tac", 0));
+                            NEIGHBOR_BYPASS.add(id);
                             XposedHelpers.callMethod(lte, "setCellIdentity", id);
                             try {
                                 Object sig = XposedHelpers.newInstance(
@@ -1822,6 +1831,7 @@ class HookUtils {
                                         obj.optInt("sinr", 15),
                                         obj.optInt("cqi", Integer.MAX_VALUE),
                                         obj.optInt("ta", Integer.MAX_VALUE));
+                                NEIGHBOR_BYPASS.add(sig);
                                 XposedHelpers.callMethod(lte, "setCellSignalStrength", sig);
                             } catch (Throwable ignored) {}
                             list.add(lte);
@@ -1832,6 +1842,7 @@ class HookUtils {
                                     obj.optInt("lac", 0),
                                     obj.optInt("cid", 0),
                                     obj.optInt("psc", 0));
+                            NEIGHBOR_BYPASS.add(id);
                             XposedHelpers.callMethod(w, "setCellIdentity", id);
                             try {
                                 Object sig = XposedHelpers.newInstance(
@@ -1840,6 +1851,7 @@ class HookUtils {
                                         Integer.MAX_VALUE, // ber
                                         obj.optInt("rscp", -100),
                                         obj.optInt("ecno", -10));
+                                NEIGHBOR_BYPASS.add(sig);
                                 XposedHelpers.callMethod(w, "setCellSignalStrength", sig);
                             } catch (Throwable ignored) {}
                             list.add(w);
@@ -1850,6 +1862,7 @@ class HookUtils {
                                     nMcc, nMnc,
                                     obj.optInt("lac", 0),
                                     obj.optInt("cid", 0));
+                            NEIGHBOR_BYPASS.add(id);
                             XposedHelpers.callMethod(gsm, "setCellIdentity", id);
                             try {
                                 Object sig = XposedHelpers.newInstance(
@@ -1857,6 +1870,7 @@ class HookUtils {
                                         obj.optInt("rssi", -85),
                                         obj.optInt("ber", 0),
                                         obj.optInt("ta", Integer.MAX_VALUE));
+                                NEIGHBOR_BYPASS.add(sig);
                                 XposedHelpers.callMethod(gsm, "setCellSignalStrength", sig);
                             } catch (Throwable ignored) {}
                             list.add(gsm);
@@ -1883,6 +1897,8 @@ class HookUtils {
                 new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
+                        // Skip neighbor cell objects — their constructor values are correct
+                        if (NEIGHBOR_BYPASS.contains(param.thisObject)) return;
                         Snapshot s = MainHook.CURRENT.get();
                         Object val = getter.get(s);
                         if (val != null) {
@@ -1894,6 +1910,7 @@ class HookUtils {
 
     /**
      * Hook a signal strength getter. Same as hookGetter but applies fluctuation.
+     * Skips neighbor cell objects (NEIGHBOR_BYPASS).
      */
     private static void hookSignal(ClassLoader cl, String className, String methodName,
                                    FieldGetter getter) {
@@ -1901,6 +1918,7 @@ class HookUtils {
                 new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
+                        if (NEIGHBOR_BYPASS.contains(param.thisObject)) return;
                         Snapshot s = MainHook.CURRENT.get();
                         Object val = getter.get(s);
                         if (val instanceof Integer) {
