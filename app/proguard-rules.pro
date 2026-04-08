@@ -1,21 +1,13 @@
-# Add project specific ProGuard rules here.
-# By default, the flags in this file are appended to flags specified
-# in D:\Android\sdk/tools/proguard/proguard-android.txt
-# You can edit the include path and order by changing the proguardFiles
-# directive in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# FakeGPS ProGuard rules
 
-# Add any project specific keep options here:
+# Xposed hook entry point and supporting classes - must not be obfuscated
+-keep class name.caiyao.fakegps.hook.MainHook
+-keep class name.caiyao.fakegps.hook.HookUtils
+-keep class name.caiyao.fakegps.hook.Snapshot
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
--keep public class name.caiyao.fakegps.hook.MainHook
--keep class com.amap.api.maps2d.**{*;}
--dontwarn com.amap.api.**
--keep class com.amap.api.mapcore2d.**{*;}
+# Keep Xposed-related classes
+-keep class de.robv.android.xposed.** { *; }
+-dontwarn de.robv.android.xposed.**
+
+# OSMDroid
+-dontwarn org.osmdroid.**

@@ -5,8 +5,6 @@ import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 
-import com.amap.api.location.DPoint;
-
 import java.util.ArrayList;
 import java.util.List;
 import name.caiyao.fakegps.bean.Address;

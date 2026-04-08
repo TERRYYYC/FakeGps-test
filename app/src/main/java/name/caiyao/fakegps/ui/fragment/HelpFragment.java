@@ -1,9 +1,9 @@
 package name.caiyao.fakegps.ui.fragment;
 
 import android.os.Bundle;
-import android.support.v4.app.Fragment;
-import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
+import androidx.fragment.app.Fragment;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -13,7 +13,7 @@ import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import name.caiyao.fakegps.R;
 import name.caiyao.fakegps.data.DbHelper;
-import static android.support.v7.widget.StaggeredGridLayoutManager.TAG;
+import static androidx.recyclerview.widget.StaggeredGridLayoutManager.TAG;
 
 public class HelpFragment extends Fragment {
     Toolbar toolbar;
