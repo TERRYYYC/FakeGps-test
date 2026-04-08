@@ -45,11 +45,14 @@ class HookUtils {
     /** Guards against re-hooking methods discovered at runtime (e.g. inside constructors). */
     private static final Set<String> HOOKED = Collections.newSetFromMap(new ConcurrentHashMap<>());
     /**
-     * Neighbor cell bypass: CellIdentity* / CellSignalStrength* instances created from
-     * neighbor_cells_json are added here. Global getter hooks (Section C/D) skip these
-     * objects so their constructor-set values aren't overwritten by serving cell snapshot.
+     * Neighbor cell bypass: CellInfo, CellIdentity*, and CellSignalStrength* instances
+     * created from neighbor_cells_json are added here. Global getter hooks (Section C/D)
+     * and isRegistered() skip these objects so their constructor-set values aren't
+     * overwritten by serving cell snapshot.
+     * Uses WeakHashMap so entries are GC'd when the app drops the objects.
      */
-    private static final Set<Object> NEIGHBOR_BYPASS = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private static final Set<Object> NEIGHBOR_BYPASS = Collections.synchronizedSet(
+            Collections.newSetFromMap(new java.util.WeakHashMap<>()));
 
     /**
      * Single entry point: registers ALL hooks exactly once.
@@ -309,12 +312,16 @@ class HookUtils {
                     }));
         }
 
-        // CellInfo.isRegistered() — always true for our fake cells
+        // CellInfo.isRegistered() — true for serving cells, false for neighbors
         tryHook(() -> XposedHelpers.findAndHookMethod(
                 "android.telephony.CellInfo", cl,
                 "isRegistered", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
+                        if (NEIGHBOR_BYPASS.contains(param.thisObject)) {
+                            param.setResult(false);
+                            return;
+                        }
                         Snapshot s = MainHook.CURRENT.get();
                         if (s.hasGsmCell() || s.hasLteCell() || s.hasNrCell()) {
                             param.setResult(true);
@@ -1674,8 +1681,8 @@ class HookUtils {
      */
     @SuppressWarnings("unchecked")
     private static ArrayList buildCellInfoList(Snapshot s) {
-        // Clear previous neighbor bypass set — fresh build each call
-        NEIGHBOR_BYPASS.clear();
+        // WeakHashMap-backed set: old neighbor objects are GC'd naturally
+        // when the app drops references. No manual clear() needed.
         ArrayList list = new ArrayList();
         int mcc = s.mcc != null ? s.mcc : 460;
         int mnc = s.mnc != null ? s.mnc : 0;
@@ -1815,6 +1822,7 @@ class HookUtils {
                         int nMnc = obj.optInt("mnc", mnc);
                         if ("lte".equals(type)) {
                             CellInfoLte lte = (CellInfoLte) XposedHelpers.newInstance(CellInfoLte.class);
+                            NEIGHBOR_BYPASS.add(lte);
                             Object id = XposedHelpers.newInstance(CellIdentityLte.class,
                                     nMcc, nMnc,
                                     obj.optInt("ci", 0),
@@ -1837,6 +1845,7 @@ class HookUtils {
                             list.add(lte);
                         } else if ("wcdma".equals(type)) {
                             CellInfoWcdma w = (CellInfoWcdma) XposedHelpers.newInstance(CellInfoWcdma.class);
+                            NEIGHBOR_BYPASS.add(w);
                             Object id = XposedHelpers.newInstance(CellIdentityWcdma.class,
                                     nMcc, nMnc,
                                     obj.optInt("lac", 0),
@@ -1858,6 +1867,7 @@ class HookUtils {
                         } else {
                             // Default: GSM
                             CellInfoGsm gsm = (CellInfoGsm) XposedHelpers.newInstance(CellInfoGsm.class);
+                            NEIGHBOR_BYPASS.add(gsm);
                             Object id = XposedHelpers.newInstance(CellIdentityGsm.class,
                                     nMcc, nMnc,
                                     obj.optInt("lac", 0),
