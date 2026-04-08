@@ -1166,7 +1166,8 @@ class HookUtils {
                     protected void afterHookedMethod(MethodHookParam param) {
                         Snapshot s = MainHook.CURRENT.get();
                         if (s.gateway == null && s.subnetMask == null
-                                && s.localIpv4 == null && s.dnsPrimary == null) return;
+                                && s.localIpv4 == null && s.dnsPrimary == null
+                                && s.dnsSecondary == null) return;
                         Object dhcp = param.getResult();
                         if (dhcp == null) return;
                         try {
@@ -1794,7 +1795,7 @@ class HookUtils {
 
         // Neighbor cells from JSON
         // Format: [{"type":"gsm","mcc":460,"mnc":0,"lac":1234,"cid":5678,"rssi":-85}, ...]
-        // Supported types: gsm, lte, wcdma
+        // Supported types: gsm (rssi,ber,ta), lte (rssi,rsrp,rsrq,sinr,cqi,ta), wcdma (rssi,rscp,ecno)
         if (s.neighborCellsJson != null && !s.neighborCellsJson.isEmpty()) {
             try {
                 org.json.JSONArray arr = new org.json.JSONArray(s.neighborCellsJson);
@@ -1812,7 +1813,17 @@ class HookUtils {
                                     obj.optInt("pci", 0),
                                     obj.optInt("tac", 0));
                             XposedHelpers.callMethod(lte, "setCellIdentity", id);
-                            XposedHelpers.callMethod(lte, "setCellConnectionStatus", 0); // NONE
+                            try {
+                                Object sig = XposedHelpers.newInstance(
+                                        XposedHelpers.findClass("android.telephony.CellSignalStrengthLte", null),
+                                        obj.optInt("rssi", -90),
+                                        obj.optInt("rsrp", -100),
+                                        obj.optInt("rsrq", -10),
+                                        obj.optInt("sinr", 15),
+                                        obj.optInt("cqi", Integer.MAX_VALUE),
+                                        obj.optInt("ta", Integer.MAX_VALUE));
+                                XposedHelpers.callMethod(lte, "setCellSignalStrength", sig);
+                            } catch (Throwable ignored) {}
                             list.add(lte);
                         } else if ("wcdma".equals(type)) {
                             CellInfoWcdma w = (CellInfoWcdma) XposedHelpers.newInstance(CellInfoWcdma.class);
@@ -1822,6 +1833,15 @@ class HookUtils {
                                     obj.optInt("cid", 0),
                                     obj.optInt("psc", 0));
                             XposedHelpers.callMethod(w, "setCellIdentity", id);
+                            try {
+                                Object sig = XposedHelpers.newInstance(
+                                        XposedHelpers.findClass("android.telephony.CellSignalStrengthWcdma", null),
+                                        obj.optInt("rssi", -85),
+                                        Integer.MAX_VALUE, // ber
+                                        obj.optInt("rscp", -100),
+                                        obj.optInt("ecno", -10));
+                                XposedHelpers.callMethod(w, "setCellSignalStrength", sig);
+                            } catch (Throwable ignored) {}
                             list.add(w);
                         } else {
                             // Default: GSM
@@ -1831,6 +1851,14 @@ class HookUtils {
                                     obj.optInt("lac", 0),
                                     obj.optInt("cid", 0));
                             XposedHelpers.callMethod(gsm, "setCellIdentity", id);
+                            try {
+                                Object sig = XposedHelpers.newInstance(
+                                        XposedHelpers.findClass("android.telephony.CellSignalStrengthGsm", null),
+                                        obj.optInt("rssi", -85),
+                                        obj.optInt("ber", 0),
+                                        obj.optInt("ta", Integer.MAX_VALUE));
+                                XposedHelpers.callMethod(gsm, "setCellSignalStrength", sig);
+                            } catch (Throwable ignored) {}
                             list.add(gsm);
                         }
                     } catch (Throwable t) {
