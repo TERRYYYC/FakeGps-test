@@ -65,6 +65,7 @@ class HookUtils {
         safeHook("Connectivity", () -> hookConnectivity(cl));
         safeHook("PhysicalChannelConfig", () -> hookPhysicalChannelConfig(cl));
         safeHook("SubscriptionAware", () -> hookSubscriptionAware(cl));
+        safeHook("FusedLocation", () -> hookFusedLocation(cl));
     }
 
     private static void safeHook(String group, Runnable r) {
@@ -190,6 +191,37 @@ class HookUtils {
                         param.setResult(false);
                     }
                 }));
+
+        // LocationManager.getCurrentLocation (API 30+) — new one-shot API
+        // Multiple overloads: (String, CancellationSignal, Executor, Consumer)
+        //                     (String, LocationRequest, CancellationSignal, Executor, Consumer)
+        if (Build.VERSION.SDK_INT >= 30) {
+            tryHook(() -> XposedBridge.hookAllMethods(
+                    LocationManager.class, "getCurrentLocation", new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Snapshot s = MainHook.CURRENT.get();
+                            if (!s.hasLocation()) return;
+
+                            // Find the Consumer<Location> arg by interface type
+                            // (lambda/anonymous classes don't have "Consumer" in their class name)
+                            for (int i = param.args.length - 1; i >= 0; i--) {
+                                if (param.args[i] instanceof java.util.function.Consumer) {
+                                    try {
+                                        @SuppressWarnings("unchecked")
+                                        java.util.function.Consumer<Location> consumer =
+                                                (java.util.function.Consumer<Location>) param.args[i];
+                                        consumer.accept(createFakeLocation(s));
+                                    } catch (Throwable t) {
+                                        XposedBridge.log(TAG + ": getCurrentLocation consumer: " + t);
+                                    }
+                                    param.setResult(null); // prevent real location request
+                                    return;
+                                }
+                            }
+                        }
+                    }));
+        }
     }
 
     // ==========================================================================
@@ -1304,6 +1336,218 @@ class HookUtils {
                         }
                     }));
         }
+    }
+
+    // ==========================================================================
+    // P. FUSED LOCATION (Google Play Services)
+    // ==========================================================================
+
+    private static void hookFusedLocation(ClassLoader cl) {
+        // FusedLocationProviderClient is in GMS; class may not exist on AOSP-only devices.
+        // All hooks use tryHook to silently skip if GMS classes are absent.
+
+        String fusedClient = "com.google.android.gms.location.FusedLocationProviderClient";
+        String fusedApi = "com.google.android.gms.location.FusedLocationProviderApi";
+        String locationResult = "com.google.android.gms.location.LocationResult";
+        String locationCallback = "com.google.android.gms.location.LocationCallback";
+
+        // FusedLocationProviderClient.getLastLocation() — returns Task<Location>
+        tryHook(() -> XposedBridge.hookAllMethods(
+                XposedHelpers.findClass(fusedClient, cl),
+                "getLastLocation", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Snapshot s = MainHook.CURRENT.get();
+                        if (!s.hasLocation()) return;
+                        replaceFusedTask(param, s, cl);
+                    }
+                }));
+
+        // FusedLocationProviderClient.getCurrentLocation(int, CancellationToken) — one-shot
+        tryHook(() -> XposedBridge.hookAllMethods(
+                XposedHelpers.findClass(fusedClient, cl),
+                "getCurrentLocation", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Snapshot s = MainHook.CURRENT.get();
+                        if (!s.hasLocation()) return;
+                        replaceFusedTask(param, s, cl);
+                    }
+                }));
+
+        // FusedLocationProviderClient.requestLocationUpdates — hook callback delivery
+        // Covers both LocationCallback and LocationListener overloads.
+        // PendingIntent overload is out of scope (requires intent broadcast interception).
+        String gmsLocationListener = "com.google.android.gms.location.LocationListener";
+
+        tryHook(() -> XposedBridge.hookAllMethods(
+                XposedHelpers.findClass(fusedClient, cl),
+                "requestLocationUpdates", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        // Try LocationCallback path
+                        try {
+                            Class<?> callbackBase = XposedHelpers.findClass(locationCallback, cl);
+                            for (Object arg : param.args) {
+                                if (arg != null && callbackBase.isInstance(arg)) {
+                                    hookFusedLocationCallback(arg, cl);
+                                    return;
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+
+                        // Try GMS LocationListener path
+                        try {
+                            Class<?> listenerBase = XposedHelpers.findClass(gmsLocationListener, cl);
+                            for (Object arg : param.args) {
+                                if (arg != null && listenerBase.isInstance(arg)) {
+                                    hookFusedLocationListener(arg, cl);
+                                    return;
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                }));
+
+        // Legacy FusedLocationProviderApi (used via LocationServices.FusedLocationApi)
+        tryHook(() -> {
+            Class<?> apiClass = XposedHelpers.findClass(fusedApi, cl);
+            XposedBridge.hookAllMethods(apiClass, "getLastLocation", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    Snapshot s = MainHook.CURRENT.get();
+                    if (!s.hasLocation()) return;
+                    param.setResult(createFakeLocation(s));
+                }
+            });
+        });
+
+        // LocationResult.getLastLocation() / getLocations() — override at value object level
+        tryHook(() -> {
+            Class<?> lrClass = XposedHelpers.findClass(locationResult, cl);
+
+            XposedBridge.hookAllMethods(lrClass, "getLastLocation", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    Snapshot s = MainHook.CURRENT.get();
+                    if (!s.hasLocation()) return;
+                    param.setResult(createFakeLocation(s));
+                }
+            });
+
+            XposedBridge.hookAllMethods(lrClass, "getLocations", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    Snapshot s = MainHook.CURRENT.get();
+                    if (!s.hasLocation()) return;
+                    ArrayList<Location> fakeList = new ArrayList<>();
+                    fakeList.add(createFakeLocation(s));
+                    param.setResult(fakeList);
+                }
+            });
+        });
+    }
+
+    /** Hook concrete LocationCallback subclass's onLocationResult(). Dedup via HOOKED set. */
+    private static void hookFusedLocationCallback(Object callback, ClassLoader cl) {
+        Class<?> cbClass = callback.getClass();
+        String key = "flc#" + cbClass.getName() + "#onLocationResult";
+        if (!HOOKED.add(key)) return;
+
+        tryHook(() -> {
+            Class<?> lrClass = XposedHelpers.findClass(
+                    "com.google.android.gms.location.LocationResult", cl);
+            XposedHelpers.findAndHookMethod(cbClass, "onLocationResult", lrClass,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Snapshot s = MainHook.CURRENT.get();
+                            if (!s.hasLocation()) return;
+                            // Replace LocationResult's internal location list
+                            try {
+                                ArrayList<Location> fakeList = new ArrayList<>();
+                                fakeList.add(createFakeLocation(s));
+                                Object lr = param.args[0];
+                                XposedHelpers.setObjectField(lr, "mLocations", fakeList);
+                            } catch (Throwable t) {
+                                XposedBridge.log(TAG + ": FusedCallback.onLocationResult: " + t);
+                            }
+                        }
+                    });
+        });
+
+        // Also hook onLocationAvailability if the callback overrides it
+        String key2 = "flc#" + cbClass.getName() + "#onLocationAvailability";
+        if (HOOKED.add(key2)) {
+            tryHook(() -> {
+                Class<?> laClass = XposedHelpers.findClass(
+                        "com.google.android.gms.location.LocationAvailability", cl);
+                XposedHelpers.findAndHookMethod(cbClass, "onLocationAvailability", laClass,
+                        new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam param) {
+                                Snapshot s = MainHook.CURRENT.get();
+                                if (!s.hasLocation()) return;
+                                // Force location available = true
+                                try {
+                                    XposedHelpers.setBooleanField(param.args[0],
+                                            "mIsLocationAvailable", true);
+                                } catch (Throwable ignored) {}
+                            }
+                        });
+            });
+        }
+    }
+
+    /**
+     * Replace Task<Location> result from fused APIs with a completed Task containing fake location.
+     * Strategy: try Tasks.forResult() first (proper completed Task), fall back to mResult field.
+     */
+    private static void replaceFusedTask(XC_MethodHook.MethodHookParam param, Snapshot s, ClassLoader cl) {
+        Location fake = createFakeLocation(s);
+        // Strategy 1: Replace with a properly completed Task via Tasks.forResult()
+        try {
+            Class<?> tasksClass = XposedHelpers.findClass(
+                    "com.google.android.gms.tasks.Tasks", cl);
+            Object completedTask = XposedHelpers.callStaticMethod(tasksClass, "forResult", fake);
+            param.setResult(completedTask);
+            return;
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": Tasks.forResult failed, trying field injection: " + t.getMessage());
+        }
+        // Strategy 2: Fallback — set internal result field on existing Task
+        Object task = param.getResult();
+        if (task != null) {
+            try {
+                XposedHelpers.setObjectField(task, "mResult", fake);
+                // Also try to mark Task as complete so listeners fire
+                try {
+                    XposedHelpers.setBooleanField(task, "mComplete", true);
+                    XposedHelpers.setIntField(task, "mResultSet", 1);
+                } catch (Throwable ignored) {
+                    // Field names vary across GMS versions
+                }
+            } catch (Throwable t) {
+                XposedBridge.log(TAG + ": Fused Task field injection failed: " + t);
+            }
+        }
+    }
+
+    /** Hook concrete GMS LocationListener subclass's onLocationChanged(). Dedup via HOOKED set. */
+    private static void hookFusedLocationListener(Object listener, ClassLoader cl) {
+        Class<?> listenerClass = listener.getClass();
+        String key = "fll#" + listenerClass.getName() + "#onLocationChanged";
+        if (!HOOKED.add(key)) return;
+
+        tryHook(() -> XposedHelpers.findAndHookMethod(listenerClass,
+                "onLocationChanged", Location.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        Snapshot s = MainHook.CURRENT.get();
+                        if (!s.hasLocation()) return;
+                        param.args[0] = createFakeLocation(s);
+                    }
+                }));
     }
 
     // ==========================================================================
