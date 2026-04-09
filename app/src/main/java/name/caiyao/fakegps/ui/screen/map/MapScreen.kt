@@ -6,14 +6,24 @@ import android.graphics.Color as AndroidColor
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.drawable.BitmapDrawable
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.location.LocationManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
@@ -23,6 +33,7 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -71,6 +82,7 @@ fun MapScreen(
     onOpenVerify: () -> Unit,
     vm: MapViewModel = viewModel(),
 ) {
+    val context = LocalContext.current
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -85,6 +97,15 @@ fun MapScreen(
 
     // MapView reference for imperative operations
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+
+    // Permission launcher for location (declared after mapViewRef)
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.values.any { it }) {
+            locateMe(context, mapViewRef, vm, scope, snackbarHostState)
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -153,18 +174,31 @@ fun MapScreen(
                 )
             },
             floatingActionButton = {
-                FloatingActionButton(
-                    onClick = {
-                        val p = tapped
-                        if (p != null) {
-                            onAddProfile(p.lat, p.lon)
-                            vm.clearTap()
-                        } else {
-                            scope.launch { snackbarHostState.showSnackbar("请先在地图上点击一个位置") }
-                        }
-                    },
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = androidx.compose.ui.Alignment.End,
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = "添加档案")
+                    // My location button
+                    SmallFloatingActionButton(
+                        onClick = { locateMe(context, mapViewRef, vm, scope, snackbarHostState) },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    ) {
+                        Icon(Icons.Default.MyLocation, contentDescription = "当前位置")
+                    }
+                    // Add profile button
+                    FloatingActionButton(
+                        onClick = {
+                            val p = tapped
+                            if (p != null) {
+                                onAddProfile(p.lat, p.lon)
+                                vm.clearTap()
+                            } else {
+                                scope.launch { snackbarHostState.showSnackbar("请先在地图上点击一个位置") }
+                            }
+                        },
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "添加档案")
+                    }
                 }
             },
         ) { innerPadding ->
@@ -347,6 +381,48 @@ private fun OsmMapView(
     }
 
     AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+}
+
+@SuppressLint("MissingPermission")
+private fun locateMe(
+    context: Context,
+    mapView: MapView?,
+    vm: MapViewModel,
+    scope: kotlinx.coroutines.CoroutineScope,
+    snackbar: SnackbarHostState,
+) {
+    val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+    if (lm == null) {
+        scope.launch { snackbar.showSnackbar("无法获取定位服务") }
+        return
+    }
+
+    val hasFine = androidx.core.content.ContextCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_FINE_LOCATION
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val hasCoarse = androidx.core.content.ContextCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_COARSE_LOCATION
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    if (!hasFine && !hasCoarse) {
+        scope.launch { snackbar.showSnackbar("缺少定位权限，请在系统设置中授权") }
+        return
+    }
+
+    val loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+        ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+
+    if (loc != null) {
+        val point = GeoPoint(loc.latitude, loc.longitude)
+        mapView?.controller?.run {
+            animateTo(point)
+            setZoom(16.0)
+        }
+        vm.onMapTap(loc.latitude, loc.longitude)
+        scope.launch { snackbar.showSnackbar("%.6f, %.6f".format(loc.latitude, loc.longitude)) }
+    } else {
+        scope.launch { snackbar.showSnackbar("无法获取当前位置") }
+    }
 }
 
 /** Draws a drop-pin icon: circle head + pointed tail. */
