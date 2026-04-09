@@ -1,6 +1,11 @@
 package name.caiyao.fakegps.ui.screen.map
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.drawable.BitmapDrawable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -11,6 +16,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -54,6 +60,7 @@ import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
+import org.osmdroid.views.overlay.ScaleBarOverlay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,6 +68,7 @@ fun MapScreen(
     onAddProfile: (lat: Double, lon: Double) -> Unit,
     onOpenCollection: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenVerify: () -> Unit,
     vm: MapViewModel = viewModel(),
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -80,6 +88,7 @@ fun MapScreen(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        gesturesEnabled = false,
         drawerContent = {
             ModalDrawerSheet {
                 Text(
@@ -109,6 +118,15 @@ fun MapScreen(
                     onClick = {
                         scope.launch { drawerState.close() }
                         onOpenSettings()
+                    },
+                )
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.VerifiedUser, contentDescription = null) },
+                    label = { Text("验证") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        onOpenVerify()
                     },
                 )
             }
@@ -228,6 +246,10 @@ private fun OsmMapView(
     onMapReady: (MapView) -> Unit,
 ) {
     val context = LocalContext.current
+    val density = context.resources.displayMetrics.density
+    val tempPinIcon = remember { createPinBitmap(density, 0xFF1B5FAA.toInt()) }
+    val savedPinIcon = remember { createPinBitmap(density, 0xFF386A20.toInt()) }
+
     val mapView = remember {
         Configuration.getInstance().userAgentValue = context.packageName
         MapView(context).apply {
@@ -235,6 +257,18 @@ private fun OsmMapView(
             setMultiTouchControls(true)
             controller.setZoom(15.0)
             controller.setCenter(GeoPoint(39.9042, 116.4074)) // Default: Beijing
+
+            // Scale bar
+            val scaleBar = ScaleBarOverlay(this).apply {
+                setCentred(false)
+                setAlignBottom(true)
+                setAlignRight(false)
+                setScaleBarOffset(
+                    (16 * density).toInt(),
+                    (56 * density).toInt(), // above bottom nav area
+                )
+            }
+            overlays.add(scaleBar)
         }
     }
 
@@ -249,7 +283,8 @@ private fun OsmMapView(
                     id = "temp"
                     position = p
                     isDraggable = true
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    setAnchor(Marker.ANCHOR_CENTER, 1.0f)
+                    icon = BitmapDrawable(context.resources, tempPinIcon)
                     title = "%.6f, %.6f".format(p.latitude, p.longitude)
                 }
                 mapView.overlays.add(marker)
@@ -282,7 +317,8 @@ private fun OsmMapView(
                 id = "profile_${p.id}"
                 position = point
                 isDraggable = false
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                setAnchor(Marker.ANCHOR_CENTER, 1.0f)
+                icon = BitmapDrawable(context.resources, savedPinIcon)
                 title = p.addname ?: "%.4f, %.4f".format(lat, lon)
             }
             mapView.overlays.add(marker)
@@ -311,4 +347,36 @@ private fun OsmMapView(
     }
 
     AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+}
+
+/** Draws a drop-pin icon: circle head + pointed tail. */
+private fun createPinBitmap(density: Float, color: Int): Bitmap {
+    val w = (28 * density).toInt()
+    val h = (40 * density).toInt()
+    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color; style = Paint.Style.FILL }
+    val cx = w / 2f
+    val radius = w / 2f - 2 * density
+
+    // Circle head
+    canvas.drawCircle(cx, radius + 2 * density, radius, paint)
+
+    // Pointed tail
+    val path = Path().apply {
+        moveTo(cx - radius * 0.55f, radius + 2 * density + radius * 0.6f)
+        lineTo(cx, h.toFloat() - density)
+        lineTo(cx + radius * 0.55f, radius + 2 * density + radius * 0.6f)
+        close()
+    }
+    canvas.drawPath(path, paint)
+
+    // White inner circle
+    val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        this.color = AndroidColor.WHITE; style = Paint.Style.FILL
+    }
+    canvas.drawCircle(cx, radius + 2 * density, radius * 0.4f, innerPaint)
+
+    return bmp
 }

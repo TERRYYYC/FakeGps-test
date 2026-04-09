@@ -9,6 +9,7 @@ import name.caiyao.fakegps.ui.screen.collection.CollectionScreen
 import name.caiyao.fakegps.ui.screen.editor.ProfileEditorScreen
 import name.caiyao.fakegps.ui.screen.map.MapScreen
 import name.caiyao.fakegps.ui.screen.settings.SettingsScreen
+import name.caiyao.fakegps.ui.screen.verify.VerifyScreen
 
 @Composable
 fun AppNavGraph(navController: NavHostController) {
@@ -23,6 +24,9 @@ fun AppNavGraph(navController: NavHostController) {
                 },
                 onOpenSettings = {
                     navController.navigate(Screen.Settings)
+                },
+                onOpenVerify = {
+                    navController.navigate(Screen.Verify)
                 },
             )
         }
@@ -45,6 +49,11 @@ fun AppNavGraph(navController: NavHostController) {
         }
         composable<Screen.Settings> {
             SettingsScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable<Screen.Verify> {
+            VerifyScreen(
                 onBack = { navController.popBackStack() },
             )
         }
