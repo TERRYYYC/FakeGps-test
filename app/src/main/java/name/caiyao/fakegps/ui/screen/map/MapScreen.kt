@@ -180,7 +180,7 @@ fun MapScreen(
                 ) {
                     // My location button
                     SmallFloatingActionButton(
-                        onClick = { locateMe(context, mapViewRef, vm, scope, snackbarHostState) },
+                        onClick = { locateMe(context, mapViewRef, vm, scope, snackbarHostState, permLauncher) },
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
                     ) {
                         Icon(Icons.Default.MyLocation, contentDescription = "当前位置")
@@ -390,6 +390,7 @@ private fun locateMe(
     vm: MapViewModel,
     scope: kotlinx.coroutines.CoroutineScope,
     snackbar: SnackbarHostState,
+    permLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>? = null,
 ) {
     val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
     if (lm == null) {
@@ -405,7 +406,14 @@ private fun locateMe(
     ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     if (!hasFine && !hasCoarse) {
-        scope.launch { snackbar.showSnackbar("缺少定位权限，请在系统设置中授权") }
+        if (permLauncher != null) {
+            permLauncher.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+            ))
+        } else {
+            scope.launch { snackbar.showSnackbar("缺少定位权限，请在系统设置中授权") }
+        }
         return
     }
 

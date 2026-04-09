@@ -34,8 +34,8 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
             }
             editingId = 0L
             val defaults = mutableMapOf<String, String>()
-            if (defaultLat != 0.0) defaults["latitude"] = defaultLat.toString()
-            if (defaultLon != 0.0) defaults["longitude"] = defaultLon.toString()
+            defaults["latitude"] = defaultLat.toString()
+            defaults["longitude"] = defaultLon.toString()
             _fieldValues.value = defaults
         }
     }
@@ -180,7 +180,7 @@ private fun mapToEntity(values: Map<String, String>, id: Long): ProfileEntity {
         pci = values["pci"]?.toIntOrNull(),
         earfcn = values["earfcn"]?.toIntOrNull(),
         lteBandwidth = values["lte_bandwidth"]?.toIntOrNull(),
-        nci = values["nci"]?.toIntOrNull(),
+        nci = values["nci"]?.toLongOrNull(),
         nrarfcn = values["nrarfcn"]?.toIntOrNull(),
         nrPci = values["nr_pci"]?.toIntOrNull(),
         nrTac = values["nr_tac"]?.toIntOrNull(),

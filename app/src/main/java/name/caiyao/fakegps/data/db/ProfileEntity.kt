@@ -43,7 +43,7 @@ data class ProfileEntity(
     @ColumnInfo(name = "lte_bandwidth") val lteBandwidth: Int? = null,
 
     // Cell Identity — NR/5G
-    val nci: Int? = null,
+    val nci: Long? = null,
     val nrarfcn: Int? = null,
     @ColumnInfo(name = "nr_pci") val nrPci: Int? = null,
     @ColumnInfo(name = "nr_tac") val nrTac: Int? = null,

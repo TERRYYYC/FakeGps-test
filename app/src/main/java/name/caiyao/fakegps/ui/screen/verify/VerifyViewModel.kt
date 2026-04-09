@@ -25,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import name.caiyao.fakegps.data.AppInfoProvider
+import name.caiyao.fakegps.data.db.AppDatabase
 import java.net.NetworkInterface
 
 data class VerifyItem(
@@ -47,6 +49,7 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
             val ctx = getApplication<Application>()
             val result = mutableListOf<VerifyItem>()
 
+            result.addAll(readDataPipeline(ctx))
             result.addAll(readLocation(ctx))
             result.addAll(readCellInfo(ctx))
             result.addAll(readTelephony(ctx))
@@ -60,6 +63,50 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun hasPermission(ctx: Context, perm: String): Boolean =
         ContextCompat.checkSelfPermission(ctx, perm) == PackageManager.PERMISSION_GRANTED
+
+    private fun readDataPipeline(ctx: Context): List<VerifyItem> {
+        val cat = "数据通道"
+        val items = mutableListOf<VerifyItem>()
+
+        // 1. Check Room database
+        val roomDb = try { AppDatabase.getInstance(ctx) } catch (_: Exception) { null }
+        val roomCount = try {
+            roomDb?.openHelper?.readableDatabase?.let { db ->
+                val cursor = db.query("SELECT COUNT(*) FROM temp")
+                cursor.use { if (it.moveToFirst()) it.getInt(0) else 0 }
+            } ?: 0
+        } catch (_: Exception) { 0 }
+        items.add(VerifyItem(cat, "Room 档案数", "$roomCount"))
+
+        // 2. Query ContentProvider (same path hooks use)
+        val cpCount: Int
+        val cpFirstLat: String
+        try {
+            val cursor = ctx.contentResolver.query(
+                AppInfoProvider.APP_CONTENT_URI,
+                null, null, null, "id ASC",
+            )
+            cpCount = cursor?.count ?: 0
+            cpFirstLat = if (cursor != null && cursor.moveToFirst()) {
+                val idx = cursor.getColumnIndex("latitude")
+                if (idx >= 0 && !cursor.isNull(idx)) "%.6f".format(cursor.getDouble(idx)) else "null"
+            } else "N/A"
+            cursor?.close()
+        } catch (e: Exception) {
+            items.add(VerifyItem(cat, "ContentProvider", "异常: ${e.message}"))
+            return items
+        }
+        items.add(VerifyItem(cat, "ContentProvider 档案数", "$cpCount"))
+
+        // 3. Compare
+        val match = roomCount == cpCount
+        items.add(VerifyItem(cat, "数据一致性", if (match) "OK" else "不一致 (Room=$roomCount, CP=$cpCount)"))
+        if (cpCount > 0) {
+            items.add(VerifyItem(cat, "首条纬度 (CP)", cpFirstLat))
+        }
+
+        return items
+    }
 
     @SuppressLint("MissingPermission")
     private fun readLocation(ctx: Context): List<VerifyItem> {
