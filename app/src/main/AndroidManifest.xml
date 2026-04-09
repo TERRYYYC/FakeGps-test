@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:icon="@drawable/ic_lan"
@@ -28,14 +30,21 @@
             android:value="30" />
 
         <activity
-            android:name=".ui.activity.SplashActivity"
+            android:name=".ui.ComposeActivity"
             android:label="@string/app_name"
-            android:exported="true">
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Legacy activities kept for reference during migration -->
+        <activity
+            android:name=".ui.activity.SplashActivity"
+            android:label="@string/app_name"
+            android:exported="false" />
 
         <activity
             android:name=".ui.activity.MainActivity"
@@ -64,7 +73,12 @@
         <!-- Long-running service to keep broadcast alive -->
         <service
             android:name=".hook.MyTimeService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="time_tick_listener" />
+        </service>
 
         <!-- Restarts service if killed -->
         <receiver

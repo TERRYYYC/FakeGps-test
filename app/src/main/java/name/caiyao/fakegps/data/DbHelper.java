@@ -18,9 +18,11 @@ public class DbHelper extends SQLiteOpenHelper {
     private static final int DB_VERSION = 2;  // Bumped from 1 for MockProfile fields
 
     private SQLiteDatabase mdb;
+    private final Context mContext;
 
     public DbHelper(Context context) {
         super(context, DB_NAME, null, DB_VERSION);
+        mContext = context.getApplicationContext();
     }
 
     @Override
@@ -64,25 +66,30 @@ public class DbHelper extends SQLiteOpenHelper {
             return mdb;
         }
 
-        if (!Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)) {
-            Log.e(TAG, "External storage not mounted");
-            return null;
+        // Try app-scoped external storage first (no special permissions needed)
+        File dir = mContext.getExternalFilesDir("database");
+        if (dir == null) {
+            // External storage unavailable, fall back to internal
+            dir = new File(mContext.getFilesDir(), "database");
         }
-
-        String dbPath = Environment.getExternalStorageDirectory().getAbsolutePath() + "/database";
-        String dbFile = dbPath + "/applist.db";
-
-        File dir = new File(dbPath);
         if (!dir.exists()) {
             dir.mkdirs();
         }
 
-        File file = new File(dbFile);
+        File file = new File(dir, DB_NAME);
+
+        // Migrate from legacy path if it exists
         if (!file.exists()) {
-            try {
-                file.createNewFile();
-            } catch (IOException e) {
-                Log.e(TAG, "Failed to create database file", e);
+            File legacyFile = new File(
+                    Environment.getExternalStorageDirectory().getAbsolutePath()
+                    + "/database/" + DB_NAME);
+            if (legacyFile.exists()) {
+                try {
+                    legacyFile.renameTo(file);
+                    Log.i(TAG, "Migrated database from legacy path");
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to migrate legacy database", e);
+                }
             }
         }
 

@@ -1,23 +1,20 @@
 package name.caiyao.fakegps.hook;
 
 import android.app.Notification;
-import android.app.PendingIntent;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.os.Build;
 import android.os.IBinder;
-import android.provider.Settings;
 import androidx.annotation.Nullable;
-import android.util.Log;
 
 import name.caiyao.fakegps.R;
-import name.caiyao.fakegps.ui.activity.MainActivity;
-
-/**
- * Created by sky on 2017/3/23.
- */
 
 public class MyTimeService extends Service {
+
+    private static final String CHANNEL_ID = "fakegps_service";
 
     @Nullable
     @Override
@@ -29,11 +26,18 @@ public class MyTimeService extends Service {
     public void onCreate() {
         super.onCreate();
 
-        Notification notification=new Notification.Builder(this).
-                setContentTitle("千网游").
-                setContentText("千网游服务").
-                setSmallIcon(R.drawable.ic_lan).build();
-        startForeground(1,notification);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    CHANNEL_ID, "FakeGPS Service", NotificationManager.IMPORTANCE_LOW);
+            getSystemService(NotificationManager.class).createNotificationChannel(channel);
+        }
+
+        Notification notification = new Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("FakeGPS")
+                .setContentText("Service running")
+                .setSmallIcon(R.drawable.ic_lan)
+                .build();
+        startForeground(1, notification);
         TimeChangeReciver reciver=new TimeChangeReciver();
         registerReceiver(reciver,new IntentFilter(Intent.ACTION_TIME_TICK));
 
