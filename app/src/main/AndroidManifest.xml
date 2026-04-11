@@ -9,9 +9,6 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:icon="@drawable/ic_lan"
@@ -57,33 +54,6 @@
             android:name=".data.AppInfoProvider"
             android:authorities="name.caiyao.fakegps.data.AppInfoProvider"
             android:exported="true" />
-
-        <receiver
-            android:name=".hook.BootReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
-
-        <receiver
-            android:name=".hook.TimeChangeReciver"
-            android:exported="false" />
-
-        <!-- Long-running service to keep broadcast alive -->
-        <service
-            android:name=".hook.MyTimeService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="time_tick_listener" />
-        </service>
-
-        <!-- Restarts service if killed -->
-        <receiver
-            android:name=".hook.StopReceiver"
-            android:exported="false" />
 
     </application>
 

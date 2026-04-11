@@ -224,19 +224,21 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
             VerifyItem(cat, "SIM 运营商名称", tm.simOperatorName ?: "null"),
             VerifyItem(cat, "SIM 国家", tm.simCountryIso ?: "null"),
             VerifyItem(cat, "网络国家", tm.networkCountryIso ?: "null"),
-            VerifyItem(cat, "网络类型", networkTypeName(tm.dataNetworkType)),
             VerifyItem(cat, "漫游", "${tm.isNetworkRoaming}"),
             VerifyItem(cat, "电话类型", phoneTypeName(tm.phoneType)),
         )
 
         if (hasPermission(ctx, Manifest.permission.READ_PHONE_STATE)) {
             try {
+                items.add(VerifyItem(cat, "网络类型", networkTypeName(tm.dataNetworkType)))
                 val ss = tm.serviceState
                 if (ss != null) {
                     items.add(VerifyItem(cat, "服务状态", serviceStateName(ss.state)))
                 }
-            } catch (_: Exception) {}
-            items.add(VerifyItem(cat, "数据状态", dataStateName(tm.dataState)))
+                items.add(VerifyItem(cat, "数据状态", dataStateName(tm.dataState)))
+            } catch (_: SecurityException) {}
+        } else {
+            items.add(VerifyItem(cat, "网络类型", "需要 READ_PHONE_STATE 权限"))
         }
 
         return items

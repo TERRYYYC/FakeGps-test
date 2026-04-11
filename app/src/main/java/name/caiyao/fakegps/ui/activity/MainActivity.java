@@ -44,7 +44,6 @@ import name.caiyao.fakegps.R;
 import name.caiyao.fakegps.bean.Address;
 import name.caiyao.fakegps.dao.TempDao;
 import name.caiyao.fakegps.data.DbHelper;
-import name.caiyao.fakegps.hook.MyTimeService;
 import name.caiyao.fakegps.hook.ScreenListener;
 import name.caiyao.fakegps.ui.fragment.CollectionFragment;
 import name.caiyao.fakegps.ui.fragment.HelpFragment;
@@ -117,8 +116,7 @@ public class MainActivity extends AppCompatActivity implements CollectionFragmen
         setUpDrawer();
         initNavigationView();
 
-        intent1 = new Intent(this, MyTimeService.class);
-        startService(intent1);
+        // Legacy time service removed — MainHook reads time directly
 
         l = new ScreenListener(this);
         l.begin(new ScreenListener.ScreenStateListener() {
@@ -126,9 +124,7 @@ public class MainActivity extends AppCompatActivity implements CollectionFragmen
             public void onUserPresent() {}
 
             @Override
-            public void onScreenOn() {
-                startService(intent1);
-            }
+            public void onScreenOn() {}
 
             @Override
             public void onScreenOff() {}

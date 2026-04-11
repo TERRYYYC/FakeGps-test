@@ -4,6 +4,7 @@ import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.UriMatcher;
 import android.database.Cursor;
+import android.database.MatrixCursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.net.Uri;
 import android.util.Log;
@@ -16,7 +17,9 @@ public class AppInfoProvider extends ContentProvider {
     private static final String TAG = "AppInfoProvider";
     public static final String AUTHRITY = "name.caiyao.fakegps.data.AppInfoProvider";
     public static final Uri APP_CONTENT_URI = Uri.parse("content://" + AUTHRITY + "/app");
+    public static final Uri SETTINGS_CONTENT_URI = Uri.parse("content://" + AUTHRITY + "/settings");
     public static final int APP_URI_CODE = 0;
+    public static final int SETTINGS_URI_CODE = 1;
     private static final UriMatcher sUriMatcher = new UriMatcher(UriMatcher.NO_MATCH);
 
     /** Room database file name — must match AppDatabase.kt */
@@ -25,6 +28,7 @@ public class AppInfoProvider extends ContentProvider {
 
     static {
         sUriMatcher.addURI(AUTHRITY, "app", APP_URI_CODE);
+        sUriMatcher.addURI(AUTHRITY, "settings", SETTINGS_URI_CODE);
     }
 
     private SQLiteDatabase mSQLiteDatabase;
@@ -62,12 +66,32 @@ public class AppInfoProvider extends ContentProvider {
     @Nullable
     @Override
     public Cursor query(@NonNull Uri uri, String[] projection, String selection, String[] selectionArgs, String sortOrder) {
-        SQLiteDatabase db = getDatabase();
-        if (db == null) return null;
-        String table = getTableName(uri);
-        if (table == null)
-            throw new IllegalArgumentException("Unsupported URI:" + uri);
-        return db.query(table, projection, selection, selectionArgs, null, null, sortOrder, null);
+        switch (sUriMatcher.match(uri)) {
+            case SETTINGS_URI_CODE:
+                return querySettings();
+            case APP_URI_CODE:
+                SQLiteDatabase db = getDatabase();
+                if (db == null) return null;
+                return db.query(TABLE_TEMP, projection, selection, selectionArgs, null, null, sortOrder, null);
+            default:
+                throw new IllegalArgumentException("Unsupported URI:" + uri);
+        }
+    }
+
+    /** Returns spoof settings as a single-row cursor for hooks to read. */
+    private Cursor querySettings() {
+        SpoofSettings settings = SpoofSettings.Companion.getInstance(getContext());
+        MatrixCursor cursor = new MatrixCursor(new String[]{
+                SpoofSettings.KEY_SPOOF_MODE,
+                SpoofSettings.KEY_ACTIVE_HOUR_START,
+                SpoofSettings.KEY_ACTIVE_HOUR_END,
+        });
+        cursor.addRow(new Object[]{
+                settings.getRawMode(),
+                settings.getRawHourStart(),
+                settings.getRawHourEnd(),
+        });
+        return cursor;
     }
 
     @Nullable
@@ -95,13 +119,4 @@ public class AppInfoProvider extends ContentProvider {
         return 0;
     }
 
-    private String getTableName(Uri uri) {
-        String tableName = null;
-        switch (sUriMatcher.match(uri)) {
-            case APP_URI_CODE:
-                tableName = TABLE_TEMP;
-                break;
-        }
-        return tableName;
-    }
 }
