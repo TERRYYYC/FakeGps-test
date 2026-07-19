@@ -78,4 +78,7 @@ dependencies {
 
     // Xposed
     compileOnly 'de.robv.android.xposed:api:82'
+
+    // Unit testing — config channel contract (Phase A, JVM-only, no device needed)
+    testImplementation 'junit:junit:4.13.2'
 }
