@@ -29,16 +29,33 @@ class ConfigHolder {
     /**
      * Attempt to hot-reload from a JSON snapshot.
      *
-     * @return [Result.success] with the new config when parsing succeeds; otherwise
-     *         [Result.failure] carrying the parse error, while the previously-effective
-     *         config remains untouched (last-known-good).
+     * Two rejection paths, BOTH preserving last-known-good (previously-effective config
+     * stays untouched, we NEVER revert to real device data):
+     *   - malformed JSON             -> parse throws              -> failure
+     *   - valid JSON, unknown schema -> IncompatibleSchemaVersion -> failure
+     *
+     * Forward compatibility must go through an explicit migration step, never silent
+     * acceptance of an unknown schemaVersion (reviewer P1).
+     *
+     * @return [Result.success] only when the snapshot parses AND its schemaVersion matches
+     *         this build; otherwise [Result.failure] with the current config left intact.
      */
     fun update(json: String): Result<SpoofConfig> = try {
         val parsed = ConfigCodec.fromJson(json)
-        ref.set(parsed)
-        Result.success(parsed)
+        if (parsed.schemaVersion != SpoofConfig.SCHEMA_VERSION) {
+            Result.failure(
+                IncompatibleSchemaVersionException(parsed.schemaVersion, SpoofConfig.SCHEMA_VERSION)
+            )
+        } else {
+            ref.set(parsed)
+            Result.success(parsed)
+        }
     } catch (e: Exception) {
         // last-known-good: keep whatever was effective; never silently revert to real data.
         Result.failure(e)
     }
 }
+
+/** A snapshot parsed cleanly but declared a schemaVersion this build cannot interpret. */
+class IncompatibleSchemaVersionException(val found: Int, val expected: Int) :
+    IllegalArgumentException("incompatible schemaVersion=$found (this build expects $expected)")

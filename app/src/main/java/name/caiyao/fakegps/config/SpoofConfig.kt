@@ -10,9 +10,9 @@ import kotlinx.serialization.Serializable
  *   - a field that is null (or absent from JSON) = PASSTHROUGH (use the real device value)
  *   - a non-null field                          = spoof with this value
  *
- * This type is @Serializable so config can cross the process boundary as a signed
- * JSON snapshot (see [ConfigCodec]) instead of the exported ContentProvider that any
- * app — including the app under test — could query.
+ * This type is @Serializable so config can cross the process boundary as a
+ * fingerprinted JSON snapshot (see [ConfigCodec]) instead of the exported ContentProvider
+ * that any app — including the app under test — could query.
  *
  * SCOPE NOTE: fields are migrated group-by-group from Snapshot (A–Q). This commit
  * establishes the transport CONTRACT + core fields (location / LTE cell / WiFi);

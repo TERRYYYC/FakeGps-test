@@ -87,4 +87,19 @@ class SpoofConfigTest {
         // CRITICAL: still the spoofed config, NOT null/passthrough — no real-environment leak mid-test.
         assertEquals(10.0, holder.current()?.location?.latitude!!, 0.0)
     }
+
+    @Test
+    fun holder_incompatibleSchemaVersion_keepsLastKnownGood() {
+        val holder = ConfigHolder()
+        holder.update(
+            ConfigCodec.toJson(SpoofConfig(location = SpoofConfig.Location(latitude = 10.0, longitude = 20.0)))
+        )
+        // A SYNTACTICALLY VALID but semantically incompatible (future-version) snapshot.
+        // last-known-good must reject this too — not just corrupt JSON (reviewer P1).
+        val futureJson = """{"schemaVersion":999,"mode":"always_on","location":{"latitude":50.0,"longitude":60.0}}"""
+        val res = holder.update(futureJson)
+        assertTrue("unknown schemaVersion must fail", res.isFailure)
+        // still v1's spoofed config, NOT the 999 payload => no silent takeover by incompatible config.
+        assertEquals(10.0, holder.current()?.location?.latitude!!, 0.0)
+    }
 }
