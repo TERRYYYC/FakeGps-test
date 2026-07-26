@@ -25,6 +25,19 @@
         <meta-data
             android:name="xposedminversion"
             android:value="30" />
+        <!--
+            Opt into the modern XSharedPreferences transport. Without this flag (or
+            xposedminversion > 92) the framework never triggers hookNewXSP, so
+            MODE_WORLD_READABLE is rejected and the prefs file stays in the app's private
+            dir where hooked apps cannot read it (canRead=false). With the flag, the
+            framework redirects getPreferencesDir() to the daemon-provisioned safe-zone
+            (SELinux u:object_r:xposed_data:s0, 0755) that target app processes can read.
+            This is the transport that replaces the ContentProvider path, which Android 11+
+            package-visibility filtering blocks entirely.
+        -->
+        <meta-data
+            android:name="xposedsharedprefs"
+            android:value="true" />
 
         <activity
             android:name=".ui.ComposeActivity"

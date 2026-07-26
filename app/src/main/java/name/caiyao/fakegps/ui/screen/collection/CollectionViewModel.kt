@@ -13,7 +13,7 @@ import name.caiyao.fakegps.data.repository.ProfileRepository
 
 class CollectionViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val repo = ProfileRepository(AppDatabase.getInstance(app))
+    private val repo = ProfileRepository(AppDatabase.getInstance(app), app)
 
     val profiles: StateFlow<List<ProfileSummary>> = repo.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

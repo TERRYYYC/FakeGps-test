@@ -345,6 +345,9 @@ public class ProfileEditorFragment extends Fragment {
             profileDao.insertProfile(cv);
         }
 
+        // Re-publish the effective config to world-readable prefs so the hook picks up the change.
+        name.caiyao.fakegps.config.ConfigPrefsSync.sync(requireContext().getApplicationContext());
+
         Toast.makeText(requireContext(), "Saved", Toast.LENGTH_SHORT).show();
 
         // Pop back

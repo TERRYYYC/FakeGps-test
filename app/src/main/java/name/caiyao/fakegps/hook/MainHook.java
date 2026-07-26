@@ -1,24 +1,18 @@
 package name.caiyao.fakegps.hook;
 
-import android.content.Context;
-import android.database.Cursor;
-import android.net.Uri;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.PrintStream;
-import java.util.ArrayList;
-import java.util.Random;
 import java.util.concurrent.atomic.AtomicReference;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
+
+import name.caiyao.fakegps.config.ConfigCodec;
+import name.caiyao.fakegps.config.SpoofConfig;
 
 /**
  * Xposed module entry point.
@@ -28,26 +22,41 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   2. Hooks read from a shared AtomicReference<Snapshot> at invocation time
  *   3. A background timer refreshes the Snapshot (coordinates + config)
  *      WITHOUT re-registering hooks
+ *
+ * Config transport = XSharedPreferences (world-readable prefs file), NOT the exported
+ * ContentProvider. WHY: Android 11+ package-visibility filtering means a target app that
+ * doesn't declare <queries> for us cannot even resolve our provider ("Failed to find provider
+ * info"), so cross-process queries return null. XSharedPreferences reads a file directly
+ * (Vector redirects MODE_WORLD_READABLE prefs into a permissive-SELinux safe-zone), bypassing
+ * package visibility. WRITE side = {@code name.caiyao.fakegps.config.ConfigPrefsSync}.
  */
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "FakeGPS";
 
+    /** Must match ConfigPrefsSync.PREFS_NAME / KEY_JSON / SCHEMA_VERSION on the app write side. */
+    private static final String PREFS_NAME = "spoof_config";
+    private static final String PREFS_KEY_JSON = "json";
+    private static final int TRANSPORT_SCHEMA_VERSION = 2;
+
     /** Current spoofing config. Hooks read this atomically via CURRENT.get(). */
     static final AtomicReference<Snapshot> CURRENT = new AtomicReference<>(Snapshot.PASSTHROUGH);
 
-    // Spoof mode constants — must match SpoofSettings.kt
-    private static final String MODE_ALWAYS_ON = "always_on";
-    private static final String MODE_TIME_BASED = "time_based";
-    private static final String MODE_OFF = "off";
-
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        if ("name.caiyao.fakegps".equals(lpparam.packageName)) {
+        // PROBE MODE (step 0 of the Maps investigation): our own app is intentionally hooked so it
+        // can act as a CONTROLLED probe. It uses plain LocationManager.getLastKnownLocation
+        // (MapScreen/VerifyViewModel) with no GMS fused path, so it isolates two variables:
+        //   - our app shows the spoofed location  => client-side hooking works; the remaining gap is
+        //     purely Google Maps' cross-process GMS fused path (uid 10213 computes it, not us)
+        //   - our app still shows the real location => something more basic is broken, and chasing
+        //     Maps' fused path would be premature
+        // Revert to skipping self once the probe verdict is recorded.
+        if (false && "name.caiyao.fakegps".equals(lpparam.packageName)) {
             return;
         }
 
-        // 1. Load initial config
+        // 1. Load initial config (XSharedPreferences works here — it's a file read, no app context needed)
         Snapshot initial = loadSnapshot();
         CURRENT.set(initial);
         XposedBridge.log(TAG + ": Loaded config for " + lpparam.packageName
@@ -58,149 +67,86 @@ public class MainHook implements IXposedHookLoadPackage {
         // 2. Register hooks ONCE — they read CURRENT.get() at invocation time
         HookUtils.registerAllHooks(lpparam.classLoader);
 
-        // 3. Background refresh: update Snapshot every 60s, do NOT re-register hooks
+        // 3. Background refresh: re-read prefs periodically, do NOT re-register hooks
         final Handler handler = new Handler(Looper.getMainLooper()) {
             @Override
             public void handleMessage(Message msg) {
                 if (msg.what == 1) {
                     Snapshot refreshed = loadSnapshot();
                     CURRENT.set(refreshed);
+                    XposedBridge.log(TAG + ": [DIAG] timer refresh -> hasLocation=" + refreshed.hasLocation());
                 }
-                sendEmptyMessageDelayed(1, 60 * 1000);
+                sendEmptyMessageDelayed(1, 30 * 1000);
             }
         };
-        handler.sendEmptyMessageDelayed(1, 60 * 1000);
+        handler.sendEmptyMessageDelayed(1, 3 * 1000);
     }
 
     /**
-     * Load all config from ContentProvider into a Snapshot.
-     * Reads spoof mode settings first, then profile data.
-     * Hour-based location selection + micro-offset applied.
+     * Load the effective spoof config from the world-readable prefs snapshot the app publishes
+     * (see ConfigPrefsSync). Parses via Fable's canonical {@link ConfigCodec} → {@link SpoofConfig}
+     * and maps to a hook-layer {@link Snapshot} via {@link SpoofConfigMapper}.
+     *
+     * NULL/absent field == passthrough (real device value). On read/parse failure we keep the
+     * last-known-good CURRENT rather than reverting to real data mid-test.
      */
     private Snapshot loadSnapshot() {
-        Context ctx;
         try {
-            Object activityThread = XposedHelpers.callStaticMethod(
-                    XposedHelpers.findClass("android.app.ActivityThread", null),
-                    "currentActivityThread");
-            ctx = (Context) XposedHelpers.callMethod(activityThread, "getSystemContext");
-        } catch (Exception e) {
-            XposedBridge.log(TAG + ": Error getting context: " + e.getMessage());
-            return Snapshot.PASSTHROUGH;
-        }
+            XSharedPreferences prefs = new XSharedPreferences("name.caiyao.fakegps", PREFS_NAME);
+            prefs.makeWorldReadable();
+            prefs.reload();
 
-        // 1. Read spoof mode settings
-        String spoofMode = MODE_ALWAYS_ON;
-        int hourStart = 7;
-        int hourEnd = 22;
-        try {
-            Uri settingsUri = Uri.parse("content://name.caiyao.fakegps.data.AppInfoProvider/settings");
-            Cursor sc = ctx.getContentResolver().query(settingsUri, null, null, null, null);
-            if (sc != null) {
-                try {
-                    if (sc.moveToFirst()) {
-                        int modeIdx = sc.getColumnIndex("spoof_mode");
-                        int startIdx = sc.getColumnIndex("active_hour_start");
-                        int endIdx = sc.getColumnIndex("active_hour_end");
-                        if (modeIdx >= 0) spoofMode = sc.getString(modeIdx);
-                        if (startIdx >= 0) hourStart = sc.getInt(startIdx);
-                        if (endIdx >= 0) hourEnd = sc.getInt(endIdx);
-                    }
-                } finally {
-                    sc.close();
-                }
-            }
-        } catch (Exception e) {
-            XposedBridge.log(TAG + ": Error reading settings: " + e.getMessage());
-        }
-
-        // 2. Check mode
-        if (MODE_OFF.equals(spoofMode)) {
-            XposedBridge.log(TAG + ": Spoof mode OFF — passthrough");
-            return Snapshot.PASSTHROUGH;
-        }
-
-        if (MODE_TIME_BASED.equals(spoofMode)) {
-            int currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
-            boolean inRange;
-            if (hourStart <= hourEnd) {
-                inRange = currentHour >= hourStart && currentHour < hourEnd;
-            } else {
-                // Wraps midnight: e.g. 22:00 - 06:00
-                inRange = currentHour >= hourStart || currentHour < hourEnd;
-            }
-            if (!inRange) {
-                XposedBridge.log(TAG + ": Outside active hours (" + hourStart + "-" + hourEnd
-                        + "), current=" + currentHour + " — passthrough");
+            String jsonStr = prefs.getString(PREFS_KEY_JSON, null);
+            if (jsonStr == null) {
+                XposedBridge.log(TAG + ": [DIAG] no prefs json (canRead=" + prefs.getFile().canRead()
+                        + " path=" + prefs.getFile().getPath() + ") -> passthrough");
                 return Snapshot.PASSTHROUGH;
             }
-        }
 
-        // 3. Load profiles
-        ArrayList<Snapshot> rows = new ArrayList<>();
-        try {
-            Uri uri = Uri.parse("content://name.caiyao.fakegps.data.AppInfoProvider/app");
-            Cursor cursor = ctx.getContentResolver().query(uri, null, null, null, "id ASC");
-            if (cursor != null) {
-                try {
-                    while (cursor.moveToNext()) {
-                        rows.add(Snapshot.fromCursor(cursor));
+            org.json.JSONObject root = new org.json.JSONObject(jsonStr);
+
+            // schemaVersion gate: refuse to interpret a payload written by an incompatible build
+            // rather than silently mis-reading it. Keep last-known-good (never revert to real data
+            // mid-test) instead of falling back to passthrough.
+            int version = root.optInt("schemaVersion", -1);
+            if (version != TRANSPORT_SCHEMA_VERSION) {
+                XposedBridge.log(TAG + ": [DIAG] incompatible schemaVersion=" + version
+                        + " (expected " + TRANSPORT_SCHEMA_VERSION + ") -> keep last-known-good");
+                return CURRENT.get();
+            }
+
+            String mode = root.optString("mode", "always_on");
+            if ("off".equals(mode)) {
+                XposedBridge.log(TAG + ": [DIAG] mode=off -> passthrough");
+                return Snapshot.PASSTHROUGH;
+            }
+            if ("time_based".equals(mode)) {
+                org.json.JSONObject hours = root.optJSONObject("activeHours");
+                if (hours != null) {
+                    int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+                    int start = hours.optInt("start", 0);
+                    int end = hours.optInt("end", 24);
+                    boolean inRange = (start <= end) ? (h >= start && h < end) : (h >= start || h < end);
+                    if (!inRange) {
+                        XposedBridge.log(TAG + ": [DIAG] outside active hours (" + start + "-" + end
+                                + ") current=" + h + " -> passthrough");
+                        return Snapshot.PASSTHROUGH;
                     }
-                } finally {
-                    cursor.close();
                 }
             }
-        } catch (Exception e) {
-            XposedBridge.log(TAG + ": Error loading profiles: " + e.getMessage());
+
+            // Flat field map -> Snapshot via the SAME field list used for DB cursors, so transport
+            // coverage equals the profile table instead of a hand-maintained subset.
+            org.json.JSONObject fields = root.optJSONObject("fields");
+            Snapshot s = Snapshot.fromJson(fields);
+            XposedBridge.log(TAG + ": [DIAG] prefs loaded fields=" + (fields == null ? 0 : fields.length())
+                    + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude
+                    + " hasLte=" + s.hasLteCell() + " hasGsm=" + s.hasGsmCell());
+            return s;
+        } catch (Throwable t) {
+            // Read/parse failure: keep last-known-good (do NOT revert to real device data mid-test).
+            XposedBridge.log(TAG + ": [DIAG] loadSnapshot prefs error: " + t);
+            return CURRENT.get();
         }
-
-        if (rows.isEmpty()) {
-            return Snapshot.PASSTHROUGH;
-        }
-
-        // 4. Select profile: always use first row
-        Snapshot result = rows.get(0);
-
-        // Apply micro-offset to location for realism
-        if (result.hasLocation()) {
-            Random rnd = new Random();
-            double latOffset = rnd.nextInt(60) / 100000000.0
-                    + rnd.nextInt(99999999) / 100000000000000.0;
-            double lngOffset = rnd.nextInt(60) / 100000000.0
-                    + rnd.nextInt(99999999) / 100000000000000.0;
-            result.latitude += latOffset;
-            result.longitude += lngOffset;
-
-            writeLog(result);
-        }
-
-        return result;
-    }
-
-    private void writeLog(Snapshot s) {
-        try {
-            if (!Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)) return;
-            File dir = new File(Environment.getExternalStorageDirectory(), "database");
-            if (!dir.exists()) dir.mkdirs();
-            File file = new File(dir, "log.txt");
-            FileOutputStream out = new FileOutputStream(file);
-            PrintStream ps = new PrintStream(out);
-            if (s.latitude != null && s.longitude != null) {
-                ps.printf("Location: %.8f, %.8f%n", s.latitude, s.longitude);
-            }
-            if (s.lac != null && s.cid != null) {
-                ps.printf("LAC: %d  CID: %d%n", s.lac, s.cid);
-            }
-            if (s.mcc != null) {
-                ps.printf("MCC: %d  MNC: %s%n", s.mcc, s.mnc);
-            }
-            if (s.lteRsrp != null) {
-                ps.printf("LTE RSRP: %d dBm%n", s.lteRsrp);
-            }
-            if (s.operatorName != null) {
-                ps.printf("Operator: %s (%s)%n", s.operatorName, s.operatorNumeric);
-            }
-            ps.close();
-        } catch (Exception ignored) {}
     }
 }

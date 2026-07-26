@@ -12,7 +12,7 @@ import name.caiyao.fakegps.data.repository.ProfileRepository
 
 class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val repo = ProfileRepository(AppDatabase.getInstance(app))
+    private val repo = ProfileRepository(AppDatabase.getInstance(app), app)
 
     private val _fieldValues = MutableStateFlow<MutableMap<String, String>>(mutableMapOf())
     val fieldValues: StateFlow<Map<String, String>> = _fieldValues

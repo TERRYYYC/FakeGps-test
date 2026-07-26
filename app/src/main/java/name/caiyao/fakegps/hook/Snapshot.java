@@ -175,9 +175,14 @@ class Snapshot {
     // ==========================================================
 
     boolean hasLocation() { return latitude != null && longitude != null; }
-    boolean hasGsmCell() { return lac != null && cid != null; }
-    boolean hasLteCell() { return ci != null; }
-    boolean hasNrCell() { return nci != null; }
+    // "Configured" = ANY field in the group is set, matching the NULL = passthrough contract.
+    // Previously these demanded a specific key (hasLteCell required `ci`), so a profile that set
+    // only `tac` was treated as "no LTE config" and every LTE hook silently no-op'd.
+    boolean hasGsmCell() { return lac != null || cid != null || mcc != null || mnc != null
+            || arfcn != null || bsic != null; }
+    boolean hasLteCell() { return ci != null || tac != null || pci != null || earfcn != null
+            || lteBandwidth != null; }
+    boolean hasNrCell() { return nci != null || nrTac != null || nrPci != null || nrarfcn != null; }
     boolean hasWifi() { return wifiSsid != null || wifiBssid != null; }
     boolean hasPhysicalChannelConfig() {
         return band != null || channelBandwidth != null || cellBandwidthDownlink != null || physicalCellId != null;
@@ -200,160 +205,193 @@ class Snapshot {
     // CURSOR READING (maps DB snake_case columns to fields)
     // ==========================================================
 
-    static Snapshot fromCursor(Cursor c) {
+    static Snapshot from(FieldSource src) {
         Snapshot s = new Snapshot();
 
         // A. Location
-        s.latitude = getDouble(c, "latitude");
-        s.longitude = getDouble(c, "longitude");
-        s.altitude = getDouble(c, "altitude");
-        s.speed = getFloat(c, "speed");
-        s.bearing = getFloat(c, "bearing");
-        s.accuracy = getFloat(c, "accuracy");
+        s.latitude = src.getDouble("latitude");
+        s.longitude = src.getDouble("longitude");
+        s.altitude = src.getDouble("altitude");
+        s.speed = src.getFloat("speed");
+        s.bearing = src.getFloat("bearing");
+        s.accuracy = src.getFloat("accuracy");
 
         // B. Cell Identity - GSM
-        s.mcc = getInt(c, "mcc");
-        s.mnc = getInt(c, "mnc");
-        s.lac = getInt(c, "lac");
-        s.cid = getInt(c, "cid");
-        s.arfcn = getInt(c, "arfcn");
-        s.bsic = getInt(c, "bsic");
+        s.mcc = src.getInt("mcc");
+        s.mnc = src.getInt("mnc");
+        s.lac = src.getInt("lac");
+        s.cid = src.getInt("cid");
+        s.arfcn = src.getInt("arfcn");
+        s.bsic = src.getInt("bsic");
 
         // C. Cell Identity - WCDMA
-        s.psc = getInt(c, "psc");
-        s.uarfcn = getInt(c, "uarfcn");
+        s.psc = src.getInt("psc");
+        s.uarfcn = src.getInt("uarfcn");
 
         // D. Cell Identity - LTE
-        s.tac = getInt(c, "tac");
-        s.ci = getInt(c, "ci");
-        s.pci = getInt(c, "pci");
-        s.earfcn = getInt(c, "earfcn");
-        s.lteBandwidth = getInt(c, "lte_bandwidth");
+        s.tac = src.getInt("tac");
+        s.ci = src.getInt("ci");
+        s.pci = src.getInt("pci");
+        s.earfcn = src.getInt("earfcn");
+        s.lteBandwidth = src.getInt("lte_bandwidth");
 
         // E. Cell Identity - NR
-        s.nci = getLong(c, "nci");
-        s.nrarfcn = getInt(c, "nrarfcn");
-        s.nrPci = getInt(c, "nr_pci");
-        s.nrTac = getInt(c, "nr_tac");
+        s.nci = src.getLong("nci");
+        s.nrarfcn = src.getInt("nrarfcn");
+        s.nrPci = src.getInt("nr_pci");
+        s.nrTac = src.getInt("nr_tac");
 
         // F. Signal - GSM
-        s.gsmRssi = getInt(c, "gsm_rssi");
-        s.gsmBer = getInt(c, "gsm_ber");
-        s.gsmTa = getInt(c, "gsm_ta");
+        s.gsmRssi = src.getInt("gsm_rssi");
+        s.gsmBer = src.getInt("gsm_ber");
+        s.gsmTa = src.getInt("gsm_ta");
 
         // G. Signal - WCDMA
-        s.wcdmaRssi = getInt(c, "wcdma_rssi");
-        s.wcdmaRscp = getInt(c, "wcdma_rscp");
-        s.wcdmaEcno = getInt(c, "wcdma_ecno");
+        s.wcdmaRssi = src.getInt("wcdma_rssi");
+        s.wcdmaRscp = src.getInt("wcdma_rscp");
+        s.wcdmaEcno = src.getInt("wcdma_ecno");
 
         // H. Signal - LTE
-        s.lteRssi = getInt(c, "lte_rssi");
-        s.lteRsrp = getInt(c, "lte_rsrp");
-        s.lteRsrq = getInt(c, "lte_rsrq");
-        s.lteSinr = getInt(c, "lte_sinr");
-        s.lteCqi = getInt(c, "lte_cqi");
-        s.lteTa = getInt(c, "lte_ta");
+        s.lteRssi = src.getInt("lte_rssi");
+        s.lteRsrp = src.getInt("lte_rsrp");
+        s.lteRsrq = src.getInt("lte_rsrq");
+        s.lteSinr = src.getInt("lte_sinr");
+        s.lteCqi = src.getInt("lte_cqi");
+        s.lteTa = src.getInt("lte_ta");
 
         // I. Signal - NR
-        s.nrSsRsrp = getInt(c, "nr_ss_rsrp");
-        s.nrSsRsrq = getInt(c, "nr_ss_rsrq");
-        s.nrSsSinr = getInt(c, "nr_ss_sinr");
-        s.nrCsiRsrp = getInt(c, "nr_csi_rsrp");
-        s.nrCsiRsrq = getInt(c, "nr_csi_rsrq");
-        s.nrCsiSinr = getInt(c, "nr_csi_sinr");
+        s.nrSsRsrp = src.getInt("nr_ss_rsrp");
+        s.nrSsRsrq = src.getInt("nr_ss_rsrq");
+        s.nrSsSinr = src.getInt("nr_ss_sinr");
+        s.nrCsiRsrp = src.getInt("nr_csi_rsrp");
+        s.nrCsiRsrq = src.getInt("nr_csi_rsrq");
+        s.nrCsiSinr = src.getInt("nr_csi_sinr");
 
         // J. Signal Fluctuation
-        s.signalFluctuationEnabled = getBool(c, "signal_fluctuation_enabled");
-        s.signalFluctuationRangeDb = getInt(c, "signal_fluctuation_range_db");
+        s.signalFluctuationEnabled = src.getBool("signal_fluctuation_enabled");
+        s.signalFluctuationRangeDb = src.getInt("signal_fluctuation_range_db");
 
         // K. Carrier & Network
-        s.networkType = getInt(c, "network_type");
-        s.dataNetworkType = getInt(c, "data_network_type");
-        s.voiceNetworkType = getInt(c, "voice_network_type");
-        s.operatorName = getString(c, "operator_name");
-        s.operatorNumeric = getString(c, "operator_numeric");
-        s.simOperator = getString(c, "sim_operator");
-        s.simOperatorName = getString(c, "sim_operator_name");
-        s.simCountryIso = getString(c, "sim_country_iso");
-        s.networkCountryIso = getString(c, "network_country_iso");
-        s.isRoaming = getBool(c, "is_roaming");
-        s.phoneType = getInt(c, "phone_type");
+        s.networkType = src.getInt("network_type");
+        s.dataNetworkType = src.getInt("data_network_type");
+        s.voiceNetworkType = src.getInt("voice_network_type");
+        s.operatorName = src.getString("operator_name");
+        s.operatorNumeric = src.getString("operator_numeric");
+        s.simOperator = src.getString("sim_operator");
+        s.simOperatorName = src.getString("sim_operator_name");
+        s.simCountryIso = src.getString("sim_country_iso");
+        s.networkCountryIso = src.getString("network_country_iso");
+        s.isRoaming = src.getBool("is_roaming");
+        s.phoneType = src.getInt("phone_type");
 
         // L. Service State
-        s.serviceState = getInt(c, "service_state");
-        s.dataState = getInt(c, "data_state");
-        s.dataActivity = getInt(c, "data_activity");
+        s.serviceState = src.getInt("service_state");
+        s.dataState = src.getInt("data_state");
+        s.dataActivity = src.getInt("data_activity");
 
         // M. Display Info
-        s.overrideNetworkType = getInt(c, "override_network_type");
+        s.overrideNetworkType = src.getInt("override_network_type");
 
         // N. Physical Channel Config
-        s.band = getInt(c, "band");
-        s.channelBandwidth = getInt(c, "channel_bandwidth");
-        s.cellBandwidthDownlink = getInt(c, "cell_bandwidth_downlink");
-        s.physicalCellId = getInt(c, "physical_cell_id");
+        s.band = src.getInt("band");
+        s.channelBandwidth = src.getInt("channel_bandwidth");
+        s.cellBandwidthDownlink = src.getInt("cell_bandwidth_downlink");
+        s.physicalCellId = src.getInt("physical_cell_id");
 
         // O. WiFi
-        s.wifiSsid = getString(c, "wifi_ssid");
-        s.wifiBssid = getString(c, "wifi_bssid");
-        s.wifiRssi = getInt(c, "wifi_rssi");
-        s.wifiFrequency = getInt(c, "wifi_frequency");
-        s.wifiLinkSpeed = getInt(c, "wifi_link_speed");
-        s.wifiTxLinkSpeed = getInt(c, "wifi_tx_link_speed");
-        s.wifiRxLinkSpeed = getInt(c, "wifi_rx_link_speed");
-        s.wifiChannel = getInt(c, "wifi_channel");
-        s.wifiStandard = getInt(c, "wifi_standard");
-        s.wifiSecurityType = getInt(c, "wifi_security_type");
-        s.wifiMac = getString(c, "wifi_mac");
-        s.wifiIp = getString(c, "wifi_ip");
-        s.wifiHidden = getBool(c, "wifi_hidden");
-        s.wifiEnabled = getBool(c, "wifi_enabled");
+        s.wifiSsid = src.getString("wifi_ssid");
+        s.wifiBssid = src.getString("wifi_bssid");
+        s.wifiRssi = src.getInt("wifi_rssi");
+        s.wifiFrequency = src.getInt("wifi_frequency");
+        s.wifiLinkSpeed = src.getInt("wifi_link_speed");
+        s.wifiTxLinkSpeed = src.getInt("wifi_tx_link_speed");
+        s.wifiRxLinkSpeed = src.getInt("wifi_rx_link_speed");
+        s.wifiChannel = src.getInt("wifi_channel");
+        s.wifiStandard = src.getInt("wifi_standard");
+        s.wifiSecurityType = src.getInt("wifi_security_type");
+        s.wifiMac = src.getString("wifi_mac");
+        s.wifiIp = src.getString("wifi_ip");
+        s.wifiHidden = src.getBool("wifi_hidden");
+        s.wifiEnabled = src.getBool("wifi_enabled");
 
         // P. IP & Connectivity
-        s.localIpv4 = getString(c, "local_ipv4");
-        s.localIpv6 = getString(c, "local_ipv6");
-        s.dnsPrimary = getString(c, "dns_primary");
-        s.dnsSecondary = getString(c, "dns_secondary");
-        s.gateway = getString(c, "gateway");
-        s.subnetMask = getString(c, "subnet_mask");
-        s.connectionType = getString(c, "connection_type");
-        s.interfaceName = getString(c, "interface_name");
+        s.localIpv4 = src.getString("local_ipv4");
+        s.localIpv6 = src.getString("local_ipv6");
+        s.dnsPrimary = src.getString("dns_primary");
+        s.dnsSecondary = src.getString("dns_secondary");
+        s.gateway = src.getString("gateway");
+        s.subnetMask = src.getString("subnet_mask");
+        s.connectionType = src.getString("connection_type");
+        s.interfaceName = src.getString("interface_name");
 
         // Q. Neighbor cells
-        s.neighborCellsJson = getString(c, "neighbor_cells_json");
+        s.neighborCellsJson = src.getString("neighbor_cells_json");
 
         return s;
     }
 
-    // --- Null-safe cursor column readers ---
-
-    private static Double getDouble(Cursor c, String col) {
-        int idx = c.getColumnIndex(col);
-        return (idx >= 0 && !c.isNull(idx)) ? c.getDouble(idx) : null;
+    /** Read the profile row out of a DB cursor (in-app path). */
+    static Snapshot fromCursor(Cursor c) {
+        return from(new CursorSource(c));
     }
 
-    private static Float getFloat(Cursor c, String col) {
-        int idx = c.getColumnIndex(col);
-        return (idx >= 0 && !c.isNull(idx)) ? c.getFloat(idx) : null;
+    /**
+     * Read the profile out of the transported JSON field map (hook path).
+     *
+     * The transport carries a flat {@code {column: value}} map mirroring the profile table, so the
+     * SINGLE field list in {@link #from(FieldSource)} covers both paths. Previously the hook side
+     * went through a hand-written typed schema that only declared 23 of the 87 columns, so
+     * mcc/mnc/lac/cid/operator_name silently never reached the hook.
+     */
+    static Snapshot fromJson(org.json.JSONObject fields) {
+        return from(new JsonSource(fields));
     }
 
-    private static Integer getInt(Cursor c, String col) {
-        int idx = c.getColumnIndex(col);
-        return (idx >= 0 && !c.isNull(idx)) ? c.getInt(idx) : null;
+    /**
+     * Null-safe value reader. One field list ({@link #from}), two sources: a DB cursor in the app
+     * process and the transported JSON in a hooked process. Absent/null => null => passthrough.
+     */
+    interface FieldSource {
+        Double  getDouble(String col);
+        Float   getFloat(String col);
+        Integer getInt(String col);
+        Long    getLong(String col);
+        String  getString(String col);
+        Boolean getBool(String col);
     }
 
-    private static Long getLong(Cursor c, String col) {
-        int idx = c.getColumnIndex(col);
-        return (idx >= 0 && !c.isNull(idx)) ? c.getLong(idx) : null;
+    private static final class CursorSource implements FieldSource {
+        private final Cursor c;
+        CursorSource(Cursor c) { this.c = c; }
+
+        private int idx(String col) {
+            int i = c.getColumnIndex(col);
+            return (i >= 0 && !c.isNull(i)) ? i : -1;
+        }
+        @Override public Double  getDouble(String col) { int i = idx(col); return i < 0 ? null : c.getDouble(i); }
+        @Override public Float   getFloat(String col)  { int i = idx(col); return i < 0 ? null : c.getFloat(i); }
+        @Override public Integer getInt(String col)    { int i = idx(col); return i < 0 ? null : c.getInt(i); }
+        @Override public Long    getLong(String col)   { int i = idx(col); return i < 0 ? null : c.getLong(i); }
+        @Override public String  getString(String col) { int i = idx(col); return i < 0 ? null : c.getString(i); }
+        @Override public Boolean getBool(String col)   { Integer v = getInt(col); return v == null ? null : v != 0; }
     }
 
-    private static String getString(Cursor c, String col) {
-        int idx = c.getColumnIndex(col);
-        return (idx >= 0 && !c.isNull(idx)) ? c.getString(idx) : null;
-    }
+    private static final class JsonSource implements FieldSource {
+        private final org.json.JSONObject o;
+        JsonSource(org.json.JSONObject o) { this.o = o; }
 
-    private static Boolean getBool(Cursor c, String col) {
-        Integer val = getInt(c, col);
-        return (val != null) ? (val != 0) : null;
+        private boolean has(String col) { return o != null && o.has(col) && !o.isNull(col); }
+        @Override public Double  getDouble(String col) { return has(col) ? o.optDouble(col) : null; }
+        @Override public Float   getFloat(String col)  { return has(col) ? (float) o.optDouble(col) : null; }
+        @Override public Integer getInt(String col)    { return has(col) ? o.optInt(col) : null; }
+        @Override public Long    getLong(String col)   { return has(col) ? o.optLong(col) : null; }
+        @Override public String  getString(String col) { return has(col) ? o.optString(col) : null; }
+        @Override public Boolean getBool(String col) {
+            if (!has(col)) return null;
+            Object v = o.opt(col);
+            if (v instanceof Boolean) return (Boolean) v;
+            if (v instanceof Number)  return ((Number) v).intValue() != 0;
+            return Boolean.parseBoolean(String.valueOf(v));
+        }
     }
 }

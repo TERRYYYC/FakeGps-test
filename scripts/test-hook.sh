@@ -38,7 +38,8 @@ echo "[relaunch] restarting app (republish config + probe)…"
 adb shell am force-stop "$PKG" >/dev/null 2>&1
 adb logcat -c >/dev/null 2>&1
 adb shell am start -n "$ACT" >/dev/null 2>&1
-sleep 8
+# Must outlast: app start + hook's ~3s config timer + the probe's 5s delay.
+sleep 12
 
 PREFS=$(adb shell "su -c 'find /data/misc -name spoof_config.xml -exec cat {} \;'" 2>/dev/null | sed 's/&quot;/\"/g')
 DIAG=$(adb logcat -d 2>/dev/null | grep -E "FakeGPS: \[DIAG\] prefs loaded" | tail -1)

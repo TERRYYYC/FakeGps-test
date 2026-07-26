@@ -154,6 +154,9 @@ class HookUtils {
 
                     LocationListener ll = findLocationListener(param.args);
                     if (ll != null) {
+                        // Take over EVERY future delivery to this listener, otherwise real
+                        // updates keep arriving and overwrite the fake fix we push below.
+                        hookSystemLocationListener(ll);
                         try {
                             ll.onLocationChanged(createFakeLocation(s));
                         } catch (Exception e) {
@@ -179,6 +182,7 @@ class HookUtils {
 
                     LocationListener ll = findLocationListener(param.args);
                     if (ll != null) {
+                        hookSystemLocationListener(ll);
                         try {
                             ll.onLocationChanged(createFakeLocation(s));
                         } catch (Exception e) {
@@ -289,7 +293,16 @@ class HookUtils {
                     protected void afterHookedMethod(MethodHookParam param) {
                         Snapshot s = MainHook.CURRENT.get();
                         if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
-                        param.setResult(buildCellInfoList(s));
+                        // The real result is the passthrough baseline for fields the user left unset.
+                        CellBaseline base = CellBaseline.from(param.getResult());
+                        if (!base.present) {
+                            // FAIL-SAFE: no real cell to build on (no permission / no service / airplane
+                            // mode). Fabricating one from constants would emit a cell that contradicts
+                            // the SIM and operator — more detectable than not spoofing. Pass through.
+                            XposedBridge.log(TAG + ": no cell baseline -> passthrough (not fabricating)");
+                            return;
+                        }
+                        param.setResult(buildCellInfoList(s, base));
                     }
                 }));
 
@@ -717,7 +730,7 @@ class HookUtils {
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Snapshot s = MainHook.CURRENT.get();
                             if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
-                            param.args[0] = buildCellInfoList(s);
+                            param.args[0] = buildCellInfoList(s, CellBaseline.from(param.args[0]));
                         }
                     }));
         }
@@ -932,7 +945,7 @@ class HookUtils {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = MainHook.CURRENT.get();
                         if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
-                        param.args[0] = buildCellInfoList(s);
+                        param.args[0] = buildCellInfoList(s, CellBaseline.from(param.args[0]));
                     }
                 });
 
@@ -1046,7 +1059,7 @@ class HookUtils {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = MainHook.CURRENT.get();
                         if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
-                        param.args[0] = buildCellInfoList(s);
+                        param.args[0] = buildCellInfoList(s, CellBaseline.from(param.args[0]));
                     }
                 }));
     }
@@ -1434,6 +1447,33 @@ class HookUtils {
     // P. FUSED LOCATION (Google Play Services)
     // ==========================================================================
 
+    /**
+     * Resolve the CONCRETE FusedLocationProviderClient implementation to hook.
+     *
+     * {@code com.google.android.gms.location.FusedLocationProviderClient} is abstract, so
+     * hooking its declared methods fails ("Cannot hook abstract methods") and the app's real
+     * fused-location calls are never intercepted. GMS ships the concrete impl under a stable
+     * internal name; fall back to the abstract type only if that is missing, so behaviour is
+     * never worse than before.
+     */
+    private static Class<?> resolveFusedImpl(ClassLoader cl, String abstractName) {
+        String[] candidates = {
+                "com.google.android.gms.location.internal.FusedLocationProviderClientImpl",
+                "com.google.android.gms.location.internal.zzbp",
+        };
+        for (String name : candidates) {
+            try {
+                Class<?> c = XposedHelpers.findClass(name, cl);
+                if (c != null) {
+                    XposedBridge.log(TAG + ": fused impl resolved -> " + name);
+                    return c;
+                }
+            } catch (Throwable ignored) {}
+        }
+        XposedBridge.log(TAG + ": fused impl NOT found, falling back to abstract " + abstractName);
+        return XposedHelpers.findClass(abstractName, cl);
+    }
+
     private static void hookFusedLocation(ClassLoader cl) {
         // FusedLocationProviderClient is in GMS; class may not exist on AOSP-only devices.
         // All hooks use tryHook to silently skip if GMS classes are absent.
@@ -1443,9 +1483,15 @@ class HookUtils {
         String locationResult = "com.google.android.gms.location.LocationResult";
         String locationCallback = "com.google.android.gms.location.LocationCallback";
 
+        // FusedLocationProviderClient is ABSTRACT — hooking its declared methods fails with
+        // "Cannot hook abstract methods", which is exactly why the blue dot kept showing the real
+        // location while the legacy LocationManager hooks fired fine. Hook the CONCRETE impl
+        // instead (GMS keeps the internal impl class name even when app code is obfuscated).
+        final Class<?> fusedImpl = resolveFusedImpl(cl, fusedClient);
+
         // FusedLocationProviderClient.getLastLocation() — returns Task<Location>
         tryHook(() -> XposedBridge.hookAllMethods(
-                XposedHelpers.findClass(fusedClient, cl),
+                fusedImpl,
                 "getLastLocation", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
@@ -1457,7 +1503,7 @@ class HookUtils {
 
         // FusedLocationProviderClient.getCurrentLocation(int, CancellationToken) — one-shot
         tryHook(() -> XposedBridge.hookAllMethods(
-                XposedHelpers.findClass(fusedClient, cl),
+                fusedImpl,
                 "getCurrentLocation", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
@@ -1473,7 +1519,7 @@ class HookUtils {
         String gmsLocationListener = "com.google.android.gms.location.LocationListener";
 
         tryHook(() -> XposedBridge.hookAllMethods(
-                XposedHelpers.findClass(fusedClient, cl),
+                fusedImpl,
                 "requestLocationUpdates", new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
@@ -1625,6 +1671,45 @@ class HookUtils {
         }
     }
 
+    /**
+     * Hook a SYSTEM {@link LocationListener}'s onLocationChanged so EVERY delivered update is
+     * replaced, not just the one we inject at registration time.
+     *
+     * Without this, requestLocationUpdates only pushed a single fake fix and then let the real
+     * request proceed, so genuine GPS/network updates kept flowing to the same listener and
+     * overwrote the spoof (the blue dot snapped back to the real position). Dedup via HOOKED.
+     */
+    private static void hookSystemLocationListener(Object listener) {
+        if (listener == null) return;
+        Class<?> listenerClass = listener.getClass();
+        String key = "sll#" + listenerClass.getName() + "#onLocationChanged";
+        if (!HOOKED.add(key)) return;
+
+        tryHook(() -> XposedHelpers.findAndHookMethod(listenerClass,
+                "onLocationChanged", Location.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        Snapshot s = MainHook.CURRENT.get();
+                        if (!s.hasLocation()) return;
+                        param.args[0] = createFakeLocation(s);
+                    }
+                }));
+
+        // API 31+ also delivers batched updates via onLocationChanged(List<Location>)
+        tryHook(() -> XposedHelpers.findAndHookMethod(listenerClass,
+                "onLocationChanged", java.util.List.class, new XC_MethodHook() {
+                    @Override
+                    @SuppressWarnings("unchecked")
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        Snapshot s = MainHook.CURRENT.get();
+                        if (!s.hasLocation()) return;
+                        ArrayList<Location> fake = new ArrayList<>();
+                        fake.add(createFakeLocation(s));
+                        param.args[0] = fake;
+                    }
+                }));
+    }
+
     /** Hook concrete GMS LocationListener subclass's onLocationChanged(). Dedup via HOOKED set. */
     private static void hookFusedLocationListener(Object listener, ClassLoader cl) {
         Class<?> listenerClass = listener.getClass();
@@ -1648,6 +1733,18 @@ class HookUtils {
 
     /** Creates a fully populated fake Location from Snapshot. */
     private static Location createFakeLocation(Snapshot s) {
+        // [DIAG] Every hook that actually applies a spoofed location funnels through here.
+        // Log the calling hook so we can see WHICH location API the target app really uses
+        // (and whether any hook fires at all). Remove once the path is confirmed.
+        try {
+            StackTraceElement[] st = Thread.currentThread().getStackTrace();
+            StringBuilder sb = new StringBuilder();
+            for (int i = 3; i < Math.min(st.length, 9); i++) {
+                sb.append(st[i].getClassName()).append('.').append(st[i].getMethodName()).append(" <- ");
+            }
+            XposedBridge.log(TAG + ": [HIT] createFakeLocation via " + sb);
+        } catch (Throwable ignored) {}
+
         Location l = new Location(LocationManager.GPS_PROVIDER);
         l.setLatitude(s.latitude);
         l.setLongitude(s.longitude);
@@ -1680,24 +1777,118 @@ class HookUtils {
      * Individual field values are further refined by getter hooks at read time.
      */
     @SuppressWarnings("unchecked")
-    private static ArrayList buildCellInfoList(Snapshot s) {
+    /**
+     * The device's REAL cellular values, used as the per-field passthrough baseline.
+     *
+     * Without this, unconfigured fields fell back to hardcoded constants (mcc=460 — China Mobile —
+     * mnc=0, rsrp=-100…). A profile that set only `tac` therefore produced a cell claiming a
+     * Chinese operator while the SIM, operator name and neighbours all said otherwise: an
+     * internally inconsistent environment that is trivially detectable — worse than not spoofing.
+     * Now every field the user did not configure keeps the device's actual value.
+     */
+    private static final class CellBaseline {
+        Integer mcc, mnc, lac, cid, tac, ci, pci, earfcn;
+        Integer lteRssi, lteRsrp, lteRsrq, lteSinr, lteCqi;
+        Integer gsmRssi;
+        boolean present;
+
+        /**
+         * Most recent NON-EMPTY real baseline.
+         *
+         * getAllCellInfo() legitimately returns an empty list at times — the platform serves a
+         * cached snapshot that is empty right after process start, during a handover, or while the
+         * radio is settling. Without this we would see "no baseline" on exactly those calls and
+         * fall back to passthrough, so spoofing would flicker on and off. Keeping the last real
+         * reading gives a stable, genuine basis to overlay the user's edits onto.
+         */
+        static volatile CellBaseline lastReal;
+
+        /** Extract from the live getAllCellInfo() result. Absent/unsupported fields stay null. */
+        static CellBaseline from(Object realResult) {
+            CellBaseline b = new CellBaseline();
+            if (!(realResult instanceof java.util.List)) return b;
+            for (Object info : (java.util.List<?>) realResult) {
+                try {
+                    if (info instanceof CellInfoLte) {
+                        Object id = XposedHelpers.callMethod(info, "getCellIdentity");
+                        Object sig = XposedHelpers.callMethod(info, "getCellSignalStrength");
+                        b.ci = valid((Integer) XposedHelpers.callMethod(id, "getCi"));
+                        b.pci = valid((Integer) XposedHelpers.callMethod(id, "getPci"));
+                        b.tac = valid((Integer) XposedHelpers.callMethod(id, "getTac"));
+                        b.earfcn = valid((Integer) XposedHelpers.callMethod(id, "getEarfcn"));
+                        b.mcc = parseOrNull(XposedHelpers.callMethod(id, "getMccString"));
+                        b.mnc = parseOrNull(XposedHelpers.callMethod(id, "getMncString"));
+                        b.lteRsrp = valid((Integer) XposedHelpers.callMethod(sig, "getRsrp"));
+                        b.lteRsrq = valid((Integer) XposedHelpers.callMethod(sig, "getRsrq"));
+                        b.lteSinr = valid((Integer) XposedHelpers.callMethod(sig, "getRssnr"));
+                        b.lteCqi = valid((Integer) XposedHelpers.callMethod(sig, "getCqi"));
+                        b.lteRssi = valid((Integer) XposedHelpers.callMethod(sig, "getRssi"));
+                        b.present = true;
+                    } else if (info instanceof CellInfoGsm) {
+                        Object id = XposedHelpers.callMethod(info, "getCellIdentity");
+                        Object sig = XposedHelpers.callMethod(info, "getCellSignalStrength");
+                        b.lac = valid((Integer) XposedHelpers.callMethod(id, "getLac"));
+                        b.cid = valid((Integer) XposedHelpers.callMethod(id, "getCid"));
+                        if (b.mcc == null) b.mcc = parseOrNull(XposedHelpers.callMethod(id, "getMccString"));
+                        if (b.mnc == null) b.mnc = parseOrNull(XposedHelpers.callMethod(id, "getMncString"));
+                        b.gsmRssi = valid((Integer) XposedHelpers.callMethod(sig, "getDbm"));
+                        b.present = true;
+                    }
+                } catch (Throwable t) {
+                    XposedBridge.log(TAG + ": [DIAG] baseline extract failed on "
+                            + info.getClass().getSimpleName() + ": " + t);
+                }
+            }
+            if (b.present) {
+                lastReal = b;                 // fresh genuine reading — remember it
+            } else if (lastReal != null) {
+                b = lastReal;                 // radio settling / cached-empty — reuse last real one
+            }
+            XposedBridge.log(TAG + ": [DIAG] baseline present=" + b.present + " ci=" + b.ci
+                    + " mcc=" + b.mcc + " tac=" + b.tac + " rsrp=" + b.lteRsrp
+                    + " (from " + (realResult == null ? "null" : realResult.getClass().getSimpleName()
+                    + " size=" + ((java.util.List<?>) realResult).size()) + ")");
+            return b;
+        }
+
+        /** Android reports "unknown" as Integer.MAX_VALUE — treat that as absent. */
+        private static Integer valid(Integer v) {
+            return (v == null || v == Integer.MAX_VALUE) ? null : v;
+        }
+        private static Integer parseOrNull(Object v) {
+            try { return v == null ? null : Integer.valueOf(String.valueOf(v)); }
+            catch (Exception e) { return null; }
+        }
+    }
+
+    /** Configured value wins; otherwise the device's real value; otherwise the last-resort default. */
+    private static int pick(Integer configured, Integer real, int fallback) {
+        if (configured != null) return configured;
+        if (real != null) return real;
+        return fallback;
+    }
+
+    private static ArrayList buildCellInfoList(Snapshot s, CellBaseline base) {
         // WeakHashMap-backed set: old neighbor objects are GC'd naturally
         // when the app drops references. No manual clear() needed.
         ArrayList list = new ArrayList();
-        int mcc = s.mcc != null ? s.mcc : 460;
-        int mnc = s.mnc != null ? s.mnc : 0;
+        // Per-field passthrough: configured value > device's real value > last-resort default.
+        int mcc = pick(s.mcc, base.mcc, 460);
+        int mnc = pick(s.mnc, base.mnc, 0);
 
         // GSM cell
         if (s.hasGsmCell()) {
             try {
                 CellInfoGsm gsm = (CellInfoGsm) XposedHelpers.newInstance(CellInfoGsm.class);
+                int lac = pick(s.lac, base.lac, 0);
+                int cid = pick(s.cid, base.cid, 0);
                 Object identity;
                 if (s.arfcn != null && s.bsic != null) {
                     identity = XposedHelpers.newInstance(CellIdentityGsm.class,
-                            mcc, mnc, s.lac, s.cid, s.arfcn, s.bsic);
+                            mcc, mnc, lac, cid, s.arfcn, s.bsic);
                 } else {
                     identity = XposedHelpers.newInstance(CellIdentityGsm.class,
-                            mcc, mnc, s.lac, s.cid);
+                            mcc, mnc, lac, cid);
                 }
                 XposedHelpers.callMethod(gsm, "setCellIdentity", identity);
                 // Set signal strength — getter hooks will override individual fields
@@ -1727,13 +1918,17 @@ class HookUtils {
         if (s.hasLteCell()) {
             try {
                 CellInfoLte lte = (CellInfoLte) XposedHelpers.newInstance(CellInfoLte.class);
-                int ci = s.ci;
-                int pci = s.pci != null ? s.pci : 0;
-                int tac = s.tac != null ? s.tac : (s.lac != null ? s.lac : 0);
+                // NB: `int ci = s.ci` used to unbox a null whenever the profile configured any LTE
+                // field other than ci — NPE, swallowed by the catch below, so NO LTE cell was
+                // reported at all (getAllCellInfo returned an empty list, itself a red flag).
+                int ci = pick(s.ci, base.ci, 0);
+                int pci = pick(s.pci, base.pci, 0);
+                int tac = pick(s.tac, base.tac != null ? base.tac : s.lac, 0);
+                Integer earfcn = s.earfcn != null ? s.earfcn : base.earfcn;
                 Object identity;
-                if (s.earfcn != null) {
+                if (earfcn != null) {
                     identity = XposedHelpers.newInstance(CellIdentityLte.class,
-                            mcc, mnc, ci, pci, tac, s.earfcn);
+                            mcc, mnc, ci, pci, tac, earfcn);
                 } else {
                     identity = XposedHelpers.newInstance(CellIdentityLte.class,
                             mcc, mnc, ci, pci, tac);
@@ -1741,11 +1936,11 @@ class HookUtils {
                 XposedHelpers.callMethod(lte, "setCellIdentity", identity);
                 // Set signal strength
                 try {
-                    int rssi = s.lteRssi != null ? s.lteRssi : -90;
-                    int rsrp = s.lteRsrp != null ? s.lteRsrp : -100;
-                    int rsrq = s.lteRsrq != null ? s.lteRsrq : -10;
-                    int sinr = s.lteSinr != null ? s.lteSinr : 15;
-                    int cqi = s.lteCqi != null ? s.lteCqi : 10;
+                    int rssi = pick(s.lteRssi, base.lteRssi, -90);
+                    int rsrp = pick(s.lteRsrp, base.lteRsrp, -100);
+                    int rsrq = pick(s.lteRsrq, base.lteRsrq, -10);
+                    int sinr = pick(s.lteSinr, base.lteSinr, 15);
+                    int cqi = pick(s.lteCqi, base.lteCqi, 10);
                     int lteTa = s.lteTa != null ? s.lteTa : Integer.MAX_VALUE;
                     Object lteSig = XposedHelpers.newInstance(
                             XposedHelpers.findClass("android.telephony.CellSignalStrengthLte", null),

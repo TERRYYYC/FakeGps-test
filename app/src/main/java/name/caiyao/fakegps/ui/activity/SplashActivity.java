@@ -19,6 +19,12 @@ public class SplashActivity  extends Activity{
        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,WindowManager.LayoutParams.FLAG_FULLSCREEN);
         
         setContentView(R.layout.splash);
+
+        // Publish the current effective spoof config into world-readable prefs so the Xposed hook
+        // (running inside target apps, e.g. Google Maps) can read it via XSharedPreferences. The old
+        // ContentProvider transport is blocked by Android 11+ package-visibility filtering.
+        name.caiyao.fakegps.config.ConfigPrefsSync.sync(getApplicationContext());
+
         new Handler().postDelayed(new Runnable(){
 
             @Override
