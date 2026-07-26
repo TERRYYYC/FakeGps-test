@@ -98,9 +98,17 @@ public class MainHook implements IXposedHookLoadPackage {
 
             String jsonStr = prefs.getString(PREFS_KEY_JSON, null);
             if (jsonStr == null) {
+                // last-known-good (review FC-2): a MISSING payload on a refresh tick is not the
+                // same as "no config". The prefs file can be transiently unreadable (mid-write,
+                // permission flap), and reverting an ACTIVE spoof to real device data would leak
+                // the true environment to the app under test. Only pass through when nothing has
+                // ever been published (first launch), where real values are the safe default.
+                Snapshot resolved = Snapshot.keepLastKnownGoodOr(CURRENT.get());
                 XposedBridge.log(TAG + ": [DIAG] no prefs json (canRead=" + prefs.getFile().canRead()
-                        + " path=" + prefs.getFile().getPath() + ") -> passthrough");
-                return Snapshot.PASSTHROUGH;
+                        + " path=" + prefs.getFile().getPath() + ") -> "
+                        + (resolved == Snapshot.PASSTHROUGH ? "passthrough (never published)"
+                                                            : "keep last-known-good"));
+                return resolved;
             }
 
             org.json.JSONObject root = new org.json.JSONObject(jsonStr);
@@ -138,6 +146,16 @@ public class MainHook implements IXposedHookLoadPackage {
             // Flat field map -> Snapshot via the SAME field list used for DB cursors, so transport
             // coverage equals the profile table instead of a hand-maintained subset.
             org.json.JSONObject fields = root.optJSONObject("fields");
+            if (fields == null) {
+                // last-known-good (review FC-2): a v2-valid payload that carries no `fields` object
+                // is structurally incomplete, not an instruction to stop spoofing. Publishing an
+                // all-null Snapshot here would silently drop an active spoof back to real data.
+                Snapshot resolved = Snapshot.keepLastKnownGoodOr(CURRENT.get());
+                XposedBridge.log(TAG + ": [DIAG] payload has no 'fields' -> "
+                        + (resolved == Snapshot.PASSTHROUGH ? "passthrough (never published)"
+                                                            : "keep last-known-good"));
+                return resolved;
+            }
             Snapshot s = Snapshot.fromJson(fields);
             XposedBridge.log(TAG + ": [DIAG] prefs loaded fields=" + (fields == null ? 0 : fields.length())
                     + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude

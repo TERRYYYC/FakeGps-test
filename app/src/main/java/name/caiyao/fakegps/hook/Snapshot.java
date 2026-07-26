@@ -17,6 +17,25 @@ class Snapshot {
     /** Default: everything null = passthrough all real values. */
     static final Snapshot PASSTHROUGH = new Snapshot();
 
+    /**
+     * LAST-KNOWN-GOOD resolution for an unreadable / structurally incomplete config payload.
+     *
+     * <p>Invariant (review FC-2): once a spoof is ACTIVE, a failed refresh must never revert the
+     * hook layer to real device data — that would leak the true environment to the app under test
+     * mid-run. Only when nothing has ever been published (first launch) is passing through the
+     * real values the safe default.
+     *
+     * <p>Extracted as a pure function so the invariant is locked by unit tests rather than by
+     * inspection: {@code MainHook} itself cannot be unit-tested (Xposed classes are compileOnly).
+     *
+     * @param lastGood the currently-effective snapshot, may be null
+     * @return {@code lastGood} if a spoof is currently active, otherwise {@link #PASSTHROUGH}
+     */
+    static Snapshot keepLastKnownGoodOr(Snapshot lastGood) {
+        boolean everPublished = lastGood != null && lastGood != PASSTHROUGH;
+        return everPublished ? lastGood : PASSTHROUGH;
+    }
+
     // ==========================================
     // A. LOCATION (resolved by MainHook per hour)
     // ==========================================
