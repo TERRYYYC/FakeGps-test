@@ -10,7 +10,12 @@ import java.util.function.Supplier;
  * own spoofed results instead of the framework values it is supposed to preserve.
  */
 final class BaselineExtractionGuard {
-    private static final ThreadLocal<Integer> DEPTH = ThreadLocal.withInitial(() -> 0);
+    private static final ThreadLocal<Integer> DEPTH = new ThreadLocal<Integer>() {
+        @Override
+        protected Integer initialValue() {
+            return 0;
+        }
+    };
 
     private BaselineExtractionGuard() {}
 

@@ -1,13 +1,29 @@
 package name.caiyao.fakegps.hook;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 
 import org.junit.Test;
 
 /** Regression coverage for FC-10: real-baseline reads must bypass this module's own getter hooks. */
 public class BaselineExtractionGuardTest {
+
+    @Test
+    public void guardBytecodeDoesNotCallApi26ThreadLocalFactory() throws Exception {
+        String resource = "/" + BaselineExtractionGuard.class.getName().replace('.', '/') + ".class";
+        try (InputStream input = BaselineExtractionGuard.class.getResourceAsStream(resource)) {
+            assertNotNull(input);
+            String constantPool = new String(input.readAllBytes(), StandardCharsets.ISO_8859_1);
+            assertFalse(
+                    "ThreadLocal.withInitial is unavailable on the supported API 24-25 range",
+                    constantPool.contains("withInitial"));
+        }
+    }
 
     @Test
     public void guardIsActiveOnlyInsideExtraction() {
