@@ -1,11 +1,17 @@
 package name.caiyao.fakegps.hook;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import org.junit.Test;
 
@@ -18,6 +24,87 @@ import org.junit.Test;
 public class CellConstructorCompatTest {
 
     @Test
+    public void api24IdentityReadsDoNotRequireApi28Getters() throws Exception {
+        Method readPlmn;
+        Method readInteger;
+        try {
+            readPlmn = CellIdentityMetadata.class.getDeclaredMethod(
+                    "readPlmn", Object.class, String.class, String.class);
+            readInteger = CellIdentityMetadata.class.getDeclaredMethod(
+                    "readInteger", Object.class, String.class);
+        } catch (NoSuchMethodException missingCompatibilityReader) {
+            fail("baseline reads must isolate optional getters and fall back to numeric PLMN");
+            return;
+        }
+        readPlmn.setAccessible(true);
+        readInteger.setAccessible(true);
+
+        FakeApi24LteIdentity identity = new FakeApi24LteIdentity(255, 3);
+        assertEquals("255", readPlmn.invoke(
+                null, identity, "getMccString", "getMcc"));
+        assertEquals("3", readPlmn.invoke(
+                null, identity, "getMncString", "getMnc"));
+        assertNull(readInteger.invoke(null, identity, "getBandwidth"));
+    }
+
+    @Test
+    public void modernIdentityFactoriesPreserveUnconfiguredMetadata() throws Exception {
+        int[] bands = {3, 7};
+        Set<String> additionalPlmns =
+                new LinkedHashSet<>(Arrays.asList("02503", "02504"));
+        Object csgInfo = new Object();
+
+        Class<?> metadataType;
+        Object metadata;
+        Method lteFactory;
+        Method gsmFactory;
+        Method wcdmaFactory;
+        try {
+            metadataType = Class.forName("name.caiyao.fakegps.hook.CellIdentityMetadata");
+            Method from = metadataType.getDeclaredMethod("from", Object.class);
+            from.setAccessible(true);
+            metadata = from.invoke(null, new FakeIdentityMetadataSource(
+                    bands, "Real Carrier", "RC", additionalPlmns, csgInfo));
+            lteFactory = CellConstructorCompat.class.getDeclaredMethod(
+                    "newLteIdentity", Class.class, String.class, String.class,
+                    int.class, int.class, int.class, Integer.class, Integer.class,
+                    metadataType);
+            gsmFactory = CellConstructorCompat.class.getDeclaredMethod(
+                    "newGsmIdentity", Class.class, String.class, String.class,
+                    int.class, int.class, Integer.class, Integer.class, metadataType);
+            wcdmaFactory = CellConstructorCompat.class.getDeclaredMethod(
+                    "newWcdmaIdentity", Class.class, String.class, String.class,
+                    int.class, int.class, Integer.class, Integer.class, metadataType);
+        } catch (ClassNotFoundException | NoSuchMethodException missingMetadataContract) {
+            fail("modern identity factories must accept metadata extracted from the real identity");
+            return;
+        }
+
+        FakeLteIdentityModern lte = (FakeLteIdentityModern) lteFactory.invoke(
+                null, FakeLteIdentityModern.class, "025", "03",
+                28378431, 53, 26999, 39300, 20000, metadata);
+        FakeGsmIdentityModern gsm = (FakeGsmIdentityModern) gsmFactory.invoke(
+                null, FakeGsmIdentityModern.class, "025", "03",
+                401, 402, 975, 12, metadata);
+        FakeWcdmaIdentityModern wcdma = (FakeWcdmaIdentityModern) wcdmaFactory.invoke(
+                null, FakeWcdmaIdentityModern.class, "025", "03",
+                501, 502, 73, 10613, metadata);
+
+        assertArrayEquals(bands, lte.bands);
+        assertEquals("Real Carrier", lte.alphaLong);
+        assertEquals("RC", lte.alphaShort);
+        assertSame(additionalPlmns, lte.additionalPlmns);
+        assertSame(csgInfo, lte.csgInfo);
+        assertEquals("Real Carrier", gsm.alphaLong);
+        assertEquals("RC", gsm.alphaShort);
+        assertSame(additionalPlmns, gsm.additionalPlmns);
+        assertEquals("Real Carrier", wcdma.alphaLong);
+        assertEquals("RC", wcdma.alphaShort);
+        assertSame(additionalPlmns, wcdma.additionalPlmns);
+        assertSame(csgInfo, wcdma.csgInfo);
+    }
+
+    @Test
     public void stringConstructorFactoriesPreserveLeadingZeroPlmn() throws Exception {
         Method lteFactory;
         Method gsmFactory;
@@ -25,13 +112,16 @@ public class CellConstructorCompatTest {
         try {
             lteFactory = CellConstructorCompat.class.getDeclaredMethod(
                     "newLteIdentity", Class.class, String.class, String.class,
-                    int.class, int.class, int.class, Integer.class, Integer.class);
+                    int.class, int.class, int.class, Integer.class, Integer.class,
+                    CellIdentityMetadata.class);
             gsmFactory = CellConstructorCompat.class.getDeclaredMethod(
                     "newGsmIdentity", Class.class, String.class, String.class,
-                    int.class, int.class, Integer.class, Integer.class);
+                    int.class, int.class, Integer.class, Integer.class,
+                    CellIdentityMetadata.class);
             wcdmaFactory = CellConstructorCompat.class.getDeclaredMethod(
                     "newWcdmaIdentity", Class.class, String.class, String.class,
-                    int.class, int.class, Integer.class, Integer.class);
+                    int.class, int.class, Integer.class, Integer.class,
+                    CellIdentityMetadata.class);
         } catch (NoSuchMethodException missingStringPlmnContract) {
             fail("identity factories must accept the original PLMN strings");
             return;
@@ -39,23 +129,23 @@ public class CellConstructorCompatTest {
 
         FakeLteIdentityModern lteModern = (FakeLteIdentityModern) lteFactory.invoke(
                 null, FakeLteIdentityModern.class, "025", "03",
-                28378431, 53, 26999, 39300, 20000);
+                28378431, 53, 26999, 39300, 20000, CellIdentityMetadata.EMPTY);
         FakeLteIdentityAndroidNine lteNine = (FakeLteIdentityAndroidNine) lteFactory.invoke(
                 null, FakeLteIdentityAndroidNine.class, "025", "03",
-                28378431, 53, 26999, 39300, 15000);
+                28378431, 53, 26999, 39300, 15000, CellIdentityMetadata.EMPTY);
         FakeGsmIdentityModern gsmModern = (FakeGsmIdentityModern) gsmFactory.invoke(
                 null, FakeGsmIdentityModern.class, "025", "03",
-                401, 402, 975, 12);
+                401, 402, 975, 12, CellIdentityMetadata.EMPTY);
         FakeGsmIdentityAndroidNine gsmNine = (FakeGsmIdentityAndroidNine) gsmFactory.invoke(
                 null, FakeGsmIdentityAndroidNine.class, "025", "03",
-                401, 402, 975, 12);
+                401, 402, 975, 12, CellIdentityMetadata.EMPTY);
         FakeWcdmaIdentityModern wcdmaModern = (FakeWcdmaIdentityModern) wcdmaFactory.invoke(
                 null, FakeWcdmaIdentityModern.class, "025", "03",
-                501, 502, 73, 10613);
+                501, 502, 73, 10613, CellIdentityMetadata.EMPTY);
         FakeWcdmaIdentityAndroidNine wcdmaNine =
                 (FakeWcdmaIdentityAndroidNine) wcdmaFactory.invoke(
                         null, FakeWcdmaIdentityAndroidNine.class, "025", "03",
-                        501, 502, 73, 10613);
+                        501, 502, 73, 10613, CellIdentityMetadata.EMPTY);
 
         assertEquals("025", lteModern.mcc);
         assertEquals("03", lteModern.mnc);
@@ -76,7 +166,8 @@ public class CellConstructorCompatTest {
         FakeLteIdentityModern value = (FakeLteIdentityModern)
                 CellConstructorCompat.newLteIdentity(
                         FakeLteIdentityModern.class,
-                        "255", "3", 28378431, 53, 26999, 39300, 20000);
+                        "255", "3", 28378431, 53, 26999, 39300, 20000,
+                        CellIdentityMetadata.EMPTY);
 
         assertEquals(28378431, value.ci);
         assertEquals(53, value.pci);
@@ -93,7 +184,8 @@ public class CellConstructorCompatTest {
         FakeLteIdentityLegacy value = (FakeLteIdentityLegacy)
                 CellConstructorCompat.newLteIdentity(
                         FakeLteIdentityLegacy.class,
-                        "255", "3", 28378431, 53, 26999, 39300, 20000);
+                        "255", "3", 28378431, 53, 26999, 39300, 20000,
+                        CellIdentityMetadata.EMPTY);
 
         assertEquals(255, value.mcc);
         assertEquals(3, value.mnc);
@@ -107,7 +199,8 @@ public class CellConstructorCompatTest {
         FakeLteIdentityAndroidNine value = (FakeLteIdentityAndroidNine)
                 CellConstructorCompat.newLteIdentity(
                         FakeLteIdentityAndroidNine.class,
-                        "255", "3", 28378431, 53, 26999, 39300, 15000);
+                        "255", "3", 28378431, 53, 26999, 39300, 15000,
+                        CellIdentityMetadata.EMPTY);
 
         assertEquals(28378431, value.ci);
         assertEquals(39300, value.earfcn);
@@ -120,10 +213,12 @@ public class CellConstructorCompatTest {
     public void gsmAndWcdmaIdentity_useModernStringPlmnShapes() throws Exception {
         FakeGsmIdentityModern gsm = (FakeGsmIdentityModern)
                 CellConstructorCompat.newGsmIdentity(
-                        FakeGsmIdentityModern.class, "255", "3", 401, 402, 975, 12);
+                        FakeGsmIdentityModern.class, "255", "3", 401, 402, 975, 12,
+                        CellIdentityMetadata.EMPTY);
         FakeWcdmaIdentityModern wcdma = (FakeWcdmaIdentityModern)
                 CellConstructorCompat.newWcdmaIdentity(
-                        FakeWcdmaIdentityModern.class, "255", "3", 501, 502, 73, 10613);
+                        FakeWcdmaIdentityModern.class, "255", "3", 501, 502, 73, 10613,
+                        CellIdentityMetadata.EMPTY);
 
         assertEquals("255", gsm.mcc);
         assertEquals("3", gsm.mnc);
@@ -138,11 +233,12 @@ public class CellConstructorCompatTest {
     public void gsmAndWcdmaIdentity_supportAndroidNineEightArgumentShapes() throws Exception {
         FakeGsmIdentityAndroidNine gsm = (FakeGsmIdentityAndroidNine)
                 CellConstructorCompat.newGsmIdentity(
-                        FakeGsmIdentityAndroidNine.class, "255", "3", 401, 402, 975, 12);
+                        FakeGsmIdentityAndroidNine.class, "255", "3", 401, 402, 975, 12,
+                        CellIdentityMetadata.EMPTY);
         FakeWcdmaIdentityAndroidNine wcdma = (FakeWcdmaIdentityAndroidNine)
                 CellConstructorCompat.newWcdmaIdentity(
                         FakeWcdmaIdentityAndroidNine.class, "255", "3",
-                        501, 502, 73, 10613);
+                        501, 502, 73, 10613, CellIdentityMetadata.EMPTY);
 
         assertEquals("255", gsm.mcc);
         assertEquals("3", gsm.mnc);
@@ -169,8 +265,11 @@ public class CellConstructorCompatTest {
 
     static final class FakeLteIdentityModern {
         final int ci, pci, tac, earfcn, bandwidth;
+        final int[] bands;
         final String mcc, mnc;
+        final String alphaLong, alphaShort;
         final Collection<String> additionalPlmns;
+        final Object csgInfo;
 
         FakeLteIdentityModern(int ci, int pci, int tac, int earfcn, int[] bands,
                               int bandwidth, String mcc, String mnc,
@@ -180,10 +279,14 @@ public class CellConstructorCompatTest {
             this.pci = pci;
             this.tac = tac;
             this.earfcn = earfcn;
+            this.bands = bands;
             this.bandwidth = bandwidth;
             this.mcc = mcc;
             this.mnc = mnc;
+            this.alphaLong = alphaLong;
+            this.alphaShort = alphaShort;
             this.additionalPlmns = additionalPlmns;
+            this.csgInfo = csgInfo;
         }
     }
 
@@ -218,6 +321,8 @@ public class CellConstructorCompatTest {
     static final class FakeGsmIdentityModern {
         final int lac, cid, arfcn, bsic;
         final String mcc, mnc;
+        final String alphaLong, alphaShort;
+        final Collection<String> additionalPlmns;
 
         FakeGsmIdentityModern(int lac, int cid, int arfcn, int bsic,
                               String mcc, String mnc, String alphaLong, String alphaShort,
@@ -228,12 +333,18 @@ public class CellConstructorCompatTest {
             this.bsic = bsic;
             this.mcc = mcc;
             this.mnc = mnc;
+            this.alphaLong = alphaLong;
+            this.alphaShort = alphaShort;
+            this.additionalPlmns = additionalPlmns;
         }
     }
 
     static final class FakeWcdmaIdentityModern {
         final int lac, cid, psc, uarfcn;
         final String mcc, mnc;
+        final String alphaLong, alphaShort;
+        final Collection<String> additionalPlmns;
+        final Object csgInfo;
 
         FakeWcdmaIdentityModern(int lac, int cid, int psc, int uarfcn,
                                 String mcc, String mnc, String alphaLong, String alphaShort,
@@ -244,6 +355,10 @@ public class CellConstructorCompatTest {
             this.uarfcn = uarfcn;
             this.mcc = mcc;
             this.mnc = mnc;
+            this.alphaLong = alphaLong;
+            this.alphaShort = alphaShort;
+            this.additionalPlmns = additionalPlmns;
+            this.csgInfo = csgInfo;
         }
     }
 
@@ -290,6 +405,61 @@ public class CellConstructorCompatTest {
             this.cqiTableIndex = cqiTableIndex;
             this.cqi = cqi;
             this.timingAdvance = timingAdvance;
+        }
+    }
+
+    public static final class FakeIdentityMetadataSource {
+        private final int[] bands;
+        private final String alphaLong;
+        private final String alphaShort;
+        private final Set<String> additionalPlmns;
+        private final Object csgInfo;
+
+        FakeIdentityMetadataSource(int[] bands, String alphaLong, String alphaShort,
+                                   Set<String> additionalPlmns, Object csgInfo) {
+            this.bands = bands;
+            this.alphaLong = alphaLong;
+            this.alphaShort = alphaShort;
+            this.additionalPlmns = additionalPlmns;
+            this.csgInfo = csgInfo;
+        }
+
+        public int[] getBands() {
+            return bands;
+        }
+
+        public CharSequence getOperatorAlphaLong() {
+            return alphaLong;
+        }
+
+        public CharSequence getOperatorAlphaShort() {
+            return alphaShort;
+        }
+
+        public Set<String> getAdditionalPlmns() {
+            return additionalPlmns;
+        }
+
+        public Object getClosedSubscriberGroupInfo() {
+            return csgInfo;
+        }
+    }
+
+    public static final class FakeApi24LteIdentity {
+        private final int mcc;
+        private final int mnc;
+
+        FakeApi24LteIdentity(int mcc, int mnc) {
+            this.mcc = mcc;
+            this.mnc = mnc;
+        }
+
+        public int getMcc() {
+            return mcc;
+        }
+
+        public int getMnc() {
+            return mnc;
         }
     }
 }

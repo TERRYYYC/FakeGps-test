@@ -2,7 +2,6 @@ package name.caiyao.fakegps.hook;
 
 import java.lang.reflect.Constructor;
 import java.util.Collection;
-import java.util.Collections;
 
 /**
  * Runtime constructor compatibility for hidden telephony value objects.
@@ -16,7 +15,8 @@ final class CellConstructorCompat {
     private CellConstructorCompat() {}
 
     static Object newLteIdentity(Class<?> type, String mcc, String mnc, int ci, int pci, int tac,
-                                 Integer earfcn, Integer bandwidth)
+                                 Integer earfcn, Integer bandwidth,
+                                 CellIdentityMetadata metadata)
             throws ReflectiveOperationException {
         Constructor<?> modern = find(type, p ->
                 p.length == 12
@@ -28,9 +28,10 @@ final class CellConstructorCompat {
                         && !p[11].isPrimitive());
         if (modern != null) {
             return construct(modern,
-                    ci, pci, tac, unavailable(earfcn), new int[0], unavailable(bandwidth),
-                    mcc, mnc, null, null,
-                    Collections.emptySet(), null);
+                    ci, pci, tac, unavailable(earfcn), metadata.bandsOrEmpty(),
+                    unavailable(bandwidth),
+                    mcc, mnc, metadata.alphaLong, metadata.alphaShort,
+                    metadata.additionalPlmnsOrEmpty(), metadata.csgInfo);
         }
 
         // Android 9-10: ci/pci/tac/earfcn/bandwidth followed by string PLMN and alpha names.
@@ -39,7 +40,7 @@ final class CellConstructorCompat {
         if (androidNine != null) {
             return construct(androidNine,
                     ci, pci, tac, unavailable(earfcn), unavailable(bandwidth),
-                    mcc, mnc, null, null);
+                    mcc, mnc, metadata.alphaLong, metadata.alphaShort);
         }
 
         // Some vendor/older frameworks exposed EARFCN as a sixth integer.
@@ -57,7 +58,7 @@ final class CellConstructorCompat {
     }
 
     static Object newGsmIdentity(Class<?> type, String mcc, String mnc, int lac, int cid,
-                                 Integer arfcn, Integer bsic)
+                                 Integer arfcn, Integer bsic, CellIdentityMetadata metadata)
             throws ReflectiveOperationException {
         Constructor<?> modern = find(type, p ->
                 p.length == 9
@@ -67,8 +68,8 @@ final class CellConstructorCompat {
         if (modern != null) {
             return construct(modern,
                     lac, cid, unavailable(arfcn), unavailable(bsic),
-                    mcc, mnc, null, null,
-                    Collections.emptySet());
+                    mcc, mnc, metadata.alphaLong, metadata.alphaShort,
+                    metadata.additionalPlmnsOrEmpty());
         }
 
         // Android 9-10: the modern shape did not yet include additional PLMN collections.
@@ -77,7 +78,7 @@ final class CellConstructorCompat {
         if (androidNine != null) {
             return construct(androidNine,
                     lac, cid, unavailable(arfcn), unavailable(bsic),
-                    mcc, mnc, null, null);
+                    mcc, mnc, metadata.alphaLong, metadata.alphaShort);
         }
 
         Constructor<?> legacySix = find(type, p -> p.length == 6 && ints(p, 0, 6));
@@ -94,7 +95,7 @@ final class CellConstructorCompat {
     }
 
     static Object newWcdmaIdentity(Class<?> type, String mcc, String mnc, int lac, int cid,
-                                   Integer psc, Integer uarfcn)
+                                   Integer psc, Integer uarfcn, CellIdentityMetadata metadata)
             throws ReflectiveOperationException {
         Constructor<?> modern = find(type, p ->
                 p.length == 10
@@ -105,8 +106,8 @@ final class CellConstructorCompat {
         if (modern != null) {
             return construct(modern,
                     lac, cid, unavailable(psc), unavailable(uarfcn),
-                    mcc, mnc, null, null,
-                    Collections.emptySet(), null);
+                    mcc, mnc, metadata.alphaLong, metadata.alphaShort,
+                    metadata.additionalPlmnsOrEmpty(), metadata.csgInfo);
         }
 
         // Android 9-10: the modern shape did not yet include additional PLMNs/CSG info.
@@ -115,7 +116,7 @@ final class CellConstructorCompat {
         if (androidNine != null) {
             return construct(androidNine,
                     lac, cid, unavailable(psc), unavailable(uarfcn),
-                    mcc, mnc, null, null);
+                    mcc, mnc, metadata.alphaLong, metadata.alphaShort);
         }
 
         Constructor<?> legacySix = find(type, p -> p.length == 6 && ints(p, 0, 6));
