@@ -57,7 +57,29 @@ object HookProbe {
         val gsm = JSONObject()
         try {
             val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-            val all = tm.allCellInfo.orEmpty()
+            var all = tm.allCellInfo.orEmpty()
+            out.put("cellInfoCountCached", all.size)
+
+            // getAllCellInfo() serves a THROTTLED cache: right after process start it is routinely
+            // empty even though the radio is registered, which reads exactly like a broken hook and
+            // also starves the spoof baseline. requestCellInfoUpdate() forces a fresh radio read.
+            if (all.isEmpty() && android.os.Build.VERSION.SDK_INT >= 29) {
+                val latch = java.util.concurrent.CountDownLatch(1)
+                val fresh = java.util.concurrent.atomic.AtomicReference<List<android.telephony.CellInfo>>(emptyList())
+                tm.requestCellInfoUpdate(
+                    java.util.concurrent.Executors.newSingleThreadExecutor(),
+                    object : TelephonyManager.CellInfoCallback() {
+                        override fun onCellInfo(cellInfo: MutableList<android.telephony.CellInfo>) {
+                            fresh.set(cellInfo); latch.countDown()
+                        }
+                        override fun onError(errorCode: Int, detail: Throwable?) {
+                            out.put("cellInfoUpdateError", "$errorCode/$detail"); latch.countDown()
+                        }
+                    })
+                latch.await(4, java.util.concurrent.TimeUnit.SECONDS)
+                all = fresh.get()
+                out.put("cellInfoCountAfterUpdate", all.size)
+            }
             out.put("cellInfoCount", all.size)
             for (info in all) {
                 when (info) {

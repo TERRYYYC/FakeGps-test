@@ -100,3 +100,35 @@ hook 仅作用于**应用进程内的读取类 API**（`getAllCellInfo` / `getNe
 - 设计文档：`insight/docs/design/F001-field-model-transport-design.md`
 - 关联 issue：`insight/docs/features/F001-issue-gms-fused-location-gap.md`（Maps 蓝点 GMS 跨进程缺口，暂缓）
 - 测试环境：moto g54 5G (cancunf/RETEU) · Android 15 · Magisk 30.7 · Vector v2.0
+
+---
+
+## 遗留调查结论：`getAllCellInfo()` 空列表 = 设备/环境层，非本项目 bug（2026-07-27, opus-5）
+
+kimi 复验放行时列的遗留项，已用排除法穷尽定位。**结论：与本项目 hook 无关，是设备/ROM 层现象。**
+
+### 关键事实
+- 系统层（`dumpsys telephony.registry`）**有真实 LTE 小区** `mCellInfo=[CellInfoLte...]`
+- 但 App 进程调 `getAllCellInfo()` **原始返回值就是空**（在 hook 改动它之前，`raw=0 items`）
+- 差异根源：registry 是**缓存快照**；App 的 `getAllCellInfo()` 是**实时向 modem 请求**——这台设备/ROM 不给此 App 进程实时 modem 数据
+
+### 已推翻的 8 个假设（逐一实测）
+| # | 假设 | 排除依据 |
+|---|---|---|
+| 1 | 节流缓存 | `requestCellInfoUpdate()` 强制刷新后仍为 0，无 error |
+| 2 | ACCESS_FINE_LOCATION 缺失 | granted=true |
+| 3 | ACCESS_COARSE_LOCATION 缺失 | granted=true |
+| 4 | 位置总开关关闭 | `location_mode=3`, enabled=true |
+| 5 | 前台限制 | 探针跑时 `topResumedActivity=name.caiyao.fakegps` |
+| 6 | subscription hook 干扰 | 源码核实：仅双卡 `size>1` 时 trim，单卡不触发，有守卫 |
+| 7 | **telephony hook 注册副作用** | **二分实测**：全禁用 telephony hook 注册后仍为 0 |
+| 8 | READ_PHONE_STATE 缺失 | granted=true，授予后仍为 0 |
+
+### 对产品的影响（有限）
+- **fail-safe 正确兜底**：读不到基线 → 整组透传，不编造矛盾小区（安全）
+- B3 逐字段透传的前提（能读到真实基线）在**能响应 getAllCellInfo 的目标 App**（如前台使用的 Maps）里成立
+- **我方探针 App 读不到，是探针 App 的设备层局限，不是产品 bug**——不能用探针 App 验证蜂窝基线透传
+
+### 待办（如需继续，非阻塞）
+- 换一台设备/ROM 验证 getAllCellInfo 是否可用（区分是否 MediaTek MT6855/RETEU 特定）
+- 或在真实目标 App（Maps）进程内观察基线是否可取（需目标 App 侧探针）
