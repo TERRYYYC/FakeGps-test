@@ -15,7 +15,7 @@ final class CellConstructorCompat {
 
     private CellConstructorCompat() {}
 
-    static Object newLteIdentity(Class<?> type, int mcc, int mnc, int ci, int pci, int tac,
+    static Object newLteIdentity(Class<?> type, String mcc, String mnc, int ci, int pci, int tac,
                                  Integer earfcn, Integer bandwidth)
             throws ReflectiveOperationException {
         Constructor<?> modern = find(type, p ->
@@ -29,7 +29,7 @@ final class CellConstructorCompat {
         if (modern != null) {
             return construct(modern,
                     ci, pci, tac, unavailable(earfcn), new int[0], unavailable(bandwidth),
-                    String.valueOf(mcc), String.valueOf(mnc), null, null,
+                    mcc, mnc, null, null,
                     Collections.emptySet(), null);
         }
 
@@ -39,23 +39,24 @@ final class CellConstructorCompat {
         if (androidNine != null) {
             return construct(androidNine,
                     ci, pci, tac, unavailable(earfcn), unavailable(bandwidth),
-                    String.valueOf(mcc), String.valueOf(mnc), null, null);
+                    mcc, mnc, null, null);
         }
 
         // Some vendor/older frameworks exposed EARFCN as a sixth integer.
         Constructor<?> vendorSix = find(type, p -> p.length == 6 && ints(p, 0, 6));
         if (vendorSix != null) {
-            return construct(vendorSix, mcc, mnc, ci, pci, tac, unavailable(earfcn));
+            return construct(vendorSix,
+                    numericPlmn(mcc), numericPlmn(mnc), ci, pci, tac, unavailable(earfcn));
         }
 
         Constructor<?> legacy = find(type, p -> p.length == 5 && ints(p, 0, 5));
         if (legacy != null) {
-            return construct(legacy, mcc, mnc, ci, pci, tac);
+            return construct(legacy, numericPlmn(mcc), numericPlmn(mnc), ci, pci, tac);
         }
         throw unsupported(type, "LTE identity (12/9/6/5)");
     }
 
-    static Object newGsmIdentity(Class<?> type, int mcc, int mnc, int lac, int cid,
+    static Object newGsmIdentity(Class<?> type, String mcc, String mnc, int lac, int cid,
                                  Integer arfcn, Integer bsic)
             throws ReflectiveOperationException {
         Constructor<?> modern = find(type, p ->
@@ -66,7 +67,7 @@ final class CellConstructorCompat {
         if (modern != null) {
             return construct(modern,
                     lac, cid, unavailable(arfcn), unavailable(bsic),
-                    String.valueOf(mcc), String.valueOf(mnc), null, null,
+                    mcc, mnc, null, null,
                     Collections.emptySet());
         }
 
@@ -76,23 +77,23 @@ final class CellConstructorCompat {
         if (androidNine != null) {
             return construct(androidNine,
                     lac, cid, unavailable(arfcn), unavailable(bsic),
-                    String.valueOf(mcc), String.valueOf(mnc), null, null);
+                    mcc, mnc, null, null);
         }
 
         Constructor<?> legacySix = find(type, p -> p.length == 6 && ints(p, 0, 6));
         if (legacySix != null) {
-            return construct(legacySix, mcc, mnc, lac, cid,
+            return construct(legacySix, numericPlmn(mcc), numericPlmn(mnc), lac, cid,
                     unavailable(arfcn), unavailable(bsic));
         }
 
         Constructor<?> legacyFour = find(type, p -> p.length == 4 && ints(p, 0, 4));
         if (legacyFour != null) {
-            return construct(legacyFour, mcc, mnc, lac, cid);
+            return construct(legacyFour, numericPlmn(mcc), numericPlmn(mnc), lac, cid);
         }
         throw unsupported(type, "GSM identity (9/8/6/4)");
     }
 
-    static Object newWcdmaIdentity(Class<?> type, int mcc, int mnc, int lac, int cid,
+    static Object newWcdmaIdentity(Class<?> type, String mcc, String mnc, int lac, int cid,
                                    Integer psc, Integer uarfcn)
             throws ReflectiveOperationException {
         Constructor<?> modern = find(type, p ->
@@ -104,7 +105,7 @@ final class CellConstructorCompat {
         if (modern != null) {
             return construct(modern,
                     lac, cid, unavailable(psc), unavailable(uarfcn),
-                    String.valueOf(mcc), String.valueOf(mnc), null, null,
+                    mcc, mnc, null, null,
                     Collections.emptySet(), null);
         }
 
@@ -114,18 +115,19 @@ final class CellConstructorCompat {
         if (androidNine != null) {
             return construct(androidNine,
                     lac, cid, unavailable(psc), unavailable(uarfcn),
-                    String.valueOf(mcc), String.valueOf(mnc), null, null);
+                    mcc, mnc, null, null);
         }
 
         Constructor<?> legacySix = find(type, p -> p.length == 6 && ints(p, 0, 6));
         if (legacySix != null) {
-            return construct(legacySix, mcc, mnc, lac, cid,
+            return construct(legacySix, numericPlmn(mcc), numericPlmn(mnc), lac, cid,
                     unavailable(psc), unavailable(uarfcn));
         }
 
         Constructor<?> legacyFive = find(type, p -> p.length == 5 && ints(p, 0, 5));
         if (legacyFive != null) {
-            return construct(legacyFive, mcc, mnc, lac, cid, unavailable(psc));
+            return construct(legacyFive,
+                    numericPlmn(mcc), numericPlmn(mnc), lac, cid, unavailable(psc));
         }
         throw unsupported(type, "WCDMA identity (10/8/6/5)");
     }
@@ -181,6 +183,10 @@ final class CellConstructorCompat {
 
     private static int unavailable(Integer value) {
         return value != null ? value : Integer.MAX_VALUE;
+    }
+
+    private static int numericPlmn(String value) {
+        return Integer.parseInt(value);
     }
 
     private static NoSuchMethodException unsupported(Class<?> type, String expected) {

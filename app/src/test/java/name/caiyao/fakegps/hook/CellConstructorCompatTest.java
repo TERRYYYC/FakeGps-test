@@ -2,7 +2,9 @@ package name.caiyao.fakegps.hook;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
+import java.lang.reflect.Method;
 import java.util.Collection;
 
 import org.junit.Test;
@@ -16,11 +18,65 @@ import org.junit.Test;
 public class CellConstructorCompatTest {
 
     @Test
+    public void stringConstructorFactoriesPreserveLeadingZeroPlmn() throws Exception {
+        Method lteFactory;
+        Method gsmFactory;
+        Method wcdmaFactory;
+        try {
+            lteFactory = CellConstructorCompat.class.getDeclaredMethod(
+                    "newLteIdentity", Class.class, String.class, String.class,
+                    int.class, int.class, int.class, Integer.class, Integer.class);
+            gsmFactory = CellConstructorCompat.class.getDeclaredMethod(
+                    "newGsmIdentity", Class.class, String.class, String.class,
+                    int.class, int.class, Integer.class, Integer.class);
+            wcdmaFactory = CellConstructorCompat.class.getDeclaredMethod(
+                    "newWcdmaIdentity", Class.class, String.class, String.class,
+                    int.class, int.class, Integer.class, Integer.class);
+        } catch (NoSuchMethodException missingStringPlmnContract) {
+            fail("identity factories must accept the original PLMN strings");
+            return;
+        }
+
+        FakeLteIdentityModern lteModern = (FakeLteIdentityModern) lteFactory.invoke(
+                null, FakeLteIdentityModern.class, "025", "03",
+                28378431, 53, 26999, 39300, 20000);
+        FakeLteIdentityAndroidNine lteNine = (FakeLteIdentityAndroidNine) lteFactory.invoke(
+                null, FakeLteIdentityAndroidNine.class, "025", "03",
+                28378431, 53, 26999, 39300, 15000);
+        FakeGsmIdentityModern gsmModern = (FakeGsmIdentityModern) gsmFactory.invoke(
+                null, FakeGsmIdentityModern.class, "025", "03",
+                401, 402, 975, 12);
+        FakeGsmIdentityAndroidNine gsmNine = (FakeGsmIdentityAndroidNine) gsmFactory.invoke(
+                null, FakeGsmIdentityAndroidNine.class, "025", "03",
+                401, 402, 975, 12);
+        FakeWcdmaIdentityModern wcdmaModern = (FakeWcdmaIdentityModern) wcdmaFactory.invoke(
+                null, FakeWcdmaIdentityModern.class, "025", "03",
+                501, 502, 73, 10613);
+        FakeWcdmaIdentityAndroidNine wcdmaNine =
+                (FakeWcdmaIdentityAndroidNine) wcdmaFactory.invoke(
+                        null, FakeWcdmaIdentityAndroidNine.class, "025", "03",
+                        501, 502, 73, 10613);
+
+        assertEquals("025", lteModern.mcc);
+        assertEquals("03", lteModern.mnc);
+        assertEquals("025", lteNine.mcc);
+        assertEquals("03", lteNine.mnc);
+        assertEquals("025", gsmModern.mcc);
+        assertEquals("03", gsmModern.mnc);
+        assertEquals("025", gsmNine.mcc);
+        assertEquals("03", gsmNine.mnc);
+        assertEquals("025", wcdmaModern.mcc);
+        assertEquals("03", wcdmaModern.mnc);
+        assertEquals("025", wcdmaNine.mcc);
+        assertEquals("03", wcdmaNine.mnc);
+    }
+
+    @Test
     public void lteIdentity_prefersModernTwelveArgumentShape() throws Exception {
         FakeLteIdentityModern value = (FakeLteIdentityModern)
                 CellConstructorCompat.newLteIdentity(
                         FakeLteIdentityModern.class,
-                        255, 3, 28378431, 53, 26999, 39300, 20000);
+                        "255", "3", 28378431, 53, 26999, 39300, 20000);
 
         assertEquals(28378431, value.ci);
         assertEquals(53, value.pci);
@@ -37,7 +93,7 @@ public class CellConstructorCompatTest {
         FakeLteIdentityLegacy value = (FakeLteIdentityLegacy)
                 CellConstructorCompat.newLteIdentity(
                         FakeLteIdentityLegacy.class,
-                        255, 3, 28378431, 53, 26999, 39300, 20000);
+                        "255", "3", 28378431, 53, 26999, 39300, 20000);
 
         assertEquals(255, value.mcc);
         assertEquals(3, value.mnc);
@@ -51,7 +107,7 @@ public class CellConstructorCompatTest {
         FakeLteIdentityAndroidNine value = (FakeLteIdentityAndroidNine)
                 CellConstructorCompat.newLteIdentity(
                         FakeLteIdentityAndroidNine.class,
-                        255, 3, 28378431, 53, 26999, 39300, 15000);
+                        "255", "3", 28378431, 53, 26999, 39300, 15000);
 
         assertEquals(28378431, value.ci);
         assertEquals(39300, value.earfcn);
@@ -64,10 +120,10 @@ public class CellConstructorCompatTest {
     public void gsmAndWcdmaIdentity_useModernStringPlmnShapes() throws Exception {
         FakeGsmIdentityModern gsm = (FakeGsmIdentityModern)
                 CellConstructorCompat.newGsmIdentity(
-                        FakeGsmIdentityModern.class, 255, 3, 401, 402, 975, 12);
+                        FakeGsmIdentityModern.class, "255", "3", 401, 402, 975, 12);
         FakeWcdmaIdentityModern wcdma = (FakeWcdmaIdentityModern)
                 CellConstructorCompat.newWcdmaIdentity(
-                        FakeWcdmaIdentityModern.class, 255, 3, 501, 502, 73, 10613);
+                        FakeWcdmaIdentityModern.class, "255", "3", 501, 502, 73, 10613);
 
         assertEquals("255", gsm.mcc);
         assertEquals("3", gsm.mnc);
@@ -82,10 +138,11 @@ public class CellConstructorCompatTest {
     public void gsmAndWcdmaIdentity_supportAndroidNineEightArgumentShapes() throws Exception {
         FakeGsmIdentityAndroidNine gsm = (FakeGsmIdentityAndroidNine)
                 CellConstructorCompat.newGsmIdentity(
-                        FakeGsmIdentityAndroidNine.class, 255, 3, 401, 402, 975, 12);
+                        FakeGsmIdentityAndroidNine.class, "255", "3", 401, 402, 975, 12);
         FakeWcdmaIdentityAndroidNine wcdma = (FakeWcdmaIdentityAndroidNine)
                 CellConstructorCompat.newWcdmaIdentity(
-                        FakeWcdmaIdentityAndroidNine.class, 255, 3, 501, 502, 73, 10613);
+                        FakeWcdmaIdentityAndroidNine.class, "255", "3",
+                        501, 502, 73, 10613);
 
         assertEquals("255", gsm.mcc);
         assertEquals("3", gsm.mnc);
