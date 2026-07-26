@@ -66,7 +66,15 @@
         <provider
             android:name=".data.AppInfoProvider"
             android:authorities="name.caiyao.fakegps.data.AppInfoProvider"
-            android:exported="true" />
+            android:exported="false" />
+        <!--
+            exported=false (review FC-6): this provider was world-readable with no permission, so
+            ANY app on the device could read the full spoof profile — including the app under test,
+            which turns the tool itself into the giveaway. Nothing outside this APK needs it: the
+            hook stopped querying it when the transport moved to XSharedPreferences, and the only
+            remaining callers (VerifyViewModel / ConfigPrefsSync / SpoofSettings) run in this
+            process, where same-uid access does not require export.
+        -->
 
     </application>
 

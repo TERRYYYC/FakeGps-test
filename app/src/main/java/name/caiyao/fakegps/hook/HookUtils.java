@@ -41,6 +41,20 @@ import de.robv.android.xposed.XposedHelpers;
 class HookUtils {
 
     private static final String TAG = "FakeGPS";
+
+    /**
+     * Verbose hook tracing, debug builds only.
+     *
+     * These logs run INSIDE the target app's process, so in a release build they are both noise and
+     * a detection surface: anything reading logcat would see a module announcing every spoof. Gating
+     * on BuildConfig.DEBUG keeps the diagnostics available to scripts/test-hook.sh while ensuring a
+     * release module stays silent.
+     */
+    private static void debug(String msg) {
+        if (name.caiyao.fakegps.BuildConfig.DEBUG) {
+            XposedBridge.log(TAG + ": [DIAG] " + msg);
+        }
+    }
     private static final Random RND = new Random();
     /** Guards against re-hooking methods discovered at runtime (e.g. inside constructors). */
     private static final Set<String> HOOKED = Collections.newSetFromMap(new ConcurrentHashMap<>());
@@ -251,8 +265,8 @@ class HookUtils {
                     protected void afterHookedMethod(MethodHookParam param) {
                         Snapshot s = MainHook.CURRENT.get();
                         if (!s.hasGsmCell()) return;
-                        GsmCellLocation loc = new GsmCellLocation();
-                        loc.setLacAndCid(s.lac, s.cid);
+                        GsmCellLocation loc = spoofedGsmLocationOrPassthrough(s, param.getResult());
+                        if (loc == null) return;
                         param.setResult(loc);
                     }
                 }));
@@ -294,15 +308,9 @@ class HookUtils {
                         Snapshot s = MainHook.CURRENT.get();
                         if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
                         // The real result is the passthrough baseline for fields the user left unset.
-                        CellBaseline base = CellBaseline.from(param.getResult());
-                        if (!base.present) {
-                            // FAIL-SAFE: no real cell to build on (no permission / no service / airplane
-                            // mode). Fabricating one from constants would emit a cell that contradicts
-                            // the SIM and operator — more detectable than not spoofing. Pass through.
-                            XposedBridge.log(TAG + ": no cell baseline -> passthrough (not fabricating)");
-                            return;
-                        }
-                        param.setResult(buildCellInfoList(s, base));
+                        ArrayList spoofed = spoofedCellsOrPassthrough(s, param.getResult());
+                        if (spoofed == null) return;
+                        param.setResult(spoofed);
                     }
                 }));
 
@@ -714,8 +722,8 @@ class HookUtils {
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Snapshot s = MainHook.CURRENT.get();
                             if (!s.hasGsmCell()) return;
-                            GsmCellLocation loc = new GsmCellLocation();
-                            loc.setLacAndCid(s.lac, s.cid);
+                            GsmCellLocation loc = spoofedGsmLocationOrPassthrough(s, param.args[0]);
+                            if (loc == null) return;
                             param.args[0] = loc;
                         }
                     }));
@@ -730,7 +738,9 @@ class HookUtils {
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Snapshot s = MainHook.CURRENT.get();
                             if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
-                            param.args[0] = buildCellInfoList(s, CellBaseline.from(param.args[0]));
+                            ArrayList spoofed = spoofedCellsOrPassthrough(s, param.args[0]);
+                            if (spoofed == null) return;
+                            param.args[0] = spoofed;
                         }
                     }));
         }
@@ -945,7 +955,9 @@ class HookUtils {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = MainHook.CURRENT.get();
                         if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
-                        param.args[0] = buildCellInfoList(s, CellBaseline.from(param.args[0]));
+                        ArrayList spoofed = spoofedCellsOrPassthrough(s, param.args[0]);
+                        if (spoofed == null) return;
+                        param.args[0] = spoofed;
                     }
                 });
 
@@ -957,8 +969,8 @@ class HookUtils {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = MainHook.CURRENT.get();
                         if (!s.hasGsmCell()) return;
-                        GsmCellLocation loc = new GsmCellLocation();
-                        loc.setLacAndCid(s.lac, s.cid);
+                        GsmCellLocation loc = spoofedGsmLocationOrPassthrough(s, param.args[0]);
+                        if (loc == null) return;
                         param.args[0] = loc;
                     }
                 });
@@ -1059,7 +1071,9 @@ class HookUtils {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = MainHook.CURRENT.get();
                         if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
-                        param.args[0] = buildCellInfoList(s, CellBaseline.from(param.args[0]));
+                        ArrayList spoofed = spoofedCellsOrPassthrough(s, param.args[0]);
+                        if (spoofed == null) return;
+                        param.args[0] = spoofed;
                     }
                 }));
     }
@@ -1733,17 +1747,19 @@ class HookUtils {
 
     /** Creates a fully populated fake Location from Snapshot. */
     private static Location createFakeLocation(Snapshot s) {
-        // [DIAG] Every hook that actually applies a spoofed location funnels through here.
-        // Log the calling hook so we can see WHICH location API the target app really uses
-        // (and whether any hook fires at all). Remove once the path is confirmed.
-        try {
-            StackTraceElement[] st = Thread.currentThread().getStackTrace();
-            StringBuilder sb = new StringBuilder();
-            for (int i = 3; i < Math.min(st.length, 9); i++) {
-                sb.append(st[i].getClassName()).append('.').append(st[i].getMethodName()).append(" <- ");
-            }
-            XposedBridge.log(TAG + ": [HIT] createFakeLocation via " + sb);
-        } catch (Throwable ignored) {}
+        // Debug builds only: every hook that applies a spoofed location funnels through here, so
+        // the caller trace shows WHICH location API the target app actually uses. In a release
+        // build this would announce each spoof in logcat, so it is compiled behind the flag.
+        if (name.caiyao.fakegps.BuildConfig.DEBUG) {
+            try {
+                StackTraceElement[] st = Thread.currentThread().getStackTrace();
+                StringBuilder sb = new StringBuilder();
+                for (int i = 3; i < Math.min(st.length, 9); i++) {
+                    sb.append(st[i].getClassName()).append('.').append(st[i].getMethodName()).append(" <- ");
+                }
+                debug("[HIT] createFakeLocation via " + sb);
+            } catch (Throwable ignored) {}
+        }
 
         Location l = new Location(LocationManager.GPS_PROVIDER);
         l.setLatitude(s.latitude);
@@ -1803,56 +1819,97 @@ class HookUtils {
          */
         static volatile CellBaseline lastReal;
 
-        /** Extract from the live getAllCellInfo() result. Absent/unsupported fields stay null. */
+        /**
+         * Extract from the live getAllCellInfo() result. Absent/unsupported fields stay null.
+         *
+         * Picks the SERVING cell, not merely the last one in the list: getAllCellInfo() also
+         * reports neighbours, and a neighbour's identity/signal describes a different tower, so
+         * overlaying edits onto it would emit a self-contradictory environment. Registration state
+         * (CellInfo.isRegistered) identifies the serving cell; an unregistered-only list is still
+         * usable as a weaker baseline, but only if it actually yielded identity fields.
+         */
         static CellBaseline from(Object realResult) {
             CellBaseline b = new CellBaseline();
-            if (!(realResult instanceof java.util.List)) return b;
+            if (!(realResult instanceof java.util.List)) return withFallback(b);
+
+            Object servingLte = null, anyLte = null, servingGsm = null, anyGsm = null;
             for (Object info : (java.util.List<?>) realResult) {
-                try {
-                    if (info instanceof CellInfoLte) {
-                        Object id = XposedHelpers.callMethod(info, "getCellIdentity");
-                        Object sig = XposedHelpers.callMethod(info, "getCellSignalStrength");
-                        b.ci = valid((Integer) XposedHelpers.callMethod(id, "getCi"));
-                        b.pci = valid((Integer) XposedHelpers.callMethod(id, "getPci"));
-                        b.tac = valid((Integer) XposedHelpers.callMethod(id, "getTac"));
-                        b.earfcn = valid((Integer) XposedHelpers.callMethod(id, "getEarfcn"));
-                        b.mcc = parseOrNull(XposedHelpers.callMethod(id, "getMccString"));
-                        b.mnc = parseOrNull(XposedHelpers.callMethod(id, "getMncString"));
-                        b.lteRsrp = valid((Integer) XposedHelpers.callMethod(sig, "getRsrp"));
-                        b.lteRsrq = valid((Integer) XposedHelpers.callMethod(sig, "getRsrq"));
-                        b.lteSinr = valid((Integer) XposedHelpers.callMethod(sig, "getRssnr"));
-                        b.lteCqi = valid((Integer) XposedHelpers.callMethod(sig, "getCqi"));
-                        b.lteRssi = valid((Integer) XposedHelpers.callMethod(sig, "getRssi"));
-                        b.present = true;
-                    } else if (info instanceof CellInfoGsm) {
-                        Object id = XposedHelpers.callMethod(info, "getCellIdentity");
-                        Object sig = XposedHelpers.callMethod(info, "getCellSignalStrength");
-                        b.lac = valid((Integer) XposedHelpers.callMethod(id, "getLac"));
-                        b.cid = valid((Integer) XposedHelpers.callMethod(id, "getCid"));
-                        if (b.mcc == null) b.mcc = parseOrNull(XposedHelpers.callMethod(id, "getMccString"));
-                        if (b.mnc == null) b.mnc = parseOrNull(XposedHelpers.callMethod(id, "getMncString"));
-                        b.gsmRssi = valid((Integer) XposedHelpers.callMethod(sig, "getDbm"));
-                        b.present = true;
-                    }
-                } catch (Throwable t) {
-                    XposedBridge.log(TAG + ": [DIAG] baseline extract failed on "
-                            + info.getClass().getSimpleName() + ": " + t);
+                boolean registered = false;
+                try { registered = (Boolean) XposedHelpers.callMethod(info, "isRegistered"); }
+                catch (Throwable ignored) { /* pre-API-17 or unsupported: treat as neighbour */ }
+                if (info instanceof CellInfoLte) {
+                    if (anyLte == null) anyLte = info;
+                    if (registered && servingLte == null) servingLte = info;
+                } else if (info instanceof CellInfoGsm) {
+                    if (anyGsm == null) anyGsm = info;
+                    if (registered && servingGsm == null) servingGsm = info;
                 }
             }
-            if (b.present) {
-                lastReal = b;                 // fresh genuine reading — remember it
-            } else if (lastReal != null) {
-                b = lastReal;                 // radio settling / cached-empty — reuse last real one
+
+            Object lteCell = servingLte != null ? servingLte : anyLte;
+            if (lteCell != null) {
+                try {
+                    Object id = XposedHelpers.callMethod(lteCell, "getCellIdentity");
+                    Object sig = XposedHelpers.callMethod(lteCell, "getCellSignalStrength");
+                    b.ci = valid((Integer) XposedHelpers.callMethod(id, "getCi"));
+                    b.pci = valid((Integer) XposedHelpers.callMethod(id, "getPci"));
+                    b.tac = valid((Integer) XposedHelpers.callMethod(id, "getTac"));
+                    b.earfcn = valid((Integer) XposedHelpers.callMethod(id, "getEarfcn"));
+                    b.mcc = parseOrNull(XposedHelpers.callMethod(id, "getMccString"));
+                    b.mnc = parseOrNull(XposedHelpers.callMethod(id, "getMncString"));
+                    b.lteRsrp = valid((Integer) XposedHelpers.callMethod(sig, "getRsrp"));
+                    b.lteRsrq = valid((Integer) XposedHelpers.callMethod(sig, "getRsrq"));
+                    b.lteSinr = valid((Integer) XposedHelpers.callMethod(sig, "getRssnr"));
+                    b.lteCqi = valid((Integer) XposedHelpers.callMethod(sig, "getCqi"));
+                    b.lteRssi = valid((Integer) XposedHelpers.callMethod(sig, "getRssi"));
+                } catch (Throwable t) {
+                    debug("baseline LTE extract failed: " + t);
+                }
             }
-            XposedBridge.log(TAG + ": [DIAG] baseline present=" + b.present + " ci=" + b.ci
-                    + " mcc=" + b.mcc + " tac=" + b.tac + " rsrp=" + b.lteRsrp
-                    + " (from " + (realResult == null ? "null" : realResult.getClass().getSimpleName()
-                    + " size=" + ((java.util.List<?>) realResult).size()) + ")");
+
+            Object gsmCell = servingGsm != null ? servingGsm : anyGsm;
+            if (gsmCell != null) {
+                try {
+                    Object id = XposedHelpers.callMethod(gsmCell, "getCellIdentity");
+                    Object sig = XposedHelpers.callMethod(gsmCell, "getCellSignalStrength");
+                    b.lac = valid((Integer) XposedHelpers.callMethod(id, "getLac"));
+                    b.cid = valid((Integer) XposedHelpers.callMethod(id, "getCid"));
+                    if (b.mcc == null) b.mcc = parseOrNull(XposedHelpers.callMethod(id, "getMccString"));
+                    if (b.mnc == null) b.mnc = parseOrNull(XposedHelpers.callMethod(id, "getMncString"));
+                    b.gsmRssi = valid((Integer) XposedHelpers.callMethod(sig, "getDbm"));
+                } catch (Throwable t) {
+                    debug("baseline GSM extract failed: " + t);
+                }
+            }
+
+            // "present" must mean we actually have real identity to build on. Setting it merely
+            // because a CellInfo object existed let an all-null baseline pass the fail-safe check
+            // and fall straight back into the constant defaults it was meant to prevent.
+            b.present = Snapshot.isUsableCellBaseline(b.ci, b.tac, b.pci, b.earfcn,
+                    b.lac, b.cid, b.mcc);
+            return withFallback(b);
+        }
+
+        /**
+         * Remember a genuine reading; reuse the last one when this call yielded nothing.
+         *
+         * getAllCellInfo() legitimately returns an empty/identity-less list right after process
+         * start, during handover, or while the radio settles. Without the carry-over the fail-safe
+         * would trip on exactly those calls and spoofing would flicker on and off — itself a signal.
+         */
+        private static CellBaseline withFallback(CellBaseline b) {
+            if (b.present) {
+                lastReal = b;
+            } else if (lastReal != null) {
+                b = lastReal;
+            }
+            debug("baseline present=" + b.present + " ci=" + b.ci + " mcc=" + b.mcc
+                    + " tac=" + b.tac + " lac=" + b.lac + " rsrp=" + b.lteRsrp);
             return b;
         }
 
         /** Android reports "unknown" as Integer.MAX_VALUE — treat that as absent. */
-        private static Integer valid(Integer v) {
+        static Integer valid(Integer v) {
             return (v == null || v == Integer.MAX_VALUE) ? null : v;
         }
         private static Integer parseOrNull(Object v) {
@@ -1866,6 +1923,64 @@ class HookUtils {
         if (configured != null) return configured;
         if (real != null) return real;
         return fallback;
+    }
+
+    /**
+     * Spoofed cell list, or {@code null} when there is no genuine baseline to overlay onto.
+     *
+     * EVERY call site must funnel through here. Previously only the synchronous getAllCellInfo
+     * getter checked {@code base.present}; the three callback paths (PhoneStateListener,
+     * TelephonyCallback, CellInfoCallback) built a list regardless, so with no baseline they
+     * emitted the constant fallbacks (mcc=460 / mnc=0) — a cell contradicting the SIM and operator,
+     * i.e. exactly the fabricated-inconsistency this design is meant to avoid.
+     *
+     * @return null => caller must leave the real value untouched (fail-safe passthrough)
+     */
+    private static ArrayList spoofedCellsOrPassthrough(Snapshot s, Object realResult) {
+        CellBaseline base = CellBaseline.from(realResult);
+        if (!base.present) {
+            debug("no cell baseline -> passthrough (not fabricating)");
+            return null;
+        }
+        return buildCellInfoList(s, base);
+    }
+
+    /**
+     * Spoofed {@link GsmCellLocation}, or {@code null} to pass the real one through.
+     *
+     * Fixes an unboxing NPE: {@code setLacAndCid(s.lac, s.cid)} dereferenced null whenever the
+     * profile configured any GSM-group field other than lac/cid (which {@code hasGsmCell()} now
+     * allows — mcc alone is enough). Because {@code tryHook} only guards hook REGISTRATION, that
+     * NPE surfaced inside the target app's own listener callback. Unset fields now fall back to the
+     * device's real values, and if neither side supplies lac/cid we pass through rather than
+     * inventing a cell.
+     */
+    private static GsmCellLocation spoofedGsmLocationOrPassthrough(Snapshot s, Object realLoc) {
+        Integer realLac = null, realCid = null;
+        if (realLoc instanceof GsmCellLocation) {
+            GsmCellLocation real = (GsmCellLocation) realLoc;
+            realLac = CellBaseline.valid(real.getLac());
+            realCid = CellBaseline.valid(real.getCid());
+        }
+        CellBaseline last = CellBaseline.lastReal;
+        if (realLac == null && last != null) realLac = last.lac;
+        if (realCid == null && last != null) realCid = last.cid;
+
+        Integer lac = Snapshot.resolveCellField(s.lac, realLac);
+        Integer cid = Snapshot.resolveCellField(s.cid, realCid);
+        if (lac == null || cid == null) {
+            debug("no GSM cell-location baseline -> passthrough");
+            return null;
+        }
+        GsmCellLocation loc = new GsmCellLocation();
+        loc.setLacAndCid(lac, cid);
+        // setPsc is @hide on some API levels — apply reflectively and skip if unavailable rather
+        // than failing the whole spoof for one optional UMTS field.
+        if (s.psc != null) {
+            try { XposedHelpers.callMethod(loc, "setPsc", s.psc); }
+            catch (Throwable t) { debug("setPsc unavailable: " + t); }
+        }
+        return loc;
     }
 
     private static ArrayList buildCellInfoList(Snapshot s, CellBaseline base) {

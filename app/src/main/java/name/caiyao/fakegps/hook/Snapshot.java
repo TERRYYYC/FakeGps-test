@@ -36,6 +36,37 @@ class Snapshot {
         return everPublished ? lastGood : PASSTHROUGH;
     }
 
+    /**
+     * Whether a real cellular baseline is usable to overlay the user's edits onto.
+     *
+     * A CellInfo object merely existing is not enough: the platform can hand back entries whose
+     * identity fields are all "unknown" (Integer.MAX_VALUE), and treating those as a baseline let
+     * the fail-safe pass and the builder fall back to constants (mcc=460 / mnc=0) — emitting a cell
+     * that contradicts the SIM and operator, which is more detectable than not spoofing at all.
+     *
+     * Extracted as a pure function so the fail-safe is locked by tests: the cellular paths had no
+     * test coverage, which is exactly why this class of defect reached review (FC-3/FC-5).
+     *
+     * @return true only when at least one identity field carries a genuine value
+     */
+    static boolean isUsableCellBaseline(Integer ci, Integer tac, Integer pci, Integer earfcn,
+                                        Integer lac, Integer cid, Integer mcc) {
+        return ci != null || tac != null || pci != null || earfcn != null
+                || lac != null || cid != null || mcc != null;
+    }
+
+    /**
+     * Resolve a GSM cell-location field: the user's value wins, else the device's real value.
+     *
+     * Returns null when neither side has one, which callers MUST treat as "pass the real
+     * CellLocation through". Previously the caller unboxed {@code s.lac}/{@code s.cid} directly, so
+     * a profile configuring any other GSM-group field (mcc alone now satisfies hasGsmCell) threw an
+     * NPE inside the target app's own listener callback (FC-4).
+     */
+    static Integer resolveCellField(Integer configured, Integer real) {
+        return configured != null ? configured : real;
+    }
+
     // ==========================================
     // A. LOCATION (resolved by MainHook per hour)
     // ==========================================

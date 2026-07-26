@@ -17,15 +17,18 @@ class ComposeActivity : ComponentActivity() {
         // This is the REAL launcher entry point; the legacy SplashActivity is never opened.
         name.caiyao.fakegps.config.ConfigPrefsSync.sync(applicationContext)
 
-        // Read-back probe: logs what this (hooked) process actually observes through the public
-        // Android APIs, so scripts/test-hook.sh can assert the whole chain with no manual taps.
+        // Read-back probe, DEBUG builds only: logs what this (self-hooked) process observes through
+        // the public Android APIs, so scripts/test-hook.sh can assert the whole chain with no
+        // manual taps. A release build neither self-hooks nor probes.
         //
         // Deliberately delayed: the hook loads its config on a timer ~3s after process start (the
         // very first load runs before Application exists). Probing in onCreate raced that and read
         // pre-spoof values, which looked exactly like a broken hook.
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            name.caiyao.fakegps.probe.HookProbe.run(this)
-        }, 5000)
+        if (name.caiyao.fakegps.BuildConfig.DEBUG) {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                name.caiyao.fakegps.probe.HookProbe.run(this)
+            }, 5000)
+        }
 
         enableEdgeToEdge()
         setContent {

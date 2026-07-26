@@ -37,6 +37,9 @@ android {
 
     buildFeatures {
         compose = true
+        // Required so the hook/UI can compile out debug-only behaviour (self-hooking as a test
+        // probe, verbose [DIAG] logging) instead of shipping it. AGP 8 defaults this off.
+        buildConfig = true
     }
 }
 

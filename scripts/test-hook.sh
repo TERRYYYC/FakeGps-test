@@ -27,10 +27,13 @@ echo " FakeGps hook end-to-end test"
 echo "════════════════════════════════════════════════════════════════"
 
 # ── [DB] ground truth: the configured profile (first row) ─────────────────────
-# NB: `content query` does NOT support --sort; the hook uses rows.get(0) i.e. the lowest id,
-# which is the first row the provider returns, so head -1 matches the effective profile.
-DB_RAW=$(adb shell content query --uri "$PROVIDER" 2>/dev/null | grep -E '^Row:' | head -1)
-[ -z "$DB_RAW" ] && { echo "❌ no profile configured — set one in the app first"; exit 2; }
+# Queried through `su`: the provider is exported=false (review FC-6), so the plain shell uid can no
+# longer read it — which is the point, since any app being tested could otherwise read the profile
+# and see straight through the spoof. Root is only used here, by the test harness.
+# NB: `content query` does NOT support --sort; the hook uses rows.get(0) i.e. the lowest id, which
+# is the first row the provider returns, so head -1 matches the effective profile.
+DB_RAW=$(adb shell "su -c 'content query --uri $PROVIDER'" 2>/dev/null | grep -E '^Row:' | head -1)
+[ -z "$DB_RAW" ] && { echo "❌ no profile configured (or root unavailable) — set one in the app first"; exit 2; }
 echo "[DB] effective profile: $(echo "$DB_RAW" | cut -c1-90)…"
 
 # ── relaunch: triggers ConfigPrefsSync.sync() + HookProbe.run() ───────────────
@@ -82,43 +85,43 @@ def approx(a, b):
     try: return abs(float(a) - float(b)) < 1e-3
     except Exception: return str(a) == str(b)
 
+# Transport is schemaVersion 2: a flat field map mirroring the profile table, so EVERY non-null
+# column is carried. The old per-field "is this in SpoofConfig?" flag is gone — keeping it would
+# have kept reporting mcc/mnc/operator as untransported "gaps" long after they were fixed, i.e.
+# the harness itself would produce the wrong verdict.
 fields = [
-    ("latitude",       "latitude",  loc.get("latitude"),  True),
-    ("longitude",      "longitude", loc.get("longitude"), True),
-    ("lte.tac",        "tac",       lte.get("tac"),       True),
-    ("lte.ci",         "ci",        lte.get("ci"),        True),
-    ("lte.pci",        "pci",       lte.get("pci"),       True),
-    ("lte.earfcn",     "earfcn",    lte.get("earfcn"),    True),
-    ("lte.rsrp",       "lte_rsrp",  lte.get("rsrp"),      True),
-    ("mcc",            "mcc",       lte.get("mccString") or op.get("networkOperator"), False),
-    ("mnc",            "mnc",       lte.get("mncString"), False),
-    ("operatorName",   "operator_name", op.get("networkOperatorName"), False),
-    ("gsm.lac",        "lac",       g(pj,"gsm","lac"),    False),
-    ("gsm.cid",        "cid",       g(pj,"gsm","cid"),    False),
-    ("wifi.ssid",      "wifi_ssid", wifi.get("ssid"),     True),
-    ("wifi.bssid",     "wifi_bssid",wifi.get("bssid"),    True),
+    ("latitude",       "latitude",  loc.get("latitude")),
+    ("longitude",      "longitude", loc.get("longitude")),
+    ("lte.tac",        "tac",       lte.get("tac")),
+    ("lte.ci",         "ci",        lte.get("ci")),
+    ("lte.pci",        "pci",       lte.get("pci")),
+    ("lte.earfcn",     "earfcn",    lte.get("earfcn")),
+    ("lte.rsrp",       "lte_rsrp",  lte.get("rsrp")),
+    ("mcc",            "mcc",       lte.get("mccString")),
+    ("mnc",            "mnc",       lte.get("mncString")),
+    ("operatorName",   "operator_name", op.get("networkOperatorName")),
+    ("gsm.lac",        "lac",       g(pj,"gsm","lac")),
+    ("gsm.cid",        "cid",       g(pj,"gsm","cid")),
+    ("wifi.ssid",      "wifi_ssid", wifi.get("ssid")),
+    ("wifi.bssid",     "wifi_bssid",wifi.get("bssid")),
 ]
 
 print("")
-print("  %-14s %-16s %-22s %-9s %s" % ("FIELD","CONFIGURED(DB)","OBSERVED(probe)","TRANSPORT","VERDICT"))
-print("  " + "-"*82)
-configured=0; spoofed=0; broken=[]; gaps=[]
-for label, col, pv, in_tx in fields:
+print("  %-14s %-18s %-24s %s" % ("FIELD","CONFIGURED(DB)","OBSERVED(probe)","VERDICT"))
+print("  " + "-"*76)
+configured=0; spoofed=0; broken=[]; unseen=[]
+for label, col, pv in fields:
     cfg = db.get(col)
-    if cfg in (None, ""):        # not configured -> skip verdict
+    if cfg in (None, ""):        # not configured -> nothing to assert
         continue
     configured += 1
-    tx = "yes" if in_tx else "NO(gap)"
     if pv is None:
-        verdict = "probe∅"
+        verdict = "⚠️ probe∅"; unseen.append(label)
     elif approx(cfg, pv):
         verdict = "✅ spoofed"; spoofed += 1
     else:
-        verdict = "❌ REAL"
-        (broken if in_tx else gaps).append(label)
-    if not in_tx and not approx(cfg, pv or ""):
-        gaps_note = ""  # already counted
-    print("  %-14s %-16s %-22s %-9s %s" % (label, str(cfg)[:15], str(pv)[:21], tx, verdict))
+        verdict = "❌ REAL"; broken.append(label)
+    print("  %-14s %-18s %-24s %s" % (label, str(cfg)[:17], str(pv)[:23], verdict))
 
 print("  " + "-"*82)
 # Full observed cellular/operator readout — exposes "configured value coincidentally equals the
@@ -141,10 +144,14 @@ ismock = loc.get("isMock")
 print("   [fidelity]         isMock=%s  %s" % (ismock, "✅" if ismock is False else "⚠️ detectable" if ismock else "?"))
 print("")
 print("  SUMMARY: %d configured fields | %d spoofed OK" % (configured, spoofed))
-if broken: print("   ❌ hooked but ineffective (transport carries it, hook not applying): %s" % ", ".join(broken))
-if gaps:   print("   🕳  coverage gap (SpoofConfig transport does NOT carry this field): %s" % ", ".join(gaps))
-if not broken and not gaps and configured>0: print("   🎉 all configured fields spoofed end-to-end")
-sys.exit(1 if (broken or gaps) else 0)
+if broken:
+    print("   ❌ configured but the app still sees the REAL value: %s" % ", ".join(broken))
+if unseen:
+    print("   ⚠️  configured but the probe read nothing (hook may be passing through by "
+          "fail-safe, or the API is unavailable): %s" % ", ".join(unseen))
+if not broken and not unseen and configured > 0:
+    print("   🎉 all configured fields spoofed end-to-end")
+sys.exit(1 if broken else 0)
 PYEOF
 RC=$?
 echo "════════════════════════════════════════════════════════════════"

@@ -39,20 +39,30 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PREFS_KEY_JSON = "json";
     private static final int TRANSPORT_SCHEMA_VERSION = 2;
 
+    /**
+     * Verbose diagnostics, debug builds only. These run inside the TARGET app's process, so in a
+     * release build they would both add noise and advertise the module's presence in logcat.
+     */
+    private static void debug(String msg) {
+        if (name.caiyao.fakegps.BuildConfig.DEBUG) {
+            XposedBridge.log(TAG + ": [DIAG] " + msg);
+        }
+    }
+
     /** Current spoofing config. Hooks read this atomically via CURRENT.get(). */
     static final AtomicReference<Snapshot> CURRENT = new AtomicReference<>(Snapshot.PASSTHROUGH);
 
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // PROBE MODE (step 0 of the Maps investigation): our own app is intentionally hooked so it
-        // can act as a CONTROLLED probe. It uses plain LocationManager.getLastKnownLocation
-        // (MapScreen/VerifyViewModel) with no GMS fused path, so it isolates two variables:
-        //   - our app shows the spoofed location  => client-side hooking works; the remaining gap is
-        //     purely Google Maps' cross-process GMS fused path (uid 10213 computes it, not us)
-        //   - our app still shows the real location => something more basic is broken, and chasing
-        //     Maps' fused path would be premature
-        // Revert to skipping self once the probe verdict is recorded.
-        if (false && "name.caiyao.fakegps".equals(lpparam.packageName)) {
+        // Self-hooking is a DEBUG-ONLY capability, not a shipped behaviour.
+        //
+        // A debug build hooks its own process so it can act as a controlled probe: it reads plain
+        // LocationManager (MapScreen/VerifyViewModel, no GMS fused path), which is what lets
+        // scripts/test-hook.sh tell "the hook machinery is broken" apart from "the target app uses
+        // an API we don't cover". A release build must never spoof its own UI — that would make the
+        // configuration screen display the fake values back to the user as if they were real.
+        if (!name.caiyao.fakegps.BuildConfig.DEBUG
+                && "name.caiyao.fakegps".equals(lpparam.packageName)) {
             return;
         }
 
@@ -74,7 +84,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (msg.what == 1) {
                     Snapshot refreshed = loadSnapshot();
                     CURRENT.set(refreshed);
-                    XposedBridge.log(TAG + ": [DIAG] timer refresh -> hasLocation=" + refreshed.hasLocation());
+                    debug("timer refresh -> hasLocation=" + refreshed.hasLocation());
                 }
                 sendEmptyMessageDelayed(1, 30 * 1000);
             }
@@ -104,7 +114,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 // the true environment to the app under test. Only pass through when nothing has
                 // ever been published (first launch), where real values are the safe default.
                 Snapshot resolved = Snapshot.keepLastKnownGoodOr(CURRENT.get());
-                XposedBridge.log(TAG + ": [DIAG] no prefs json (canRead=" + prefs.getFile().canRead()
+                debug("no prefs json (canRead=" + prefs.getFile().canRead()
                         + " path=" + prefs.getFile().getPath() + ") -> "
                         + (resolved == Snapshot.PASSTHROUGH ? "passthrough (never published)"
                                                             : "keep last-known-good"));
@@ -118,14 +128,14 @@ public class MainHook implements IXposedHookLoadPackage {
             // mid-test) instead of falling back to passthrough.
             int version = root.optInt("schemaVersion", -1);
             if (version != TRANSPORT_SCHEMA_VERSION) {
-                XposedBridge.log(TAG + ": [DIAG] incompatible schemaVersion=" + version
+                debug("incompatible schemaVersion=" + version
                         + " (expected " + TRANSPORT_SCHEMA_VERSION + ") -> keep last-known-good");
                 return CURRENT.get();
             }
 
             String mode = root.optString("mode", "always_on");
             if ("off".equals(mode)) {
-                XposedBridge.log(TAG + ": [DIAG] mode=off -> passthrough");
+                debug("mode=off -> passthrough");
                 return Snapshot.PASSTHROUGH;
             }
             if ("time_based".equals(mode)) {
@@ -136,7 +146,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     int end = hours.optInt("end", 24);
                     boolean inRange = (start <= end) ? (h >= start && h < end) : (h >= start || h < end);
                     if (!inRange) {
-                        XposedBridge.log(TAG + ": [DIAG] outside active hours (" + start + "-" + end
+                        debug("outside active hours (" + start + "-" + end
                                 + ") current=" + h + " -> passthrough");
                         return Snapshot.PASSTHROUGH;
                     }
@@ -151,19 +161,19 @@ public class MainHook implements IXposedHookLoadPackage {
                 // is structurally incomplete, not an instruction to stop spoofing. Publishing an
                 // all-null Snapshot here would silently drop an active spoof back to real data.
                 Snapshot resolved = Snapshot.keepLastKnownGoodOr(CURRENT.get());
-                XposedBridge.log(TAG + ": [DIAG] payload has no 'fields' -> "
+                debug("payload has no 'fields' -> "
                         + (resolved == Snapshot.PASSTHROUGH ? "passthrough (never published)"
                                                             : "keep last-known-good"));
                 return resolved;
             }
             Snapshot s = Snapshot.fromJson(fields);
-            XposedBridge.log(TAG + ": [DIAG] prefs loaded fields=" + (fields == null ? 0 : fields.length())
+            debug("prefs loaded fields=" + (fields == null ? 0 : fields.length())
                     + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude
                     + " hasLte=" + s.hasLteCell() + " hasGsm=" + s.hasGsmCell());
             return s;
         } catch (Throwable t) {
             // Read/parse failure: keep last-known-good (do NOT revert to real device data mid-test).
-            XposedBridge.log(TAG + ": [DIAG] loadSnapshot prefs error: " + t);
+            debug("loadSnapshot prefs error: " + t);
             return CURRENT.get();
         }
     }
