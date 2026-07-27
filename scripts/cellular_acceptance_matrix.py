@@ -13,6 +13,7 @@ OUTPUT_EXPECTED = "expected"
 class Scenario:
     name: str
     fields: Mapping[str, Any]
+    fluctuation: bool = False
 
 
 _NEIGHBOR_CELLS = [
@@ -92,8 +93,6 @@ _COMMON_FIELDS = {
     "nr_csi_rsrp": -99,
     "nr_csi_rsrq": -13,
     "nr_csi_sinr": 14,
-    "signal_fluctuation_enabled": 0,
-    "signal_fluctuation_range_db": 6,
     "network_type": 20,
     "data_network_type": 20,
     "voice_network_type": 3,
@@ -128,6 +127,22 @@ _SCENARIOS = {
     "full-rssi": Scenario(
         "full-rssi",
         dict(_COMMON_FIELDS, wcdma_rssi=-85),
+    ),
+    "fluctuation-enabled": Scenario(
+        "fluctuation-enabled",
+        {
+            "ci": 12_345_678,
+            "lte_rsrp": -101,
+            "signal_fluctuation_enabled": 1,
+            "signal_fluctuation_range_db": 6,
+            "network_type": 20,
+            "nrarfcn": 636_666,
+            "band": 78,
+            "channel_bandwidth": 40_000,
+            "cell_bandwidth_downlink": 100_000,
+            "physical_cell_id": 777,
+        },
+        fluctuation=True,
     ),
 }
 
@@ -202,6 +217,9 @@ def main(argv=None, emit=print) -> int:
 
 
 def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
+    if scenario.fluctuation:
+        return _build_fluctuation_expected(scenario)
+
     fields = scenario.fields
     expected: Dict[str, Any] = {}
     covered: Set[str] = set()
@@ -251,14 +269,7 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
             "bandwidth": (fields["lte_bandwidth"], ("lte_bandwidth",)),
             "rssi": (fields["lte_rssi"], ("lte_rssi",)),
             "dbm": (fields["lte_rsrp"], ("lte_rsrp",)),
-            "rsrp": (
-                fields["lte_rsrp"],
-                (
-                    "lte_rsrp",
-                    "signal_fluctuation_enabled",
-                    "signal_fluctuation_range_db",
-                ),
-            ),
+            "rsrp": (fields["lte_rsrp"], ("lte_rsrp",)),
             "rsrq": (fields["lte_rsrq"], ("lte_rsrq",)),
             "rssnr": (fields["lte_sinr"], ("lte_sinr",)),
             "cqi": (fields["lte_cqi"], ("lte_cqi",)),
@@ -391,6 +402,79 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
         "callback.displayInfo.overrideNetworkType",
         fields["override_network_type"],
         ("override_network_type",),
+    )
+
+    physical = {
+        "cellBandwidthDownlinkKhz": (
+            "cell_bandwidth_downlink",
+            fields["cell_bandwidth_downlink"],
+        ),
+        "cellBandwidthUplinkKhz": (
+            "channel_bandwidth",
+            fields["channel_bandwidth"],
+        ),
+        "physicalCellId": (
+            "physical_cell_id",
+            fields["physical_cell_id"],
+        ),
+        "networkType": ("network_type", fields["network_type"]),
+        "band": ("band", fields["band"]),
+        "downlinkChannelNumber": ("nrarfcn", fields["nrarfcn"]),
+        "uplinkChannelNumber": ("nrarfcn", fields["nrarfcn"]),
+    }
+    for public_name, (source, value) in physical.items():
+        add(
+            "callback.physicalChannel.{}".format(public_name),
+            value,
+            (source,),
+        )
+    add("callback.physicalChannel.connectionStatus", 1)
+
+    return expected, covered
+
+
+def _build_fluctuation_expected(
+    scenario: Scenario,
+) -> Tuple[Dict[str, Any], Set[str]]:
+    fields = scenario.fields
+    expected: Dict[str, Any] = {}
+    covered: Set[str] = set()
+
+    def add(path: str, value: Any, sources: Iterable[str] = ()) -> None:
+        expected[path] = value
+        covered.update(sources)
+
+    base = fields["lte_rsrp"]
+    configured_range = fields["signal_fluctuation_range_db"]
+    half_range = configured_range // 2
+    matcher = {
+        "$matcher": "complete_int_set",
+        "allowed": list(
+            range(
+                base - half_range,
+                base + configured_range - half_range + 1,
+            )
+        ),
+        "count": 256,
+    }
+    for prefix in ("cellInfo.sync", "cellInfo.request", "callback.cellInfo"):
+        add("{}.lte.registered".format(prefix), True)
+        add("{}.lte.ci".format(prefix), fields["ci"], ("ci",))
+        add(
+            "{}.lte.rsrpSamples".format(prefix),
+            matcher,
+            (
+                "lte_rsrp",
+                "signal_fluctuation_enabled",
+                "signal_fluctuation_range_db",
+            ),
+        )
+
+    add("cellInfo.requestCompleted", True)
+    add("callback.completed", True)
+    add(
+        "callback.physicalChannelDelivery",
+        "hook_replay_after_permission_denied",
     )
 
     physical = {

@@ -32,6 +32,17 @@ def evaluate(expected, report, session_id, restored):
             fields.append(
                 FieldVerdict(path, expected_value, _MISSING, "FAILED", "missing")
             )
+        elif _is_matcher(expected_value):
+            matched, reason = _evaluate_matcher(expected_value, observed)
+            fields.append(
+                FieldVerdict(
+                    path,
+                    expected_value,
+                    observed,
+                    "VERIFIED" if matched else "FAILED",
+                    reason,
+                )
+            )
         elif type(observed) is not type(expected_value):
             fields.append(
                 FieldVerdict(
@@ -136,6 +147,40 @@ def _read_path(root, path):
             return _MISSING
         current = current[segment]
     return current
+
+
+def _is_matcher(value):
+    return isinstance(value, dict) and "$matcher" in value
+
+
+def _evaluate_matcher(matcher, observed):
+    if matcher.get("$matcher") != "complete_int_set":
+        return False, "unknown_matcher"
+
+    allowed = matcher.get("allowed")
+    count = matcher.get("count")
+    if (
+        not isinstance(allowed, list)
+        or not allowed
+        or any(type(value) is not int for value in allowed)
+        or type(count) is not int
+        or count <= 0
+    ):
+        return False, "invalid_matcher"
+    if not isinstance(observed, list) or any(
+        type(value) is not int for value in observed
+    ):
+        return False, "different_type"
+    if len(observed) != count:
+        return False, "wrong_sample_count"
+
+    allowed_values = set(allowed)
+    observed_values = set(observed)
+    if not observed_values.issubset(allowed_values):
+        return False, "unexpected_set"
+    if observed_values != allowed_values:
+        return False, "incomplete_set"
+    return True, "complete_int_set"
 
 
 def _format_value(value):

@@ -5,7 +5,7 @@
         android:name="name.caiyao.fakegps.permission.RUN_HOOK_ACCEPTANCE"
         android:protectionLevel="signature" />
 
-    <application>
+    <application android:name=".probe.HookAcceptanceApplication">
         <activity
             android:name=".probe.HookAcceptanceActivity"
             android:excludeFromRecents="true"

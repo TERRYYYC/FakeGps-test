@@ -1,5 +1,6 @@
 import json
 import unittest
+from pathlib import Path
 
 from scripts import cellular_acceptance_matrix as matrix
 
@@ -7,7 +8,10 @@ from scripts import cellular_acceptance_matrix as matrix
 class CellularAcceptanceMatrixTest(unittest.TestCase):
 
     def test_two_scenarios_cover_wcdma_power_aliases_without_ambiguity(self):
-        self.assertEqual(("full-rscp", "full-rssi"), matrix.scenario_names())
+        self.assertEqual(
+            ("full-rscp", "full-rssi", "fluctuation-enabled"),
+            matrix.scenario_names(),
+        )
 
         rscp = matrix.get_scenario("full-rscp")
         rssi = matrix.get_scenario("full-rssi")
@@ -90,9 +94,29 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
             scenario = matrix.get_scenario(name)
             covered = matrix.covered_profile_fields(name)
             self.assertEqual(set(scenario.fields), covered, name)
-            self.assertEqual(0, scenario.fields["signal_fluctuation_enabled"])
-            self.assertEqual(6, scenario.fields["signal_fluctuation_range_db"])
-            self.assertIn("neighbor_cells_json", scenario.fields)
+
+        self.assertNotIn(
+            "signal_fluctuation_enabled",
+            matrix.get_scenario("full-rscp").fields,
+        )
+        fluctuation = matrix.get_scenario("fluctuation-enabled")
+        self.assertEqual(1, fluctuation.fields["signal_fluctuation_enabled"])
+        self.assertEqual(6, fluctuation.fields["signal_fluctuation_range_db"])
+        self.assertEqual(
+            {
+                "$matcher": "complete_int_set",
+                "allowed": [-104, -103, -102, -101, -100, -99, -98],
+                "count": 256,
+            },
+            matrix.expected_for("fluctuation-enabled")[
+                "cellInfo.sync.lte.rsrpSamples"
+            ],
+        )
+
+    def test_fixed_matrix_preflight_requires_api_33(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        self.assertIn('[ "$api" -ge 33 ]', script)
+        self.assertIn("Android API 33+ required", script)
 
     def test_cli_emits_deterministic_json_and_rejects_unknown_scenarios(self):
         first = matrix.emit_json("full-rssi", matrix.OUTPUT_EXPECTED)

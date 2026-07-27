@@ -89,6 +89,60 @@ class HookVerdictTest(unittest.TestCase):
         self.assertFalse(verdict.passed)
         self.assertEqual("different_type", verdict.fields[0].reason)
 
+    def test_complete_integer_set_matcher_requires_range_and_variation(self):
+        matcher = {
+            "$matcher": "complete_int_set",
+            "allowed": [-104, -103, -102, -101, -100, -99, -98],
+            "count": 256,
+        }
+        passing_samples = (
+            [-104, -103, -102, -101, -100, -99, -98] * 37
+        )[:256]
+        passing = hook_verdict.evaluate(
+            {"cellInfo.sync.lte.rsrpSamples": matcher},
+            {
+                "sessionId": "acceptance-123",
+                "cellInfo": {"sync": {"lte": {"rsrpSamples": passing_samples}}},
+                "errors": [],
+            },
+            "acceptance-123",
+            restored=True,
+        )
+        self.assertTrue(passing.passed)
+        self.assertEqual("complete_int_set", passing.fields[0].reason)
+
+        constant = hook_verdict.evaluate(
+            {"cellInfo.sync.lte.rsrpSamples": matcher},
+            {
+                "sessionId": "acceptance-123",
+                "cellInfo": {"sync": {"lte": {"rsrpSamples": [-101] * 256}}},
+                "errors": [],
+            },
+            "acceptance-123",
+            restored=True,
+        )
+        self.assertFalse(constant.passed)
+        self.assertEqual("incomplete_set", constant.fields[0].reason)
+
+        out_of_range = hook_verdict.evaluate(
+            {"cellInfo.sync.lte.rsrpSamples": matcher},
+            {
+                "sessionId": "acceptance-123",
+                "cellInfo": {
+                    "sync": {
+                        "lte": {
+                            "rsrpSamples": passing_samples[:-1] + [-97],
+                        },
+                    },
+                },
+                "errors": [],
+            },
+            "acceptance-123",
+            restored=True,
+        )
+        self.assertFalse(out_of_range.passed)
+        self.assertEqual("unexpected_set", out_of_range.fields[0].reason)
+
     def test_cli_prints_deterministic_summary_and_exit_codes(self):
         report = {
             "sessionId": "acceptance-123",

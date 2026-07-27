@@ -3,9 +3,10 @@
 # FakeGps public-API hook verification.
 #
 #   --current-profile   Read-only diagnostics for the user's effective profile.
-#   --cellular-matrix   Strict, isolated acceptance transaction. Publishes two
-#                       debug-only schema-v2 payloads, verifies every supported
-#                       cellular field, and restores the database-backed payload.
+#   --cellular-matrix   Strict, isolated acceptance transaction. Publishes
+#                       debug-only exact and behavioral schema-v2 payloads,
+#                       verifies every supported cellular field, and restores the
+#                       database-backed payload.
 set -u
 
 PKG="name.caiyao.fakegps"
@@ -66,6 +67,13 @@ has_state() {
     state=$2
     read_acceptance_logs |
         grep -F "\"sessionId\":\"$session\",\"state\":\"$state\"" >/dev/null
+}
+
+has_pending_recovery() {
+    root_shell \
+        "find /data/misc -type f -name hook_acceptance_recovery.xml -exec cat {} \\;" \
+        2>/dev/null |
+        grep -F 'name="pending" value="true"' >/dev/null
 }
 
 restore_database_payload() {
@@ -155,8 +163,8 @@ preflight_device() {
             return 2
             ;;
     esac
-    [ "$api" -ge 29 ] ||
-        { echo "HARNESS_ERROR Android API 29+ required, found $api" >&2; return 2; }
+    [ "$api" -ge 33 ] ||
+        { echo "HARNESS_ERROR Android API 33+ required, found $api" >&2; return 2; }
 
     adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
     adb shell wm dismiss-keyguard >/dev/null 2>&1
@@ -303,6 +311,82 @@ run_scenario() {
         --restored
 }
 
+verify_durable_recovery() {
+    session="acceptance-recovery-$(date +%s)-$$"
+    payload=$("$PY" "$MATRIX_TOOL" full-rscp --output payload) || return 2
+    encoded=$(PAYLOAD="$payload" "$PY" -c \
+        'import base64,os; print(base64.urlsafe_b64encode(os.environ["PAYLOAD"].encode()).decode().rstrip("="))')
+
+    echo "[recovery] session=$session"
+    adb shell am force-stop "$PKG" >/dev/null 2>&1
+    adb logcat -c >/dev/null 2>&1
+    root_shell \
+        "am start -W -n $ACCEPTANCE_ACT --es acceptance_session_id $session --es acceptance_payload_base64 $encoded --ez acceptance_hold_after_publish true" \
+        >/dev/null || {
+        echo "HARNESS_ERROR recovery probe activity failed to start" >&2
+        return 2
+    }
+
+    attempt=0
+    while [ "$attempt" -lt 15 ]; do
+        if has_state "$session" "recovery_test_armed"; then
+            break
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    has_state "$session" "recovery_test_armed" || {
+        echo "HARNESS_ERROR recovery transaction was not armed" >&2
+        read_acceptance_logs >&2
+        return 1
+    }
+    has_pending_recovery || {
+        echo "HARNESS_ERROR durable recovery record missing before overwrite" >&2
+        return 1
+    }
+    during=$(snapshot_prefs)
+    [ "$during" != "$PREFS_BEFORE" ] || {
+        echo "HARNESS_ERROR recovery probe did not publish a distinct payload" >&2
+        return 1
+    }
+
+    pid=$(adb shell pidof "$PKG" 2>/dev/null | tr -d '\r' | awk '{print $1}')
+    [ -n "$pid" ] || {
+        echo "HARNESS_ERROR recovery probe process not found" >&2
+        return 2
+    }
+    root_shell "kill -9 $pid" >/dev/null 2>&1 || {
+        echo "HARNESS_ERROR could not SIGKILL recovery probe process" >&2
+        return 2
+    }
+    sleep 1
+
+    adb logcat -c >/dev/null 2>&1
+    adb shell am start -W -n "$ACT" >/dev/null 2>&1 || {
+        echo "HARNESS_ERROR normal activity failed to start recovery" >&2
+        return 2
+    }
+    attempt=0
+    while [ "$attempt" -lt 12 ]; do
+        current=$(snapshot_prefs)
+        if [ "$current" = "$PREFS_BEFORE" ] &&
+            ! has_pending_recovery &&
+            adb logcat -d -v brief -s FakeGPSAcceptanceRecovery:W '*:S' \
+                2>/dev/null |
+                grep -F "recovered_pending" >/dev/null
+        then
+            echo "VERIFIED recovery.sigkill durable record restored pre-test payload"
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+
+    echo "HARNESS_ERROR durable recovery did not complete after SIGKILL" >&2
+    adb logcat -d -v brief -s FakeGPSAcceptanceRecovery:V '*:S' >&2
+    return 1
+}
+
 run_cellular_matrix() {
     preflight_device || return $?
     preflight_matrix || return $?
@@ -321,9 +405,11 @@ run_cellular_matrix() {
     trap 'signal_exit INT' INT
     trap 'signal_exit TERM' TERM
 
+    verify_durable_recovery || return $?
     run_scenario full-rscp || return $?
     run_scenario full-rssi || return $?
-    echo "ACCEPTANCE_PASS both cellular scenarios verified exactly"
+    run_scenario fluctuation-enabled || return $?
+    echo "ACCEPTANCE_PASS two exact cellular scenarios plus fluctuation behavior verified"
 }
 
 echo "════════════════════════════════════════════════════════════════"

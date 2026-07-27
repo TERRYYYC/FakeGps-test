@@ -26,6 +26,7 @@ class HookAcceptanceActivity : Activity() {
     private var state = State.IDLE
     private var sessionId = "unparsed"
     private var restoreAttempted = false
+    private var recoveryPrepared = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,16 +43,30 @@ class HookAcceptanceActivity : Activity() {
                 StandardCharsets.UTF_8,
             )
             val payload = HookAcceptancePayload.validate(sessionId, raw)
+            check(HookAcceptanceRecovery.recoverIfPending(applicationContext)) {
+                "could not recover a previous interrupted acceptance transaction"
+            }
+            check(HookAcceptanceRecovery.prepare(applicationContext)) {
+                "could not persist the pre-test transport payload"
+            }
+            recoveryPrepared = true
             check(publishOverride(payload.json)) { "test payload commit failed" }
 
             state = HookAcceptanceStateMachine.transition(state, Event.PUBLISHED)
             logState("published")
+            if (intent.getBooleanExtra(EXTRA_HOLD_AFTER_PUBLISH, false)) {
+                logState("recovery_test_armed")
+                return
+            }
             Handler(Looper.getMainLooper()).postDelayed(
                 { runProbeAndRestore() },
                 PROBE_DELAY_MS,
             )
         } catch (failure: Throwable) {
             if (state == State.IDLE) {
+                if (recoveryPrepared) {
+                    HookAcceptanceRecovery.recoverIfPending(applicationContext)
+                }
                 state = HookAcceptanceStateMachine.transition(state, Event.ABORTED)
                 logState("aborted", failure)
                 finish()
@@ -95,7 +110,10 @@ class HookAcceptanceActivity : Activity() {
         }
         logState("restoring")
 
-        if (ConfigPrefsSync.sync(applicationContext)) {
+        if (
+            ConfigPrefsSync.sync(applicationContext) &&
+            HookAcceptanceRecovery.complete(applicationContext)
+        ) {
             state = HookAcceptanceStateMachine.transition(state, Event.RESTORE_COMPLETED)
             logState("restored")
         } else {
@@ -129,6 +147,7 @@ class HookAcceptanceActivity : Activity() {
         const val TAG = "FakeGPSAcceptance"
         const val EXTRA_SESSION_ID = "acceptance_session_id"
         const val EXTRA_PAYLOAD_BASE64 = "acceptance_payload_base64"
+        const val EXTRA_HOLD_AFTER_PUBLISH = "acceptance_hold_after_publish"
         private const val PROBE_DELAY_MS = 5_000L
     }
 }

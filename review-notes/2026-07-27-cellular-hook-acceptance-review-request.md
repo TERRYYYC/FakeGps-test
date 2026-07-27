@@ -18,10 +18,12 @@ Branch: `feat/cellular-hook-acceptance`
 ## What
 
 Replace the partial current-profile diagnostic with a debug-only acceptance transaction. Two
-distinct schema-v2 matrices verify serving cells, neighbor cells, signal controls, carrier/state,
-display info, and physical-channel getters across synchronous, request, and callback paths. Every
-terminal path republishes the user's database-backed config; the saved profile database is never
-written.
+distinct schema-v2 exact matrices verify serving cells, neighbor cells, carrier/state, display
+info, and physical-channel getters across synchronous, request, and callback paths. A third
+enabled-fluctuation scenario proves both signal controls through complete observed RSRP ranges on
+all three cell-info delivery paths. Before each override, a durable debug recovery record protects
+the previous transport payload; every terminal path or next process launch republishes it. The
+saved profile database is never written.
 
 ## Why
 
@@ -48,8 +50,14 @@ stale sessions, probe errors, restore failures, or database changes all fail the
   `READ_PRECISE_PHONE_STATE`. The probe therefore crosses the real registration before-hook, records
   the framework permission rejection, and locally replays one empty callback. The production hook
   must replace it with a real API-35 `PhysicalChannelConfig`; every getter is then asserted.
-- Signal fluctuation is disabled for exact device assertions, while deterministic unit coverage
-  proves the enabled range and variation behavior.
+- Exact matrices omit signal fluctuation controls. A separate enabled scenario samples each public
+  LTE RSRP getter 256 times and requires the observed set to equal every value in the configured
+  ±3 dB range. Constant, missing, out-of-range, and wrong-count samples fail.
+- The fixed public-API matrix requires API 33+, the first release where callback cell info and both
+  physical-channel bandwidth getters in the matrix are available together.
+- A debug-only recovery record is committed before override publication and cleared only after
+  restore publication commits. The device harness verifies process death by SIGKILL and recovery
+  on the next debug process launch.
 - `ConfigPrefsSync.sync()` reports success only when the world-readable path commits. A private
   fallback may preserve local state, but it cannot be consumed by target-process
   `XSharedPreferences` and therefore fails the cross-process publication contract.
@@ -110,18 +118,20 @@ git checkout --detach origin/feat/cellular-hook-acceptance
 
 ```bash
 ./gradlew clean testDebugUnitTest assembleDebug assembleRelease lintVitalRelease
-# BUILD SUCCESSFUL; 60 JVM tests, 0 failures
+# BUILD SUCCESSFUL; 64 JVM tests, 0 failures
 
 python3 -m unittest scripts.test_cellular_acceptance_matrix scripts.test_hook_verdict
-# 10 tests, 0 failures
+# 12 tests, 0 failures
 
 ./scripts/test-hook.sh --cellular-matrix
-# two scenarios × 274 exact assertions = 548/548 verified
+# durable SIGKILL recovery verified
+# two exact scenarios × 274 assertions = 548/548 verified
+# enabled-fluctuation scenario = 20/20 verified plus 3 × 256 complete-range samples
 # database unchanged; database-backed safe-zone fingerprint restored
 ```
 
-Release artifact checks prove that `HookAcceptanceActivity`, its signature permission, payload
-validator, and probe implementation are absent from the release manifest/DEX. Root-level media
-artifact checks return zero.
+Release artifact checks prove that `HookAcceptanceActivity`, `HookAcceptanceApplication`, recovery
+classes, signature permission, payload validator, and probe entry point are absent from the release
+manifest/DEX. Root-level media artifact checks return zero.
 
 [砚砚/gpt-5.6-sol🐾]

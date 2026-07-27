@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicReference
 object HookProbe {
     const val TAG = "FakeGPSProbe"
     private const val CALLBACK_TIMEOUT_SECONDS = 5L
+    private const val ACCEPTANCE_SIGNAL_SAMPLE_COUNT = 256
 
     @SuppressLint("MissingPermission", "NewApi")
     fun run(context: Context, sessionId: String? = null): JSONObject {
@@ -52,13 +53,23 @@ object HookProbe {
         out.put("contractVersion", ProbeFieldContract.VERSION)
         out.put("apiLevel", Build.VERSION.SDK_INT)
         sessionId?.let { out.put("sessionId", it) }
+        val signalSampleCount = if (sessionId == null) {
+            0
+        } else {
+            ACCEPTANCE_SIGNAL_SAMPLE_COUNT
+        }
 
         collectLocation(context, out, errors)
 
         val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
         val cellInfo = JSONObject()
         val synchronous = try {
-            collectCells(tm.allCellInfo.orEmpty(), errors, "cellInfo.sync")
+            collectCells(
+                tm.allCellInfo.orEmpty(),
+                errors,
+                "cellInfo.sync",
+                signalSampleCount,
+            )
         } catch (failure: Throwable) {
             recordError(errors, "cellInfo.sync", failure)
             JSONObject()
@@ -66,7 +77,7 @@ object HookProbe {
         cellInfo.put("sync", synchronous)
 
         if (Build.VERSION.SDK_INT >= 29) {
-            val request = requestCellInfo(tm, errors)
+            val request = requestCellInfo(tm, errors, signalSampleCount)
             cellInfo.put("request", request.cells)
             cellInfo.put("requestCompleted", request.completed)
         }
@@ -80,6 +91,7 @@ object HookProbe {
                     tm,
                     errors,
                     requirePhysicalChannel = sessionId != null,
+                    signalSampleCount = signalSampleCount,
                 ),
             )
         }
@@ -113,6 +125,7 @@ object HookProbe {
         cells: List<CellInfo>,
         errors: JSONArray,
         stage: String,
+        signalSampleCount: Int,
     ): JSONObject {
         val observed = JSONObject()
         val neighbors = JSONObject()
@@ -126,7 +139,15 @@ object HookProbe {
             if (isNeighbor) {
                 when {
                     cell is CellInfoLte && !neighbors.has("lte") ->
-                        neighbors.put("lte", observeLte(cell, errors, "$stage.neighbors.lte"))
+                        neighbors.put(
+                            "lte",
+                            observeLte(
+                                cell,
+                                errors,
+                                "$stage.neighbors.lte",
+                                signalSampleCount,
+                            ),
+                        )
                     cell is CellInfoGsm && !neighbors.has("gsm") ->
                         neighbors.put("gsm", observeGsm(cell, errors, "$stage.neighbors.gsm"))
                     cell is CellInfoWcdma && !neighbors.has("wcdma") ->
@@ -139,7 +160,15 @@ object HookProbe {
             }
             when {
                 cell is CellInfoLte && !observed.has("lte") ->
-                    observed.put("lte", observeLte(cell, errors, "$stage.lte"))
+                    observed.put(
+                        "lte",
+                        observeLte(
+                            cell,
+                            errors,
+                            "$stage.lte",
+                            signalSampleCount,
+                        ),
+                    )
                 cell is CellInfoGsm && !observed.has("gsm") ->
                     observed.put("gsm", observeGsm(cell, errors, "$stage.gsm"))
                 cell is CellInfoWcdma && !observed.has("wcdma") ->
@@ -160,6 +189,7 @@ object HookProbe {
         cell: CellInfoLte,
         errors: JSONArray,
         stage: String,
+        signalSampleCount: Int,
     ): JSONObject {
         val out = JSONObject()
         val id: CellIdentityLte = cell.cellIdentity
@@ -179,6 +209,13 @@ object HookProbe {
         observe(out, "bandwidth", errors, stage) { id.bandwidth }
         observe(out, "dbm", errors, stage) { signal.dbm }
         observe(out, "rsrp", errors, stage) { signal.rsrp }
+        if (signalSampleCount > 0) {
+            val samples = JSONArray()
+            repeat(signalSampleCount) {
+                samples.put(signal.rsrp)
+            }
+            out.put("rsrpSamples", samples)
+        }
         observe(out, "rsrq", errors, stage) { signal.rsrq }
         observe(out, "rssnr", errors, stage) { signal.rssnr }
         observe(out, "cqi", errors, stage) { signal.cqi }
@@ -278,6 +315,7 @@ object HookProbe {
     private fun requestCellInfo(
         manager: TelephonyManager,
         errors: JSONArray,
+        signalSampleCount: Int,
     ): CellInfoRequestResult {
         val executor = Executors.newSingleThreadExecutor()
         val latch = CountDownLatch(1)
@@ -309,7 +347,12 @@ object HookProbe {
             executor.shutdownNow()
         }
         return CellInfoRequestResult(
-            cells = collectCells(result.get(), errors, "cellInfo.request"),
+            cells = collectCells(
+                result.get(),
+                errors,
+                "cellInfo.request",
+                signalSampleCount,
+            ),
             completed = completed,
         )
     }
@@ -348,8 +391,13 @@ object HookProbe {
         manager: TelephonyManager,
         errors: JSONArray,
         requirePhysicalChannel: Boolean,
+        signalSampleCount: Int,
     ): JSONObject {
-        val ordinary = collectOrdinaryTelephonyCallbacks(manager, errors)
+        val ordinary = collectOrdinaryTelephonyCallbacks(
+            manager,
+            errors,
+            signalSampleCount,
+        )
         val physical = if (requirePhysicalChannel) {
             collectPhysicalChannelCallback(manager, errors)
         } else {
@@ -385,9 +433,10 @@ object HookProbe {
     private fun collectOrdinaryTelephonyCallbacks(
         manager: TelephonyManager,
         errors: JSONArray,
+        signalSampleCount: Int,
     ): JSONObject {
         val executor = Executors.newSingleThreadExecutor()
-        val callback = AcceptanceTelephonyCallback(errors)
+        val callback = AcceptanceTelephonyCallback(errors, signalSampleCount)
         var registered = false
         try {
             manager.registerTelephonyCallback(executor, callback)
@@ -455,6 +504,7 @@ object HookProbe {
     @RequiresApi(31)
     private class AcceptanceTelephonyCallback(
         private val errors: JSONArray,
+        private val signalSampleCount: Int,
     ) : TelephonyCallback(),
         TelephonyCallback.CellInfoListener,
         TelephonyCallback.ServiceStateListener,
@@ -469,7 +519,14 @@ object HookProbe {
         private val display = AtomicReference(JSONObject())
 
         override fun onCellInfoChanged(cellInfo: MutableList<CellInfo>) {
-            cells.set(collectCells(cellInfo, errors, "callback.cellInfo"))
+            cells.set(
+                collectCells(
+                    cellInfo,
+                    errors,
+                    "callback.cellInfo",
+                    signalSampleCount,
+                ),
+            )
             mark(cellSeen)
         }
 
