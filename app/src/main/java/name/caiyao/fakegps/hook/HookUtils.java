@@ -339,6 +339,7 @@ class HookUtils {
                 "isRegistered", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
+                        if (BaselineExtractionGuard.isActive()) return;
                         if (NEIGHBOR_BYPASS.contains(param.thisObject)) {
                             param.setResult(false);
                             return;
@@ -1804,8 +1805,13 @@ class HookUtils {
      */
     private static final class CellBaseline {
         Integer mcc, mnc, lac, cid, tac, ci, pci, earfcn;
-        Integer lteRssi, lteRsrp, lteRsrq, lteSinr, lteCqi;
+        String mccString, mncString;
+        Integer gsmArfcn, gsmBsic, wcdmaPsc, wcdmaUarfcn;
+        Integer lteRssi, lteRsrp, lteRsrq, lteSinr, lteCqi, lteBandwidth;
         Integer gsmRssi;
+        CellIdentityMetadata lteMetadata = CellIdentityMetadata.EMPTY;
+        CellIdentityMetadata gsmMetadata = CellIdentityMetadata.EMPTY;
+        CellIdentityMetadata wcdmaMetadata = CellIdentityMetadata.EMPTY;
         boolean present;
 
         /**
@@ -1829,10 +1835,15 @@ class HookUtils {
          * usable as a weaker baseline, but only if it actually yielded identity fields.
          */
         static CellBaseline from(Object realResult) {
+            return BaselineExtractionGuard.call(() -> extract(realResult));
+        }
+
+        private static CellBaseline extract(Object realResult) {
             CellBaseline b = new CellBaseline();
             if (!(realResult instanceof java.util.List)) return withFallback(b);
 
             Object servingLte = null, anyLte = null, servingGsm = null, anyGsm = null;
+            Object servingWcdma = null, anyWcdma = null;
             for (Object info : (java.util.List<?>) realResult) {
                 boolean registered = false;
                 try { registered = (Boolean) XposedHelpers.callMethod(info, "isRegistered"); }
@@ -1843,6 +1854,9 @@ class HookUtils {
                 } else if (info instanceof CellInfoGsm) {
                     if (anyGsm == null) anyGsm = info;
                     if (registered && servingGsm == null) servingGsm = info;
+                } else if (info instanceof CellInfoWcdma) {
+                    if (anyWcdma == null) anyWcdma = info;
+                    if (registered && servingWcdma == null) servingWcdma = info;
                 }
             }
 
@@ -1851,17 +1865,23 @@ class HookUtils {
                 try {
                     Object id = XposedHelpers.callMethod(lteCell, "getCellIdentity");
                     Object sig = XposedHelpers.callMethod(lteCell, "getCellSignalStrength");
+                    b.lteMetadata = CellIdentityMetadata.from(id);
                     b.ci = valid((Integer) XposedHelpers.callMethod(id, "getCi"));
                     b.pci = valid((Integer) XposedHelpers.callMethod(id, "getPci"));
                     b.tac = valid((Integer) XposedHelpers.callMethod(id, "getTac"));
                     b.earfcn = valid((Integer) XposedHelpers.callMethod(id, "getEarfcn"));
-                    b.mcc = parseOrNull(XposedHelpers.callMethod(id, "getMccString"));
-                    b.mnc = parseOrNull(XposedHelpers.callMethod(id, "getMncString"));
+                    b.lteBandwidth = valid(CellIdentityMetadata.readInteger(id, "getBandwidth"));
+                    b.mccString = CellIdentityMetadata.readPlmn(
+                            id, "getMccString", "getMcc");
+                    b.mncString = CellIdentityMetadata.readPlmn(
+                            id, "getMncString", "getMnc");
+                    b.mcc = parseOrNull(b.mccString);
+                    b.mnc = parseOrNull(b.mncString);
                     b.lteRsrp = valid((Integer) XposedHelpers.callMethod(sig, "getRsrp"));
                     b.lteRsrq = valid((Integer) XposedHelpers.callMethod(sig, "getRsrq"));
                     b.lteSinr = valid((Integer) XposedHelpers.callMethod(sig, "getRssnr"));
                     b.lteCqi = valid((Integer) XposedHelpers.callMethod(sig, "getCqi"));
-                    b.lteRssi = valid((Integer) XposedHelpers.callMethod(sig, "getRssi"));
+                    b.lteRssi = valid(CellIdentityMetadata.readInteger(sig, "getRssi"));
                 } catch (Throwable t) {
                     debug("baseline LTE extract failed: " + t);
                 }
@@ -1872,13 +1892,52 @@ class HookUtils {
                 try {
                     Object id = XposedHelpers.callMethod(gsmCell, "getCellIdentity");
                     Object sig = XposedHelpers.callMethod(gsmCell, "getCellSignalStrength");
+                    b.gsmMetadata = CellIdentityMetadata.from(id);
                     b.lac = valid((Integer) XposedHelpers.callMethod(id, "getLac"));
                     b.cid = valid((Integer) XposedHelpers.callMethod(id, "getCid"));
-                    if (b.mcc == null) b.mcc = parseOrNull(XposedHelpers.callMethod(id, "getMccString"));
-                    if (b.mnc == null) b.mnc = parseOrNull(XposedHelpers.callMethod(id, "getMncString"));
+                    b.gsmArfcn = valid((Integer) XposedHelpers.callMethod(id, "getArfcn"));
+                    b.gsmBsic = valid((Integer) XposedHelpers.callMethod(id, "getBsic"));
+                    if (b.mcc == null) {
+                        b.mccString = CellIdentityMetadata.readPlmn(
+                                id, "getMccString", "getMcc");
+                        b.mcc = parseOrNull(b.mccString);
+                    }
+                    if (b.mnc == null) {
+                        b.mncString = CellIdentityMetadata.readPlmn(
+                                id, "getMncString", "getMnc");
+                        b.mnc = parseOrNull(b.mncString);
+                    }
                     b.gsmRssi = valid((Integer) XposedHelpers.callMethod(sig, "getDbm"));
                 } catch (Throwable t) {
                     debug("baseline GSM extract failed: " + t);
+                }
+            }
+
+            Object wcdmaCell = servingWcdma != null ? servingWcdma : anyWcdma;
+            if (wcdmaCell != null) {
+                try {
+                    Object id = XposedHelpers.callMethod(wcdmaCell, "getCellIdentity");
+                    b.wcdmaMetadata = CellIdentityMetadata.from(id);
+                    if (b.lac == null) {
+                        b.lac = valid((Integer) XposedHelpers.callMethod(id, "getLac"));
+                    }
+                    if (b.cid == null) {
+                        b.cid = valid((Integer) XposedHelpers.callMethod(id, "getCid"));
+                    }
+                    b.wcdmaPsc = valid((Integer) XposedHelpers.callMethod(id, "getPsc"));
+                    b.wcdmaUarfcn = valid((Integer) XposedHelpers.callMethod(id, "getUarfcn"));
+                    if (b.mcc == null) {
+                        b.mccString = CellIdentityMetadata.readPlmn(
+                                id, "getMccString", "getMcc");
+                        b.mcc = parseOrNull(b.mccString);
+                    }
+                    if (b.mnc == null) {
+                        b.mncString = CellIdentityMetadata.readPlmn(
+                                id, "getMncString", "getMnc");
+                        b.mnc = parseOrNull(b.mncString);
+                    }
+                } catch (Throwable t) {
+                    debug("baseline WCDMA extract failed: " + t);
                 }
             }
 
@@ -1990,6 +2049,10 @@ class HookUtils {
         // Per-field passthrough: configured value > device's real value > last-resort default.
         int mcc = pick(s.mcc, base.mcc, 460);
         int mnc = pick(s.mnc, base.mnc, 0);
+        String mccString = s.mcc == null && base.mccString != null
+                ? base.mccString : String.valueOf(mcc);
+        String mncString = s.mnc == null && base.mncString != null
+                ? base.mncString : String.valueOf(mnc);
 
         // GSM cell
         if (s.hasGsmCell()) {
@@ -1997,14 +2060,11 @@ class HookUtils {
                 CellInfoGsm gsm = (CellInfoGsm) XposedHelpers.newInstance(CellInfoGsm.class);
                 int lac = pick(s.lac, base.lac, 0);
                 int cid = pick(s.cid, base.cid, 0);
-                Object identity;
-                if (s.arfcn != null && s.bsic != null) {
-                    identity = XposedHelpers.newInstance(CellIdentityGsm.class,
-                            mcc, mnc, lac, cid, s.arfcn, s.bsic);
-                } else {
-                    identity = XposedHelpers.newInstance(CellIdentityGsm.class,
-                            mcc, mnc, lac, cid);
-                }
+                Integer arfcn = s.arfcn != null ? s.arfcn : base.gsmArfcn;
+                Integer bsic = s.bsic != null ? s.bsic : base.gsmBsic;
+                Object identity = CellConstructorCompat.newGsmIdentity(
+                        CellIdentityGsm.class, mccString, mncString, lac, cid, arfcn, bsic,
+                        base.gsmMetadata);
                 XposedHelpers.callMethod(gsm, "setCellIdentity", identity);
                 // Set signal strength — getter hooks will override individual fields
                 try {
@@ -2040,14 +2100,10 @@ class HookUtils {
                 int pci = pick(s.pci, base.pci, 0);
                 int tac = pick(s.tac, base.tac != null ? base.tac : s.lac, 0);
                 Integer earfcn = s.earfcn != null ? s.earfcn : base.earfcn;
-                Object identity;
-                if (earfcn != null) {
-                    identity = XposedHelpers.newInstance(CellIdentityLte.class,
-                            mcc, mnc, ci, pci, tac, earfcn);
-                } else {
-                    identity = XposedHelpers.newInstance(CellIdentityLte.class,
-                            mcc, mnc, ci, pci, tac);
-                }
+                Integer bandwidth = s.lteBandwidth != null ? s.lteBandwidth : base.lteBandwidth;
+                Object identity = CellConstructorCompat.newLteIdentity(
+                        CellIdentityLte.class, mccString, mncString,
+                        ci, pci, tac, earfcn, bandwidth, base.lteMetadata);
                 XposedHelpers.callMethod(lte, "setCellIdentity", identity);
                 // Set signal strength
                 try {
@@ -2057,7 +2113,7 @@ class HookUtils {
                     int sinr = pick(s.lteSinr, base.lteSinr, 15);
                     int cqi = pick(s.lteCqi, base.lteCqi, 10);
                     int lteTa = s.lteTa != null ? s.lteTa : Integer.MAX_VALUE;
-                    Object lteSig = XposedHelpers.newInstance(
+                    Object lteSig = CellConstructorCompat.newLteSignal(
                             XposedHelpers.findClass("android.telephony.CellSignalStrengthLte", null),
                             rssi, rsrp, rsrq, sinr, cqi, lteTa);
                     XposedHelpers.callMethod(lte, "setCellSignalStrength", lteSig);
@@ -2078,9 +2134,13 @@ class HookUtils {
         if (s.hasGsmCell() && (s.psc != null || s.uarfcn != null)) {
             try {
                 CellInfoWcdma wcdma = (CellInfoWcdma) XposedHelpers.newInstance(CellInfoWcdma.class);
-                int psc = s.psc != null ? s.psc : 0;
-                Object identity = XposedHelpers.newInstance(CellIdentityWcdma.class,
-                        mcc, mnc, s.lac, s.cid, psc);
+                int lac = pick(s.lac, base.lac, 0);
+                int cid = pick(s.cid, base.cid, 0);
+                Integer psc = s.psc != null ? s.psc : base.wcdmaPsc;
+                Integer uarfcn = s.uarfcn != null ? s.uarfcn : base.wcdmaUarfcn;
+                Object identity = CellConstructorCompat.newWcdmaIdentity(
+                        CellIdentityWcdma.class, mccString, mncString,
+                        lac, cid, psc, uarfcn, base.wcdmaMetadata);
                 XposedHelpers.callMethod(wcdma, "setCellIdentity", identity);
                 // Set signal strength
                 try {
@@ -2128,20 +2188,23 @@ class HookUtils {
                     try {
                         org.json.JSONObject obj = arr.getJSONObject(i);
                         String type = obj.optString("type", "gsm");
-                        int nMcc = obj.optInt("mcc", mcc);
-                        int nMnc = obj.optInt("mnc", mnc);
+                        String nMccString = obj.optString("mcc", mccString);
+                        String nMncString = obj.optString("mnc", mncString);
                         if ("lte".equals(type)) {
                             CellInfoLte lte = (CellInfoLte) XposedHelpers.newInstance(CellInfoLte.class);
                             NEIGHBOR_BYPASS.add(lte);
-                            Object id = XposedHelpers.newInstance(CellIdentityLte.class,
-                                    nMcc, nMnc,
+                            Object id = CellConstructorCompat.newLteIdentity(
+                                    CellIdentityLte.class, nMccString, nMncString,
                                     obj.optInt("ci", 0),
                                     obj.optInt("pci", 0),
-                                    obj.optInt("tac", 0));
+                                    obj.optInt("tac", 0),
+                                    obj.has("earfcn") ? obj.optInt("earfcn") : null,
+                                    obj.has("bandwidth") ? obj.optInt("bandwidth") : null,
+                                    CellIdentityMetadata.EMPTY);
                             NEIGHBOR_BYPASS.add(id);
                             XposedHelpers.callMethod(lte, "setCellIdentity", id);
                             try {
-                                Object sig = XposedHelpers.newInstance(
+                                Object sig = CellConstructorCompat.newLteSignal(
                                         XposedHelpers.findClass("android.telephony.CellSignalStrengthLte", null),
                                         obj.optInt("rssi", -90),
                                         obj.optInt("rsrp", -100),
@@ -2156,11 +2219,13 @@ class HookUtils {
                         } else if ("wcdma".equals(type)) {
                             CellInfoWcdma w = (CellInfoWcdma) XposedHelpers.newInstance(CellInfoWcdma.class);
                             NEIGHBOR_BYPASS.add(w);
-                            Object id = XposedHelpers.newInstance(CellIdentityWcdma.class,
-                                    nMcc, nMnc,
+                            Object id = CellConstructorCompat.newWcdmaIdentity(
+                                    CellIdentityWcdma.class, nMccString, nMncString,
                                     obj.optInt("lac", 0),
                                     obj.optInt("cid", 0),
-                                    obj.optInt("psc", 0));
+                                    obj.optInt("psc", 0),
+                                    obj.has("uarfcn") ? obj.optInt("uarfcn") : null,
+                                    CellIdentityMetadata.EMPTY);
                             NEIGHBOR_BYPASS.add(id);
                             XposedHelpers.callMethod(w, "setCellIdentity", id);
                             try {
@@ -2178,10 +2243,13 @@ class HookUtils {
                             // Default: GSM
                             CellInfoGsm gsm = (CellInfoGsm) XposedHelpers.newInstance(CellInfoGsm.class);
                             NEIGHBOR_BYPASS.add(gsm);
-                            Object id = XposedHelpers.newInstance(CellIdentityGsm.class,
-                                    nMcc, nMnc,
+                            Object id = CellConstructorCompat.newGsmIdentity(
+                                    CellIdentityGsm.class, nMccString, nMncString,
                                     obj.optInt("lac", 0),
-                                    obj.optInt("cid", 0));
+                                    obj.optInt("cid", 0),
+                                    obj.has("arfcn") ? obj.optInt("arfcn") : null,
+                                    obj.has("bsic") ? obj.optInt("bsic") : null,
+                                    CellIdentityMetadata.EMPTY);
                             NEIGHBOR_BYPASS.add(id);
                             XposedHelpers.callMethod(gsm, "setCellIdentity", id);
                             try {
@@ -2217,6 +2285,7 @@ class HookUtils {
                 new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
+                        if (BaselineExtractionGuard.isActive()) return;
                         // Skip neighbor cell objects — their constructor values are correct
                         if (NEIGHBOR_BYPASS.contains(param.thisObject)) return;
                         Snapshot s = MainHook.CURRENT.get();
@@ -2238,6 +2307,7 @@ class HookUtils {
                 new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
+                        if (BaselineExtractionGuard.isActive()) return;
                         if (NEIGHBOR_BYPASS.contains(param.thisObject)) return;
                         Snapshot s = MainHook.CURRENT.get();
                         Object val = getter.get(s);
