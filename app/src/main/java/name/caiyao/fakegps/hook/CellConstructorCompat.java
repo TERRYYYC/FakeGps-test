@@ -1,6 +1,7 @@
 package name.caiyao.fakegps.hook;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.util.Collection;
 
 /**
@@ -147,6 +148,33 @@ final class CellConstructorCompat {
             return construct(legacy, rssi, rsrp, rsrq, rssnr, cqi, timingAdvance);
         }
         throw unsupported(type, "LTE signal (7/6)");
+    }
+
+    static Object newPhysicalChannelConfig(Class<?> type)
+            throws ReflectiveOperationException {
+        try {
+            Class<?> builderType = Class.forName(
+                    type.getName() + "$Builder", true, type.getClassLoader());
+            Constructor<?> builderConstructor =
+                    find(builderType, parameters -> parameters.length == 0);
+            if (builderConstructor != null) {
+                Object builder = construct(builderConstructor);
+                Method build = builderType.getDeclaredMethod("build");
+                build.setAccessible(true);
+                Object value = build.invoke(builder);
+                if (type.isInstance(value)) {
+                    return value;
+                }
+            }
+        } catch (ClassNotFoundException ignored) {
+            // Older Android releases expose the direct zero-argument shape instead.
+        }
+
+        Constructor<?> legacy = find(type, parameters -> parameters.length == 0);
+        if (legacy != null) {
+            return construct(legacy);
+        }
+        throw unsupported(type, "PhysicalChannelConfig (Builder/zero-arg)");
     }
 
     private interface Shape {

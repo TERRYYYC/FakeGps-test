@@ -53,11 +53,11 @@ object ConfigPrefsSync {
      * Invariants preserved: only non-null values are written (NULL = passthrough), the payload
      * carries [SCHEMA_VERSION] so the reader can reject an incompatible build, and a content
      * fingerprint is emitted so config provenance stays verifiable across UI / log / probe.
-     */
+    */
     @JvmStatic
-    fun sync(context: Context) {
+    fun sync(context: Context): Boolean {
         Log.w(TAG, "sync() ENTER")
-        try {
+        return try {
             val jsonStr = buildFieldMapJson(context)
 
             // MODE_WORLD_READABLE throws SecurityException on Android N+ unless the Xposed
@@ -72,8 +72,10 @@ object ConfigPrefsSync {
             }
             val ok = prefs.edit().putString(KEY_JSON, jsonStr).commit()
             Log.w(TAG, "published commit=$ok fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}")
+            ok
         } catch (e: Throwable) {
             Log.e(TAG, "sync failed", e)
+            false
         }
     }
 

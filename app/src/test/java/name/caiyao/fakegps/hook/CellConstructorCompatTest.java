@@ -263,6 +263,23 @@ public class CellConstructorCompatTest {
         assertEquals(4, signal.timingAdvance);
     }
 
+    @Test
+    public void physicalChannelConfigUsesModernBuilderWhenZeroArgConstructorIsAbsent()
+            throws Exception {
+        FakePhysicalChannelModern value = (FakePhysicalChannelModern)
+                CellConstructorCompat.newPhysicalChannelConfig(FakePhysicalChannelModern.class);
+
+        assertTrue(value.built);
+    }
+
+    @Test
+    public void physicalChannelConfigRetainsLegacyZeroArgumentShape() throws Exception {
+        FakePhysicalChannelLegacy value = (FakePhysicalChannelLegacy)
+                CellConstructorCompat.newPhysicalChannelConfig(FakePhysicalChannelLegacy.class);
+
+        assertTrue(value.constructed);
+    }
+
     static final class FakeLteIdentityModern {
         final int ci, pci, tac, earfcn, bandwidth;
         final int[] bands;
@@ -405,6 +422,30 @@ public class CellConstructorCompatTest {
             this.cqiTableIndex = cqiTableIndex;
             this.cqi = cqi;
             this.timingAdvance = timingAdvance;
+        }
+    }
+
+    static final class FakePhysicalChannelModern {
+        final boolean built;
+
+        private FakePhysicalChannelModern(Builder builder) {
+            built = builder != null;
+        }
+
+        public static final class Builder {
+            public Builder() {}
+
+            public FakePhysicalChannelModern build() {
+                return new FakePhysicalChannelModern(this);
+            }
+        }
+    }
+
+    static final class FakePhysicalChannelLegacy {
+        final boolean constructed;
+
+        FakePhysicalChannelLegacy() {
+            constructed = true;
         }
     }
 

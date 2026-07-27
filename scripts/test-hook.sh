@@ -1,176 +1,337 @@
 #!/usr/bin/env bash
 #
-# test-hook.sh — end-to-end hook verification for FakeGps, zero manual interaction.
+# FakeGps public-API hook verification.
 #
-# Uses whatever profile you configured in the app as ground truth (the ContentProvider is
-# read-only, so we can't inject; DB-as-truth also matches the real workflow), relaunches the app
-# to republish config + run the read-back probe, then compares — PER FIELD — what a real app
-# observes against what you configured. A field configured but observed as the real device value
-# is a broken hook; a field configured but missing from the prefs transport is a coverage gap.
-#
-#   [DB]    what you configured        (adb content query — ground truth)
-#   [prefs] world-readable transport   (safe-zone xml; SpoofConfig only carries a subset!)
-#   [hook]  parsed by the module       ([DIAG] prefs loaded)
-#   [probe] real-app observable value  (HookProbe JSON via public APIs)
+#   --current-profile   Read-only diagnostics for the user's effective profile.
+#   --cellular-matrix   Strict, isolated acceptance transaction. Publishes two
+#                       debug-only schema-v2 payloads, verifies every supported
+#                       cellular field, and restores the database-backed payload.
 set -u
 
 PKG="name.caiyao.fakegps"
 ACT="$PKG/.ui.ComposeActivity"
+ACCEPTANCE_ACT="$PKG/.probe.HookAcceptanceActivity"
 PROVIDER="content://$PKG.data.AppInfoProvider/app"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+APK="$REPO_ROOT/app/build/outputs/apk/debug/app-debug.apk"
+MATRIX_TOOL="$SCRIPT_DIR/cellular_acceptance_matrix.py"
+VERDICT_TOOL="$SCRIPT_DIR/hook_verdict.py"
 
-command -v adb >/dev/null || { echo "adb not found"; exit 2; }
-adb get-state >/dev/null 2>&1 || { echo "no device connected"; exit 2; }
-PY=$(command -v python3 || command -v python) || { echo "python3 not found"; exit 2; }
+MODE=${1:---current-profile}
+case "$MODE" in
+    --current-profile|--cellular-matrix) ;;
+    *)
+        echo "usage: $0 [--current-profile|--cellular-matrix]" >&2
+        exit 2
+        ;;
+esac
+
+command -v adb >/dev/null || { echo "HARNESS_ERROR adb not found" >&2; exit 2; }
+PY=$(command -v python3 || command -v python) ||
+    { echo "HARNESS_ERROR python3 not found" >&2; exit 2; }
+
+TEMP_ROOT=""
+TRANSACTION_ACTIVE=0
+DB_BEFORE=""
+PREFS_BEFORE=""
+RESTORE_FAILED=0
+
+device_count() {
+    adb devices | awk 'NR > 1 && $2 == "device" { count++ } END { print count + 0 }'
+}
+
+root_shell() {
+    adb shell "su -c '$1'"
+}
+
+snapshot_db() {
+    root_shell "content query --uri $PROVIDER" 2>/dev/null |
+        sed -n '/^Row:/p'
+}
+
+snapshot_prefs() {
+    root_shell \
+        "find /data/misc -type f -name spoof_config.xml -exec sha256sum {} \\;" \
+        2>/dev/null |
+        LC_ALL=C sort
+}
+
+read_acceptance_logs() {
+    adb logcat -d -v brief -s FakeGPSAcceptance:W '*:S' 2>/dev/null
+}
+
+has_state() {
+    session=$1
+    state=$2
+    read_acceptance_logs |
+        grep -F "\"sessionId\":\"$session\",\"state\":\"$state\"" >/dev/null
+}
+
+restore_database_payload() {
+    adb shell am force-stop "$PKG" >/dev/null 2>&1 || true
+    adb shell am start -W -n "$ACT" >/dev/null 2>&1 || {
+        echo "HARNESS_ERROR failed to relaunch normal activity for restore" >&2
+        return 1
+    }
+
+    attempt=0
+    while [ "$attempt" -lt 12 ]; do
+        current=$(snapshot_prefs)
+        if [ -n "$PREFS_BEFORE" ] && [ "$current" = "$PREFS_BEFORE" ]; then
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    echo "HARNESS_ERROR database-backed transport fingerprint was not restored" >&2
+    return 1
+}
+
+cleanup_transaction() {
+    rc=$?
+    trap - EXIT INT TERM
+
+    if [ "$TRANSACTION_ACTIVE" -eq 1 ]; then
+        if ! restore_database_payload; then
+            RESTORE_FAILED=1
+        fi
+
+        db_after=$(snapshot_db)
+        if [ "$db_after" != "$DB_BEFORE" ]; then
+            echo "HARNESS_ERROR profile database changed during acceptance" >&2
+            RESTORE_FAILED=1
+        else
+            echo "VERIFIED restore.database unchanged"
+        fi
+
+        prefs_after=$(snapshot_prefs)
+        if [ "$prefs_after" != "$PREFS_BEFORE" ]; then
+            echo "HARNESS_ERROR transport does not match pre-test fingerprint" >&2
+            RESTORE_FAILED=1
+        else
+            echo "VERIFIED restore.transport database-backed fingerprint restored"
+        fi
+    fi
+
+    if [ -n "$TEMP_ROOT" ] &&
+        case "$TEMP_ROOT" in
+            "${TMPDIR:-/tmp}"/fakegps-acceptance.*) true ;;
+            *) false ;;
+        esac
+    then
+        rm -rf -- "$TEMP_ROOT"
+    fi
+
+    if [ "$RESTORE_FAILED" -ne 0 ] && [ "$rc" -eq 0 ]; then
+        rc=1
+    fi
+    exit "$rc"
+}
+
+signal_exit() {
+    signal=$1
+    echo "HARNESS_ERROR interrupted by $signal; restoring database-backed payload" >&2
+    case "$signal" in
+        INT) exit 130 ;;
+        TERM) exit 143 ;;
+        *) exit 1 ;;
+    esac
+}
+
+preflight_device() {
+    count=$(device_count)
+    [ "$count" -eq 1 ] ||
+        { echo "HARNESS_ERROR expected exactly one adb device, found $count" >&2; return 2; }
+    adb get-state >/dev/null 2>&1 ||
+        { echo "HARNESS_ERROR adb device unavailable" >&2; return 2; }
+    root_shell id 2>/dev/null | grep -q 'uid=0' ||
+        { echo "HARNESS_ERROR rooted development device required" >&2; return 2; }
+
+    api=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')
+    case "$api" in
+        ''|*[!0-9]*)
+            echo "HARNESS_ERROR invalid Android API level: $api" >&2
+            return 2
+            ;;
+    esac
+    [ "$api" -ge 29 ] ||
+        { echo "HARNESS_ERROR Android API 29+ required, found $api" >&2; return 2; }
+
+    adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
+    adb shell wm dismiss-keyguard >/dev/null 2>&1
+    adb shell input keyevent 82 >/dev/null 2>&1
+    sleep 1
+    wakefulness=$(adb shell dumpsys power 2>/dev/null |
+        grep -Eo 'mWakefulness=[A-Za-z]+' | head -1 | cut -d= -f2)
+    keyguard=$(adb shell dumpsys window policy 2>/dev/null |
+        sed -n '/KeyguardStateMonitor/,+8p' |
+        grep -Eo 'mIsShowing=(true|false)' | head -1 | cut -d= -f2)
+    [ "$wakefulness" = "Awake" ] && [ "$keyguard" = "false" ] || {
+        echo "HARNESS_ERROR device must be awake and unlocked: wake=$wakefulness keyguard=$keyguard" >&2
+        return 2
+    }
+    echo "VERIFIED preflight.device api=$api awake unlocked rooted"
+}
+
+preflight_matrix() {
+    [ -f "$APK" ] ||
+        { echo "HARNESS_ERROR debug APK missing; run ./gradlew assembleDebug" >&2; return 2; }
+    [ -f "$MATRIX_TOOL" ] && [ -f "$VERDICT_TOOL" ] ||
+        { echo "HARNESS_ERROR acceptance tools missing" >&2; return 2; }
+
+    echo "[install] $APK"
+    adb install -r -t "$APK" >/dev/null ||
+        { echo "HARNESS_ERROR debug APK install failed" >&2; return 2; }
+
+    root_shell "pm grant $PKG android.permission.ACCESS_FINE_LOCATION" >/dev/null 2>&1 ||
+        { echo "HARNESS_ERROR could not grant ACCESS_FINE_LOCATION" >&2; return 2; }
+    root_shell "pm grant $PKG android.permission.ACCESS_COARSE_LOCATION" >/dev/null 2>&1 ||
+        { echo "HARNESS_ERROR could not grant ACCESS_COARSE_LOCATION" >&2; return 2; }
+    root_shell "pm grant $PKG android.permission.READ_PHONE_STATE" >/dev/null 2>&1 ||
+        { echo "HARNESS_ERROR could not grant READ_PHONE_STATE" >&2; return 2; }
+
+    package_dump=$(adb shell dumpsys package "$PKG" 2>/dev/null)
+    echo "$package_dump" | grep -F 'flags=[ DEBUGGABLE' >/dev/null &&
+        echo "$package_dump" |
+        grep -F 'name.caiyao.fakegps.permission.RUN_HOOK_ACCEPTANCE: prot=signature' \
+            >/dev/null ||
+        { echo "HARNESS_ERROR installed APK is not the debug acceptance build" >&2; return 2; }
+
+    adb shell am force-stop "$PKG" >/dev/null 2>&1
+    adb logcat -c >/dev/null 2>&1
+    adb shell am start -W -n "$ACT" >/dev/null 2>&1 ||
+        { echo "HARNESS_ERROR normal activity failed to start" >&2; return 2; }
+    attempt=0
+    while [ "$attempt" -lt 12 ]; do
+        if adb logcat -d 2>/dev/null |
+            grep -F 'FakeGPS: [DIAG] prefs loaded fields=' >/dev/null
+        then
+            echo "VERIFIED preflight.xposed self-hook loaded schema-v2 prefs"
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    echo "HARNESS_ERROR Xposed self-hook did not load schema-v2 prefs" >&2
+    return 2
+}
+
+run_current_profile() {
+    preflight_device || return $?
+    db=$(snapshot_db)
+    [ -n "$db" ] ||
+        { echo "HARNESS_ERROR no saved profile (or provider unavailable)" >&2; return 2; }
+
+    adb shell am force-stop "$PKG" >/dev/null 2>&1
+    adb logcat -c >/dev/null 2>&1
+    adb shell am start -W -n "$ACT" >/dev/null 2>&1 ||
+        { echo "HARNESS_ERROR normal activity failed to start" >&2; return 2; }
+    sleep 11
+
+    diag=$(adb logcat -d 2>/dev/null |
+        grep -F 'FakeGPS: [DIAG] prefs loaded fields=' | tail -1)
+    probe=$(adb logcat -d -v brief -s FakeGPSProbe:W '*:S' 2>/dev/null | tail -1)
+    [ -n "$diag" ] ||
+        { echo "HARNESS_ERROR no Xposed prefs-loaded diagnostic" >&2; return 1; }
+    [ -n "$probe" ] ||
+        { echo "HARNESS_ERROR no public-API probe diagnostic" >&2; return 1; }
+
+    echo "[DB] $db"
+    echo "[transport] $(snapshot_prefs)"
+    echo "[hook] $diag"
+    echo "[probe] $probe"
+    echo "DIAGNOSTIC_ONLY current profile was not substituted with a distinct matrix"
+}
+
+run_scenario() {
+    scenario=$1
+    session="acceptance-$(date +%s)-$$-$scenario"
+    payload=$("$PY" "$MATRIX_TOOL" "$scenario" --output payload) || return 2
+    expected=$("$PY" "$MATRIX_TOOL" "$scenario" --output expected) || return 2
+    encoded=$(PAYLOAD="$payload" "$PY" -c \
+        'import base64,os; print(base64.urlsafe_b64encode(os.environ["PAYLOAD"].encode()).decode().rstrip("="))')
+    remote_report="/data/user/0/$PKG/cache/hook-acceptance-$session.json"
+    local_report="$TEMP_ROOT/$session.json"
+
+    echo "[scenario] $scenario session=$session"
+    adb shell am force-stop "$PKG" >/dev/null 2>&1
+    adb logcat -c >/dev/null 2>&1
+    root_shell \
+        "am start -W -n $ACCEPTANCE_ACT --es acceptance_session_id $session --es acceptance_payload_base64 $encoded" \
+        >/dev/null || {
+        echo "HARNESS_ERROR acceptance activity failed to start for $session" >&2
+        return 2
+    }
+
+    attempt=0
+    while [ "$attempt" -lt 35 ]; do
+        if has_state "$session" "probe_failed" ||
+            has_state "$session" "restore_failed" ||
+            has_state "$session" "aborted"
+        then
+            echo "HARNESS_ERROR acceptance activity failed for $session" >&2
+            read_acceptance_logs >&2
+            return 1
+        fi
+        if has_state "$session" "report_ready" &&
+            has_state "$session" "restored"
+        then
+            break
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+
+    if ! has_state "$session" "report_ready" ||
+        ! has_state "$session" "restored"
+    then
+        echo "HARNESS_ERROR timed out waiting for report_ready + restored: $session" >&2
+        read_acceptance_logs >&2
+        return 1
+    fi
+
+    root_shell "cat $remote_report" >"$local_report" 2>/dev/null || {
+        echo "HARNESS_ERROR could not read acceptance report for $session" >&2
+        return 2
+    }
+
+    "$PY" "$VERDICT_TOOL" \
+        --expected-json "$expected" \
+        --report-file "$local_report" \
+        --session-id "$session" \
+        --restored
+}
+
+run_cellular_matrix() {
+    preflight_device || return $?
+    preflight_matrix || return $?
+
+    DB_BEFORE=$(snapshot_db)
+    [ -n "$DB_BEFORE" ] ||
+        { echo "HARNESS_ERROR no saved profile to protect" >&2; return 2; }
+    PREFS_BEFORE=$(snapshot_prefs)
+    [ -n "$PREFS_BEFORE" ] ||
+        { echo "HARNESS_ERROR schema-v2 safe-zone prefs not found" >&2; return 2; }
+
+    TEMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fakegps-acceptance.XXXXXX") ||
+        { echo "HARNESS_ERROR could not create temporary directory" >&2; return 2; }
+    TRANSACTION_ACTIVE=1
+    trap cleanup_transaction EXIT
+    trap 'signal_exit INT' INT
+    trap 'signal_exit TERM' TERM
+
+    run_scenario full-rscp || return $?
+    run_scenario full-rssi || return $?
+    echo "ACCEPTANCE_PASS both cellular scenarios verified exactly"
+}
 
 echo "════════════════════════════════════════════════════════════════"
-echo " FakeGps hook end-to-end test"
+echo " FakeGps hook verification: $MODE"
 echo "════════════════════════════════════════════════════════════════"
 
-# Android grants FINE_LOCATION to this app in AppOps "foreground" mode. When the device is locked
-# or Dozing, the permission is therefore denied at the operation layer even though
-# `dumpsys package` still says granted=true; getAllCellInfo() then returns an empty list without an
-# exception. Wake and dismiss the test keyguard before collecting a cellular baseline, otherwise
-# the harness can misdiagnose an AppOps denial as a hook/ROM failure.
-adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
-adb shell wm dismiss-keyguard >/dev/null 2>&1
-adb shell input keyevent 82 >/dev/null 2>&1
-sleep 1
-WAKEFULNESS=$(adb shell dumpsys power 2>/dev/null | grep -Eo 'mWakefulness=[A-Za-z]+' | head -1)
-KEYGUARD=$(adb shell dumpsys window policy 2>/dev/null |
-    sed -n '/KeyguardStateMonitor/,+8p' | grep -Eo 'mIsShowing=(true|false)' | head -1)
-if [ "$WAKEFULNESS" != "mWakefulness=Awake" ] || [ "$KEYGUARD" != "mIsShowing=false" ]; then
-    echo "❌ device must be awake and unlocked for foreground AppOps: $WAKEFULNESS $KEYGUARD"
-    exit 2
+if [ "$MODE" = "--current-profile" ]; then
+    run_current_profile
+else
+    run_cellular_matrix
 fi
-echo "[preflight] $WAKEFULNESS, $KEYGUARD"
-
-# ── [DB] ground truth: the configured profile (first row) ─────────────────────
-# Queried through `su`: the provider is exported=false (review FC-6), so the plain shell uid can no
-# longer read it — which is the point, since any app being tested could otherwise read the profile
-# and see straight through the spoof. Root is only used here, by the test harness.
-# NB: `content query` does NOT support --sort; the hook uses rows.get(0) i.e. the lowest id, which
-# is the first row the provider returns, so head -1 matches the effective profile.
-DB_RAW=$(adb shell "su -c 'content query --uri $PROVIDER'" 2>/dev/null | grep -E '^Row:' | head -1)
-[ -z "$DB_RAW" ] && { echo "❌ no profile configured (or root unavailable) — set one in the app first"; exit 2; }
-echo "[DB] effective profile: $(echo "$DB_RAW" | cut -c1-90)…"
-
-# ── relaunch: triggers ConfigPrefsSync.sync() + HookProbe.run() ───────────────
-echo "[relaunch] restarting app (republish config + probe)…"
-adb shell am force-stop "$PKG" >/dev/null 2>&1
-adb logcat -c >/dev/null 2>&1
-adb shell am start -n "$ACT" >/dev/null 2>&1
-# Must outlast: app start + hook's ~3s config timer + the probe's 5s delay.
-sleep 12
-
-PREFS=$(adb shell "su -c 'find /data/misc -name spoof_config.xml -exec cat {} \;'" 2>/dev/null | sed 's/&quot;/\"/g')
-DIAG=$(adb logcat -d 2>/dev/null | grep -E "FakeGPS: \[DIAG\] prefs loaded" | tail -1)
-PROBE=$(adb logcat -d 2>/dev/null | grep -E "FakeGPSProbe" | tail -1 | sed -E "s/.*FakeGPSProbe *: //")
-
-# ── compare per field (python does the JSON + table + verdict) ────────────────
-DB_RAW="$DB_RAW" PREFS="$PREFS" PROBE="$PROBE" DIAG="$DIAG" "$PY" - <<'PYEOF'
-import os, json, re, sys
-
-db_raw = os.environ.get("DB_RAW", "")
-prefs  = os.environ.get("PREFS", "")
-probe  = os.environ.get("PROBE", "")
-
-# parse "Row: 0 col=val, col=val, ..." into a dict
-db = {}
-m = re.sub(r'^Row:\s*\d+\s*', '', db_raw.strip())
-for part in m.split(', '):
-    if '=' in part:
-        k, v = part.split('=', 1)
-        db[k.strip()] = None if v == 'NULL' else v.strip()
-
-try:
-    pj = json.loads(probe) if probe else {}
-except Exception:
-    pj = {}
-
-def g(obj, *path):
-    for p in path:
-        if not isinstance(obj, dict): return None
-        obj = obj.get(p)
-    return obj
-
-# field spec: (label, db_column, probe_value, in_SpoofConfig_transport)
-loc = pj.get("location", {}) or {}
-lte = pj.get("lte", {}) or {}
-op  = pj.get("operator", {}) or {}
-wifi= pj.get("wifi", {}) or {}
-
-def approx(a, b):
-    try: return abs(float(a) - float(b)) < 1e-3
-    except Exception: return str(a) == str(b)
-
-# Transport is schemaVersion 2: a flat field map mirroring the profile table, so EVERY non-null
-# column is carried. The old per-field "is this in SpoofConfig?" flag is gone — keeping it would
-# have kept reporting mcc/mnc/operator as untransported "gaps" long after they were fixed, i.e.
-# the harness itself would produce the wrong verdict.
-fields = [
-    ("latitude",       "latitude",  loc.get("latitude")),
-    ("longitude",      "longitude", loc.get("longitude")),
-    ("lte.tac",        "tac",       lte.get("tac")),
-    ("lte.ci",         "ci",        lte.get("ci")),
-    ("lte.pci",        "pci",       lte.get("pci")),
-    ("lte.earfcn",     "earfcn",    lte.get("earfcn")),
-    ("lte.rsrp",       "lte_rsrp",  lte.get("rsrp")),
-    ("mcc",            "mcc",       lte.get("mccString")),
-    ("mnc",            "mnc",       lte.get("mncString")),
-    ("operatorName",   "operator_name", op.get("networkOperatorName")),
-    ("gsm.lac",        "lac",       g(pj,"gsm","lac")),
-    ("gsm.cid",        "cid",       g(pj,"gsm","cid")),
-    ("wifi.ssid",      "wifi_ssid", wifi.get("ssid")),
-    ("wifi.bssid",     "wifi_bssid",wifi.get("bssid")),
-]
-
-print("")
-print("  %-14s %-18s %-24s %s" % ("FIELD","CONFIGURED(DB)","OBSERVED(probe)","VERDICT"))
-print("  " + "-"*76)
-configured=0; spoofed=0; broken=[]; unseen=[]
-for label, col, pv in fields:
-    cfg = db.get(col)
-    if cfg in (None, ""):        # not configured -> nothing to assert
-        continue
-    configured += 1
-    if pv is None:
-        verdict = "⚠️ probe∅"; unseen.append(label)
-    elif approx(cfg, pv):
-        verdict = "✅ spoofed"; spoofed += 1
-    else:
-        verdict = "❌ REAL"; broken.append(label)
-    print("  %-14s %-18s %-24s %s" % (label, str(cfg)[:17], str(pv)[:23], verdict))
-
-print("  " + "-"*82)
-# Full observed cellular/operator readout — exposes "configured value coincidentally equals the
-# real network value" false-positives (e.g. tac=26999 also being the real KYIVSTAR tac).
-print("")
-print("  Observed cellular environment (what a real app sees right now):")
-print("    lte:      %s" % json.dumps(lte))
-print("    operator: %s" % json.dumps(op))
-if lte.get("ci") is not None and (db.get("ci") in (None, "")):
-    print("    ⚠️  lte.ci/mcc/mnc/operator are REAL and NOT configured — cellular spoof unproven.")
-    print("        Set a DISTINCT cellular value in the app (e.g. ci=99999, operator=TEST) to verify.")
-# transport reachability
-prefs_ok = bool(re.search(r'"latitude":', prefs))
-diag_ok  = bool(os.environ.get("DIAG"))
-print("")
-print("  Layers:")
-print("   [prefs transport]  %s" % ("✅ file present + carries location" if prefs_ok else "❌ prefs file missing/empty"))
-print("   [hook parse]       %s" % (("✅ " + os.environ.get("DIAG","")[-60:]) if os.environ.get("DIAG") else "❌ no [DIAG] prefs-loaded log"))
-ismock = loc.get("isMock")
-print("   [fidelity]         isMock=%s  %s" % (ismock, "✅" if ismock is False else "⚠️ detectable" if ismock else "?"))
-print("")
-print("  SUMMARY: %d configured fields | %d spoofed OK" % (configured, spoofed))
-if broken:
-    print("   ❌ configured but the app still sees the REAL value: %s" % ", ".join(broken))
-if unseen:
-    print("   ⚠️  configured but the probe read nothing (hook may be passing through by "
-          "fail-safe, or the API is unavailable): %s" % ", ".join(unseen))
-if not broken and not unseen and configured > 0:
-    print("   🎉 all configured fields spoofed end-to-end")
-sys.exit(1 if broken or unseen else 0)
-PYEOF
-RC=$?
-echo "════════════════════════════════════════════════════════════════"
-exit $RC

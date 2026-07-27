@@ -58,18 +58,27 @@ The probe emits one JSON object under `FakeGPSProbe`:
       "wcdma": {},
       "nr": {}
     },
-    "callback": {
+    "request": {
       "lte": {},
       "gsm": {},
       "wcdma": {},
       "nr": {}
-    }
+    },
+    "requestCompleted": true
   },
   "telephony": {},
   "callback": {
+    "completed": true,
+    "cellInfo": {
+      "lte": {},
+      "gsm": {},
+      "wcdma": {},
+      "nr": {}
+    },
     "serviceState": {},
     "displayInfo": {},
-    "physicalChannel": {}
+    "physicalChannel": {},
+    "physicalChannelDelivery": "hook_replay_after_permission_denied"
   },
   "errors": []
 }
@@ -103,12 +112,33 @@ environment:
 | LTE signal | `lte_rssi`, `lte_rsrp`, `lte_rsrq`, `lte_sinr`, `lte_cqi`, `lte_ta` |
 | NR identity | `mcc`, `mnc`, `nci`, `nrarfcn`, `nr_pci`, `nr_tac` |
 | NR signal | `nr_ss_rsrp`, `nr_ss_rsrq`, `nr_ss_sinr`, `nr_csi_rsrp`, `nr_csi_rsrq`, `nr_csi_sinr` |
+| Signal controls | `signal_fluctuation_enabled=0`, `signal_fluctuation_range_db=6`; exact device values plus deterministic range unit coverage |
 | Carrier/network | `network_type`, `data_network_type`, `voice_network_type`, `operator_name`, `operator_numeric`, `sim_operator`, `sim_operator_name`, `sim_country_iso`, `network_country_iso`, `is_roaming`, `phone_type` |
 | State/display | `service_state`, `data_state`, `data_activity`, `override_network_type` |
 | Physical channel | `band`, `channel_bandwidth`, `cell_bandwidth_downlink`, `physical_cell_id` |
+| Neighbor cells | Distinct GSM, LTE, and WCDMA identities/signals from `neighbor_cells_json`, each observed as `registered=false` |
 
 Both `TelephonyManager.getAllCellInfo()` and `requestCellInfoUpdate()` must return the configured
-cell set. Telephony callbacks must expose the configured service/display/physical-channel values.
+serving and neighbor cell sets. Telephony callbacks must expose the configured
+service/display/physical-channel values.
+
+### API-35 physical-channel permission boundary
+
+`TelephonyCallback.PhysicalChannelConfigListener` is guarded by
+`android.permission.READ_PRECISE_PHONE_STATE`, which is `signature|privileged` on the attached
+Android 15 device. Root cannot grant that permission to an ordinary debug APK without turning the
+test package into a privileged/system app.
+
+The acceptance probe therefore separates ordinary callbacks from the physical-channel callback.
+It first calls `registerTelephonyCallback` for the physical listener so the real production Xposed
+before-hook instruments the concrete callback class. After the framework rejects registration at
+its privileged permission boundary, the probe locally replays one empty callback. The production
+hook must replace that empty list with a real `PhysicalChannelConfig` instance, and every public
+getter is then asserted exactly. The report records
+`physicalChannelDelivery=hook_replay_after_permission_denied`; a missing replacement, constructor
+failure, getter mismatch, unexpected exception, or missing ordinary callback remains a hard
+failure. This verifies the module's callback interception without claiming that an unprivileged
+third-party app can receive a framework event Android does not allow it to register for.
 
 ## Override lifecycle and invariants
 
