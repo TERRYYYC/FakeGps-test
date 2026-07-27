@@ -125,11 +125,23 @@ object ConfigPrefsSync {
         return root.toString()
     }
 
+    /**
+     * Read back the exact payload the hook consumes.
+     *
+     * Returns null when nothing has ever been published. The file is written MODE_WORLD_READABLE for
+     * other processes; reading it from our own process needs no special mode.
+     *
+     * The verify UI reconciles against THIS rather than the DB row on purpose — a DB read proves
+     * only that the editor saved something, while the defect that actually shipped lived in the gap
+     * between the DB and this payload.
+     */
+    @JvmStatic
+    fun readPublishedRaw(context: Context): String? = runCatching {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_JSON, null)
+    }.getOrNull()
+
     /** SHA-256 of the published payload — config provenance, comparable across UI / log / probe. */
-    private fun fingerprint(json: String): String {
-        val d = java.security.MessageDigest.getInstance("SHA-256").digest(json.toByteArray())
-        return "sha256:" + d.joinToString("") { "%02x".format(it) }.take(16)
-    }
+    private fun fingerprint(json: String): String = PublishedConfig.fingerprint(json)
 
     private fun Cursor.strOrNull(col: String): String? {
         val i = getColumnIndex(col); return if (i >= 0 && !isNull(i)) getString(i) else null

@@ -1,0 +1,80 @@
+package name.caiyao.fakegps.config
+
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import java.security.MessageDigest
+
+/**
+ * The published transport payload, read back.
+ *
+ * This is the READ side of what [ConfigPrefsSync] writes — the exact bytes the hook consumes from
+ * the world-readable prefs file. The verify screen reconciles against THIS rather than the DB row
+ * on purpose: a DB read would only prove the editor saved something, whereas the defect that
+ * actually shipped was the payload carrying 23 of the profile table's 87 columns, so the DB and the
+ * hook disagreed while every screen looked correct.
+ *
+ * Parsed with kotlinx.serialization rather than org.json because the latter is a stub in JVM unit
+ * tests, and this contract is worth testing without a device.
+ */
+data class PublishedConfig(
+    val schemaVersion: Int,
+    val mode: String,
+    val fields: Map<String, String>,
+    val activeHourStart: Int? = null,
+    val activeHourEnd: Int? = null,
+) {
+    companion object {
+        /** No `schemaVersion` key at all — an older or corrupt payload, never assumed compatible. */
+        const val SCHEMA_UNKNOWN = -1
+
+        /** Mirrors the hook's own fallback in MainHook#loadSnapshot (`optString("mode","always_on")`). */
+        private const val DEFAULT_MODE = "always_on"
+
+        private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+        /**
+         * Parse a payload, or return null if it cannot be read at all.
+         *
+         * Null means "we cannot tell what the hook is running on", which the UI must show as an
+         * error state — distinct from a valid payload that simply configures nothing.
+         */
+        fun parse(text: String?): PublishedConfig? {
+            if (text.isNullOrBlank()) return null
+            val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
+
+            val fields = mutableMapOf<String, String>()
+            (root["fields"] as? JsonObject)?.forEach { (key, value) ->
+                // Only scalars are spoofable; a nested object/array has no field row to compare
+                // against and would render as noise.
+                (value as? JsonPrimitive)?.let { fields[key] = it.content }
+            }
+
+            val hours = root["activeHours"] as? JsonObject
+
+            return PublishedConfig(
+                schemaVersion = root["schemaVersion"]?.intOrNull() ?: SCHEMA_UNKNOWN,
+                mode = (root["mode"] as? JsonPrimitive)?.content ?: DEFAULT_MODE,
+                fields = fields,
+                activeHourStart = hours?.get("start")?.intOrNull(),
+                activeHourEnd = hours?.get("end")?.intOrNull(),
+            )
+        }
+
+        /**
+         * SHA-256 of the raw payload, truncated to 16 hex chars.
+         *
+         * Must stay byte-identical to [ConfigPrefsSync]'s own fingerprint so the value shown in the
+         * UI can be compared against the one in logcat — that is what makes config provenance
+         * checkable across UI / hook log / probe instead of taken on faith.
+         */
+        fun fingerprint(payload: String): String {
+            val d = MessageDigest.getInstance("SHA-256").digest(payload.toByteArray(Charsets.UTF_8))
+            return "sha256:" + d.joinToString("") { "%02x".format(it) }.take(16)
+        }
+
+        private fun kotlinx.serialization.json.JsonElement.intOrNull(): Int? =
+            (this as? JsonPrimitive)?.content?.toIntOrNull()
+    }
+}

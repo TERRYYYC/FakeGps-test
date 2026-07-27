@@ -3,12 +3,15 @@ package name.caiyao.fakegps.ui.screen.editor
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import name.caiyao.fakegps.data.db.AppDatabase
 import name.caiyao.fakegps.data.db.ProfileEntity
 import name.caiyao.fakegps.data.repository.ProfileRepository
+import name.caiyao.fakegps.verify.DeviceObserver
+import name.caiyao.fakegps.verify.ObservationScope
 
 class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -20,7 +23,27 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
     private val _saved = MutableStateFlow(false)
     val saved: StateFlow<Boolean> = _saved
 
+    /**
+     * What this device currently reports, keyed by dbColumn.
+     *
+     * Shown beside each input because a spoofed value is only verifiable if it DIFFERS from the real
+     * one — with an empty form and no reference, users could not tell whether the value they typed
+     * was distinguishable from the network they were already on.
+     */
+    private val _reference = MutableStateFlow<Map<String, String>>(emptyMap())
+    val reference: StateFlow<Map<String, String>> = _reference
+
+    /** Whether [reference] holds real device values or values this process already spoofs. */
+    val scope: ObservationScope = ObservationScope.current()
+
     private var editingId: Long = 0L
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            _reference.value = runCatching { DeviceObserver(getApplication()).observe().values }
+                .getOrDefault(emptyMap())
+        }
+    }
 
     fun load(profileId: Long, defaultLat: Double, defaultLon: Double) {
         viewModelScope.launch {

@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import name.caiyao.fakegps.data.model.FieldSpec
 import name.caiyao.fakegps.data.model.FieldType
+import name.caiyao.fakegps.verify.ObservationScope
+import name.caiyao.fakegps.verify.VerificationEngine
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,6 +61,7 @@ fun ProfileEditorScreen(
 ) {
     val isNew = profileId == -1L || profileId == 0L
     val fieldValues by vm.fieldValues.collectAsState()
+    val reference by vm.reference.collectAsState()
     val saved by vm.saved.collectAsState()
 
     LaunchedEffect(profileId) {
@@ -119,6 +122,8 @@ fun ProfileEditorScreen(
                             else -> TextField(
                                 spec = spec,
                                 value = value,
+                                reference = reference[spec.dbColumn],
+                                scope = vm.scope,
                                 onValueChange = { vm.updateField(spec.dbColumn, it) },
                             )
                         }
@@ -186,6 +191,8 @@ private fun CategoryCard(
 private fun TextField(
     spec: FieldSpec,
     value: String,
+    reference: String?,
+    scope: ObservationScope,
     onValueChange: (String) -> Unit,
 ) {
     val keyboardType = when (spec.type) {
@@ -199,15 +206,41 @@ private fun TextField(
         if (spec.unit != null) append(" (${spec.unit})")
     }
 
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label) },
-        placeholder = { Text(spec.hint) },
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
+    // A spoofed value is only provable if it differs from what the device already reports. Flagging
+    // the collision at input time is the only point where the user can still act on it.
+    //
+    // Only meaningful against a REAL baseline: a debug build hooks itself, so there "reference" is
+    // already the spoofed value and a match means the hook WORKS — warning about it would be
+    // exactly backwards.
+    val collides = scope == ObservationScope.REAL_BASELINE && value.isNotBlank() &&
+        reference != null && VerificationEngine.valuesMatch(value, reference)
+
+    val referenceLabel = when (scope) {
+        ObservationScope.REAL_BASELINE -> "本机真实值"
+        ObservationScope.SELF_HOOKED -> "本机当前读到（调试构建已自我 hook，可能已是伪造值）"
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            // Empty means passthrough — the project's core invariant, previously stated only on the
+            // boolean dropdown, so text fields gave no hint that blank was a meaningful choice.
+            placeholder = { Text(if (spec.hint.isBlank()) "留空 = 透传真实值" else "${spec.hint}（留空 = 透传）") },
+            isError = collides,
+            supportingText = {
+                when {
+                    collides -> Text("与$referenceLabel 相同 — 即使生效也无法区分，建议换一个明显不同的值")
+                    reference != null -> Text("$referenceLabel：$reference")
+                    else -> Text("留空 = 透传真实值")
+                }
+            },
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

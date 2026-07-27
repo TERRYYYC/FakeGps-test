@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -45,6 +46,7 @@ fun CollectionScreen(
     vm: CollectionViewModel = viewModel(),
 ) {
     val profiles by vm.profiles.collectAsState()
+    val effectiveId by vm.effectiveProfileId.collectAsState()
     var showClearDialog by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<ProfileSummary?>(null) }
 
@@ -84,9 +86,19 @@ fun CollectionScreen(
                     .padding(horizontal = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                item(key = "__effective_hint") {
+                    Text(
+                        text = "只有标记「生效中」的档案会被 hook 使用（最早创建的那条）。" +
+                            "编辑其它档案不会改变伪装结果。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
                 items(profiles, key = { it.id }) { profile ->
                     ProfileCard(
                         profile = profile,
+                        isEffective = profile.id == effectiveId,
                         onClick = {
                             onEditProfile(
                                 profile.id,
@@ -141,13 +153,15 @@ fun CollectionScreen(
 @Composable
 private fun ProfileCard(
     profile: ProfileSummary,
+    isEffective: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Card(
         onClick = onClick,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            containerColor = if (isEffective) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surfaceContainerLow,
         ),
     ) {
         Row(
@@ -168,10 +182,20 @@ private fun ProfileCard(
                     tint = MaterialTheme.colorScheme.primary,
                 )
                 Column {
-                    Text(
-                        text = profile.addname ?: "未命名",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = profile.addname ?: "未命名",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        if (isEffective) {
+                            Badge(containerColor = MaterialTheme.colorScheme.primary) {
+                                Text("生效中")
+                            }
+                        }
+                    }
                     val coords = buildString {
                         profile.latitude?.let { append("%.4f".format(it)) }
                         append(", ")
