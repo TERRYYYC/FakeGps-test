@@ -14,12 +14,13 @@ class HookAcceptancePayloadTest {
         val raw = """
             {
               "schemaVersion": 2,
+              "acceptanceSessionId": "acceptance-123",
               "mode": "always_on",
               "fields": {
                 "mcc": 310,
                 "mnc": 260,
                 "nci": 68719400000,
-                "operator_name": "HOOK-LAB",
+                "operator_name": "HOOK-SESSION:acceptance-123",
                 "is_roaming": 0
               }
             }
@@ -30,11 +31,60 @@ class HookAcceptancePayloadTest {
         val fields = root.getValue("fields").jsonObject
 
         assertEquals("acceptance-123", validated.sessionId)
+        assertEquals("HOOK-SESSION:acceptance-123", validated.publicMarker)
+        assertEquals(
+            "acceptance-123",
+            root.getValue("acceptanceSessionId").jsonPrimitive.content,
+        )
         assertEquals(2, root.getValue("schemaVersion").jsonPrimitive.content.toInt())
         assertEquals("always_on", root.getValue("mode").jsonPrimitive.content)
         assertEquals(68_719_400_000L, fields.getValue("nci").jsonPrimitive.content.toLong())
-        assertEquals("HOOK-LAB", fields.getValue("operator_name").jsonPrimitive.content)
+        assertEquals(
+            "HOOK-SESSION:acceptance-123",
+            fields.getValue("operator_name").jsonPrimitive.content,
+        )
         assertEquals(0, fields.getValue("is_roaming").jsonPrimitive.content.toInt())
+        assertEquals(true, validated.isLoadedByPublicMarker("HOOK-SESSION:acceptance-123"))
+        assertEquals(false, validated.isLoadedByPublicMarker("HOOK-SESSION:acceptance-old"))
+    }
+
+    @Test
+    fun rejectsEnvelopeOrPublicMarkerFromAnotherSession() {
+        val wrongEnvelopeSession = assertThrows(IllegalArgumentException::class.java) {
+            HookAcceptancePayload.validate(
+                "acceptance-123",
+                """
+                    {
+                      "schemaVersion": 2,
+                      "acceptanceSessionId": "acceptance-old",
+                      "mode": "always_on",
+                      "fields": {"operator_name": "HOOK-SESSION:acceptance-old", "tac": 4095}
+                    }
+                """.trimIndent(),
+            )
+        }
+        assertEquals(
+            "acceptanceSessionId must match the activity session",
+            wrongEnvelopeSession.message,
+        )
+
+        val wrongPublicMarker = assertThrows(IllegalArgumentException::class.java) {
+            HookAcceptancePayload.validate(
+                "acceptance-123",
+                """
+                    {
+                      "schemaVersion": 2,
+                      "acceptanceSessionId": "acceptance-123",
+                      "mode": "always_on",
+                      "fields": {"operator_name": "HOOK-LAB", "tac": 4095}
+                    }
+                """.trimIndent(),
+            )
+        }
+        assertEquals(
+            "operator_name must carry the acceptance session marker",
+            wrongPublicMarker.message,
+        )
     }
 
     @Test
@@ -66,13 +116,13 @@ class HookAcceptancePayloadTest {
         assertThrows(IllegalArgumentException::class.java) {
             HookAcceptancePayload.validate(
                 "acceptance-123",
-                """{"schemaVersion":2,"mode":"always_on","fields":[]}""",
+                """{"schemaVersion":2,"acceptanceSessionId":"acceptance-123","mode":"always_on","fields":[]}""",
             )
         }
         assertThrows(IllegalArgumentException::class.java) {
             HookAcceptancePayload.validate(
                 "acceptance-123",
-                """{"schemaVersion":2,"mode":"always_on","fields":{"tac":{"value":4095}}}""",
+                """{"schemaVersion":2,"acceptanceSessionId":"acceptance-123","mode":"always_on","fields":{"operator_name":"HOOK-SESSION:acceptance-123","tac":{"value":4095}}}""",
             )
         }
     }
@@ -82,7 +132,7 @@ class HookAcceptancePayloadTest {
         val failure = assertThrows(IllegalArgumentException::class.java) {
             HookAcceptancePayload.validate(
                 "acceptance-123",
-                """{"schemaVersion":2,"mode":"always_on","fields":{"wifi_ssid":"not-cellular"}}""",
+                """{"schemaVersion":2,"acceptanceSessionId":"acceptance-123","mode":"always_on","fields":{"operator_name":"HOOK-SESSION:acceptance-123","wifi_ssid":"not-cellular"}}""",
             )
         }
 
@@ -96,8 +146,10 @@ class HookAcceptancePayloadTest {
             """
                 {
                   "schemaVersion": 2,
+                  "acceptanceSessionId": "acceptance-neighbors",
                   "mode": "always_on",
                   "fields": {
+                    "operator_name": "HOOK-SESSION:acceptance-neighbors",
                     "signal_fluctuation_enabled": 0,
                     "signal_fluctuation_range_db": 6,
                     "neighbor_cells_json": "[{\"type\":\"gsm\",\"cid\":2222}]"
@@ -107,7 +159,7 @@ class HookAcceptancePayloadTest {
         )
 
         assertEquals(
-            """{"schemaVersion":2,"mode":"always_on","fields":{"signal_fluctuation_enabled":0,"signal_fluctuation_range_db":6,"neighbor_cells_json":"[{\"type\":\"gsm\",\"cid\":2222}]"}}""",
+            """{"schemaVersion":2,"acceptanceSessionId":"acceptance-neighbors","mode":"always_on","fields":{"operator_name":"HOOK-SESSION:acceptance-neighbors","signal_fluctuation_enabled":0,"signal_fluctuation_range_db":6,"neighbor_cells_json":"[{\"type\":\"gsm\",\"cid\":2222}]"}}""",
             validated.json,
         )
     }

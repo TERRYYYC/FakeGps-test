@@ -5,6 +5,8 @@ from pathlib import Path
 
 from scripts import cellular_acceptance_matrix as matrix
 
+SESSION_ID = "acceptance-123"
+
 
 class CellularAcceptanceMatrixTest(unittest.TestCase):
 
@@ -27,25 +29,30 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
         )
 
     def test_payload_is_canonical_schema_v2_and_preserves_nr_long_width(self):
-        payload = matrix.payload_for("full-rscp")
+        payload = matrix.payload_for("full-rscp", SESSION_ID)
 
         self.assertEqual(
-            ["fields", "mode", "schemaVersion"],
+            ["acceptanceSessionId", "fields", "mode", "schemaVersion"],
             sorted(payload),
         )
         self.assertEqual(2, payload["schemaVersion"])
+        self.assertEqual(SESSION_ID, payload["acceptanceSessionId"])
         self.assertEqual("always_on", payload["mode"])
         self.assertEqual(68_719_400_000, payload["fields"]["nci"])
+        self.assertEqual(
+            "HOOK-SESSION:acceptance-123",
+            payload["fields"]["operator_name"],
+        )
         self.assertIs(type(payload["fields"]["nci"]), int)
         self.assertEqual(
             payload,
             json.loads(
-                matrix.emit_json("full-rscp", matrix.OUTPUT_PAYLOAD),
+                matrix.emit_json("full-rscp", matrix.OUTPUT_PAYLOAD, SESSION_ID),
             ),
         )
 
     def test_expected_paths_cover_every_delivery_surface_and_exact_type(self):
-        expected = matrix.expected_for("full-rscp")
+        expected = matrix.expected_for("full-rscp", SESSION_ID)
 
         for delivery in ("sync", "request"):
             for radio in ("lte", "gsm", "wcdma", "nr"):
@@ -109,9 +116,22 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
                 "allowed": [-104, -103, -102, -101, -100, -99, -98],
                 "count": 256,
             },
-            matrix.expected_for("fluctuation-enabled")[
+            matrix.expected_for("fluctuation-enabled", SESSION_ID)[
                 "cellInfo.sync.lte.rsrpSamples"
             ],
+        )
+
+    def test_each_session_has_a_distinct_publicly_observed_marker(self):
+        current = matrix.expected_for("fluctuation-enabled", SESSION_ID)
+        stale = matrix.expected_for("fluctuation-enabled", "acceptance-old")
+
+        self.assertEqual(
+            "HOOK-SESSION:acceptance-123",
+            current["telephony.networkOperatorName"],
+        )
+        self.assertNotEqual(
+            current["telephony.networkOperatorName"],
+            stale["telephony.networkOperatorName"],
         )
 
     def test_api_33_gate_belongs_only_to_fixed_matrix_preflight(self):
@@ -127,8 +147,8 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
         )
 
     def test_cli_emits_deterministic_json_and_rejects_unknown_scenarios(self):
-        first = matrix.emit_json("full-rssi", matrix.OUTPUT_EXPECTED)
-        second = matrix.emit_json("full-rssi", matrix.OUTPUT_EXPECTED)
+        first = matrix.emit_json("full-rssi", matrix.OUTPUT_EXPECTED, SESSION_ID)
+        second = matrix.emit_json("full-rssi", matrix.OUTPUT_EXPECTED, SESSION_ID)
         self.assertEqual(first, second)
         self.assertEqual(
             -85,
@@ -139,7 +159,13 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
         self.assertEqual(
             2,
             matrix.main(
-                ["missing", "--output", matrix.OUTPUT_PAYLOAD],
+                [
+                    "missing",
+                    "--output",
+                    matrix.OUTPUT_PAYLOAD,
+                    "--session-id",
+                    SESSION_ID,
+                ],
                 emit=lines.append,
             ),
         )

@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.telephony.TelephonyManager
 import android.util.Base64
 import android.util.Log
 import kotlinx.serialization.json.buildJsonObject
@@ -27,6 +28,7 @@ class HookAcceptanceActivity : Activity() {
     private var sessionId = "unparsed"
     private var restoreAttempted = false
     private var recoveryPrepared = false
+    private var validatedPayload: HookAcceptancePayload.Validated? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,6 +45,7 @@ class HookAcceptanceActivity : Activity() {
                 StandardCharsets.UTF_8,
             )
             val payload = HookAcceptancePayload.validate(sessionId, raw)
+            validatedPayload = payload
             check(HookAcceptanceRecovery.recoverIfPending(applicationContext)) {
                 "could not recover a previous interrupted acceptance transaction"
             }
@@ -79,6 +82,16 @@ class HookAcceptanceActivity : Activity() {
 
     private fun runProbeAndRestore() {
         try {
+            val payload = checkNotNull(validatedPayload) {
+                "validated acceptance payload missing"
+            }
+            val telephony =
+                getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            val observedMarker = telephony.networkOperatorName
+            check(payload.isLoadedByPublicMarker(observedMarker)) {
+                "hook did not load acceptance session marker: " +
+                    "expected=${payload.publicMarker} observed=$observedMarker"
+            }
             state = HookAcceptanceStateMachine.transition(state, Event.PROBE_STARTED)
             logState("probing")
             val report = HookProbe.run(this, sessionId)

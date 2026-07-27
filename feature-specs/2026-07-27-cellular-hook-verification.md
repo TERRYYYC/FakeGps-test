@@ -23,9 +23,11 @@ expanded public-API probe, and restores the real database-backed payload in `fin
 override, a debug-only recovery record durably stores the previous transport payload; the next
 debug process launch republishes it if the acceptance process was killed. A host-side verdict
 module compares exact configured matrices and an enabled-fluctuation behavior scenario with the
-probe JSON. The shell harness owns an additional idempotent restore path for process/signal
-failures. Production builds contain no acceptance component, and the Room database is never
-written by the test.
+probe JSON. Each transport envelope carries a unique session ID and exposes the same ID through a
+session-specific operator-name marker; the activity requires that public getter to match before
+starting the full probe. The shell harness owns an additional idempotent restore path for
+process/signal failures. Production builds contain no acceptance component, and the Room database
+is never written by the test.
 
 **Tech Stack:** Kotlin, Java/Xposed, Android public telephony APIs, Gradle/JUnit 4, Python 3
 `unittest`, Bash/ADB, moto g54 5G on Android 15.
@@ -34,8 +36,9 @@ written by the test.
 
 The work is complete only when all of the following are true:
 
-1. One unattended command installs the debug APK, injects a distinct cellular matrix, reads it back
-   through public Android APIs, restores the real config, and exits non-zero on any mismatch.
+1. One unattended command installs the debug APK, injects a distinct cellular matrix with a
+   per-run public marker, reads it back through public Android APIs, restores the real config, and
+   exits non-zero on any mismatch or stale hook snapshot.
 2. The matrix verifies synchronous and callback paths for LTE, GSM, WCDMA, NR, carrier/network,
    service state, display info, and physical channel config on API 35.
 3. Every configured and API-supported field has an exact `verified` verdict. `missing`,
@@ -149,9 +152,9 @@ third-party app can receive a framework event Android does not allow it to regis
 
 | Current state | Event | Next state | Required effect |
 |---|---|---|---|
-| `idle` | valid debug intent | `published` | First durably record the current transport payload in debug-private recovery state, then publish the schema-v2 test payload with session ID; do not touch Room |
+| `idle` | valid debug intent | `published` | First durably record the current transport payload in debug-private recovery state, then publish the schema-v2 test payload with top-level session ID and session-specific operator marker; do not touch Room |
 | `idle` | invalid/missing payload | `aborted` | Log validation error; do not alter transport |
-| `published` | hook refresh delay elapsed | `probing` | Probe only if session ID still matches |
+| `published` | hook refresh delay elapsed | `probing` | Read the public network-operator getter and probe only if it exposes this run's session marker |
 | `probing` | success or exception | `restoring` | Emit exactly one terminal probe/error record |
 | `restoring` | database-backed sync commits and recovery record clears | `restored` | Log restore marker; finish activity |
 | any nonterminal | shell exit/signal/timeout | `restoring` | Host trap launches the normal activity to republish saved config |
@@ -162,7 +165,8 @@ Invariants:
 - The acceptance path never inserts, updates, deletes, copies, or replaces `fakegps.db`, its WAL,
   or any profile row.
 - The test payload exists only in the debug XSharedPreferences transport and carries a unique
-  session ID.
+  `acceptanceSessionId`. Its `operator_name` contains a derived public marker; a stale loaded
+  snapshot from an otherwise identical matrix cannot satisfy the current run.
 - Restore is idempotent: activity `finally`, next-launch durable recovery, and host trap may all
   run. The recovery record clears only after the previous payload publish commits.
 - A stale probe line from another session cannot satisfy the current run.
@@ -182,7 +186,9 @@ Invariants:
 
 - Reject missing/blank session IDs, non-object `fields`, unsupported schema versions, and keys
   outside the profile field map.
-- Prove the canonical envelope is `{schemaVersion:2, mode:"always_on", fields:{...}}`.
+- Prove the canonical envelope is
+  `{schemaVersion:2, acceptanceSessionId:"...", mode:"always_on", fields:{...}}`.
+- Reject an envelope session or public operator marker that differs from the activity session.
 - Prove numeric values retain integer/long width (`nci` must not round through `Double`).
 
 Run:
@@ -218,6 +224,9 @@ Expected: new tests fail because the payload builder does not exist.
 - Accept base64url UTF-8 JSON and session ID extras.
 - Publish with `commit()`, wait for the existing 3-second hook refresh, invoke the probe, then call
   `ConfigPrefsSync.sync(applicationContext)` in `finally`.
+- Before entering `probing`, require `TelephonyManager.getNetworkOperatorName()` to equal the
+  session-specific marker carried by the published payload. A stale hook snapshot fails and
+  restores without emitting a normal report.
 - Before publishing, atomically persist the current transport payload in a debug-only recovery
   record. Recover any pending record from the debug `Application` before ordinary app startup, and
   clear it only after restore publication commits.

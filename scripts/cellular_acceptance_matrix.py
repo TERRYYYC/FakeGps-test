@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Set, Tuple
@@ -7,6 +8,8 @@ from typing import Any, Dict, Iterable, Mapping, Set, Tuple
 
 OUTPUT_PAYLOAD = "payload"
 OUTPUT_EXPECTED = "expected"
+SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,80}")
+PUBLIC_MARKER_PREFIX = "HOOK-SESSION:"
 
 
 @dataclass(frozen=True)
@@ -136,6 +139,7 @@ _SCENARIOS = {
             "signal_fluctuation_enabled": 1,
             "signal_fluctuation_range_db": 6,
             "network_type": 20,
+            "operator_name": "HOOK-LAB",
             "nrarfcn": 636_666,
             "band": 78,
             "channel_bandwidth": 40_000,
@@ -163,16 +167,18 @@ def get_scenario(name: str) -> Scenario:
         )
 
 
-def payload_for(name: str) -> Dict[str, Any]:
+def payload_for(name: str, session_id: str) -> Dict[str, Any]:
+    scenario = _scenario_for_session(name, session_id)
     return {
         "schemaVersion": 2,
+        "acceptanceSessionId": session_id,
         "mode": "always_on",
-        "fields": dict(get_scenario(name).fields),
+        "fields": dict(scenario.fields),
     }
 
 
-def expected_for(name: str) -> Dict[str, Any]:
-    expected, _ = _build_expected(get_scenario(name))
+def expected_for(name: str, session_id: str) -> Dict[str, Any]:
+    expected, _ = _build_expected(_scenario_for_session(name, session_id))
     return expected
 
 
@@ -181,11 +187,11 @@ def covered_profile_fields(name: str) -> Set[str]:
     return covered
 
 
-def emit_json(name: str, output: str) -> str:
+def emit_json(name: str, output: str, session_id: str) -> str:
     if output == OUTPUT_PAYLOAD:
-        value = payload_for(name)
+        value = payload_for(name, session_id)
     elif output == OUTPUT_EXPECTED:
-        value = expected_for(name)
+        value = expected_for(name, session_id)
     else:
         raise ValueError("unknown output {!r}".format(output))
     return json.dumps(
@@ -206,14 +212,28 @@ def main(argv=None, emit=print) -> int:
         choices=(OUTPUT_PAYLOAD, OUTPUT_EXPECTED),
         required=True,
     )
+    parser.add_argument("--session-id", required=True)
     try:
         args = parser.parse_args(argv)
-        rendered = emit_json(args.scenario, args.output)
+        rendered = emit_json(args.scenario, args.output, args.session_id)
     except ValueError as failure:
         emit("MATRIX_ERROR {}".format(failure))
         return 2
     emit(rendered)
     return 0
+
+
+def _scenario_for_session(name: str, session_id: str) -> Scenario:
+    if SESSION_ID_PATTERN.fullmatch(session_id) is None:
+        raise ValueError("invalid acceptance session id: {!r}".format(session_id))
+    scenario = get_scenario(name)
+    fields = dict(scenario.fields)
+    fields["operator_name"] = PUBLIC_MARKER_PREFIX + session_id
+    return Scenario(
+        name=scenario.name,
+        fields=fields,
+        fluctuation=scenario.fluctuation,
+    )
 
 
 def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
@@ -472,6 +492,11 @@ def _build_fluctuation_expected(
 
     add("cellInfo.requestCompleted", True)
     add("callback.completed", True)
+    add(
+        "telephony.networkOperatorName",
+        fields["operator_name"],
+        ("operator_name",),
+    )
     add(
         "callback.physicalChannelDelivery",
         "hook_replay_after_permission_denied",

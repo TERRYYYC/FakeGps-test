@@ -259,8 +259,12 @@ run_current_profile() {
 run_scenario() {
     scenario=$1
     session="acceptance-$(date +%s)-$$-$scenario"
-    payload=$("$PY" "$MATRIX_TOOL" "$scenario" --output payload) || return 2
-    expected=$("$PY" "$MATRIX_TOOL" "$scenario" --output expected) || return 2
+    payload=$(
+        "$PY" "$MATRIX_TOOL" "$scenario" --output payload --session-id "$session"
+    ) || return 2
+    expected=$(
+        "$PY" "$MATRIX_TOOL" "$scenario" --output expected --session-id "$session"
+    ) || return 2
     encoded=$(PAYLOAD="$payload" "$PY" -c \
         'import base64,os; print(base64.urlsafe_b64encode(os.environ["PAYLOAD"].encode()).decode().rstrip("="))')
     remote_report="/data/user/0/$PKG/cache/hook-acceptance-$session.json"
@@ -317,7 +321,9 @@ run_scenario() {
 
 verify_durable_recovery() {
     session="acceptance-recovery-$(date +%s)-$$"
-    payload=$("$PY" "$MATRIX_TOOL" full-rscp --output payload) || return 2
+    payload=$(
+        "$PY" "$MATRIX_TOOL" full-rscp --output payload --session-id "$session"
+    ) || return 2
     encoded=$(PAYLOAD="$payload" "$PY" -c \
         'import base64,os; print(base64.urlsafe_b64encode(os.environ["PAYLOAD"].encode()).decode().rstrip("="))')
 

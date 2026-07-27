@@ -11,6 +11,7 @@ import kotlinx.serialization.json.put
 
 internal object HookAcceptancePayload {
     private const val SCHEMA_VERSION = 2
+    private const val PUBLIC_MARKER_PREFIX = "HOOK-SESSION:"
     private val SESSION_ID = Regex("[A-Za-z0-9._-]{1,80}")
 
     private val ALLOWED_FIELDS = setOf(
@@ -75,8 +76,12 @@ internal object HookAcceptancePayload {
 
     data class Validated(
         val sessionId: String,
+        val publicMarker: String,
         val json: String,
-    )
+    ) {
+        fun isLoadedByPublicMarker(observed: String?): Boolean =
+            observed == publicMarker
+    }
 
     fun validate(sessionId: String, rawEnvelope: String): Validated {
         require(SESSION_ID.matches(sessionId)) {
@@ -90,6 +95,11 @@ internal object HookAcceptancePayload {
         }
         require(root["mode"]?.jsonPrimitive?.content == "always_on") {
             "mode must be always_on"
+        }
+        require(
+            (root["acceptanceSessionId"] as? JsonPrimitive)?.content == sessionId,
+        ) {
+            "acceptanceSessionId must match the activity session"
         }
 
         val fields = root["fields"] as? JsonObject
@@ -109,11 +119,23 @@ internal object HookAcceptancePayload {
             "acceptance fields must be non-null scalars: ${nonScalar.joinToString(",")}"
         }
 
+        val publicMarker = PUBLIC_MARKER_PREFIX + sessionId
+        require(
+            (fields["operator_name"] as? JsonPrimitive)?.content == publicMarker,
+        ) {
+            "operator_name must carry the acceptance session marker"
+        }
+
         val canonical = buildJsonObject {
             put("schemaVersion", SCHEMA_VERSION)
+            put("acceptanceSessionId", sessionId)
             put("mode", "always_on")
             put("fields", fields)
         }
-        return Validated(sessionId = sessionId, json = canonical.toString())
+        return Validated(
+            sessionId = sessionId,
+            publicMarker = publicMarker,
+            json = canonical.toString(),
+        )
     }
 }

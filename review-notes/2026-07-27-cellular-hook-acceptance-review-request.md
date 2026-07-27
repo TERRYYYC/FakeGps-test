@@ -23,7 +23,9 @@ info, and physical-channel getters across synchronous, request, and callback pat
 enabled-fluctuation scenario proves both signal controls through complete observed RSRP ranges on
 all three cell-info delivery paths. Before each override, a durable debug recovery record protects
 the previous transport payload; every terminal path or next process launch republishes it. The
-saved profile database is never written.
+published envelope and public network-operator getter also carry a per-run session marker, so a
+stale hook snapshot cannot pass by matching an otherwise identical matrix. The saved profile
+database is never written.
 
 ## Why
 
@@ -58,6 +60,9 @@ stale sessions, probe errors, restore failures, or database changes all fail the
 - A debug-only recovery record is committed before override publication and cleared only after
   restore publication commits. The device harness verifies process death by SIGKILL and recovery
   on the next debug process launch.
+- The payload's `acceptanceSessionId` must match the intent, `operator_name` carries a derived
+  public marker, and the activity checks `getNetworkOperatorName()` before the full probe. The
+  host verdict also expects that marker, closing stale-refresh false greens.
 - `ConfigPrefsSync.sync()` reports success only when the world-readable path commits. A private
   fallback may preserve local state, but it cannot be consumed by target-process
   `XSharedPreferences` and therefore fails the cross-process publication contract.
@@ -118,15 +123,15 @@ git checkout --detach origin/feat/cellular-hook-acceptance
 
 ```bash
 ./gradlew clean testDebugUnitTest assembleDebug assembleRelease lintVitalRelease
-# BUILD SUCCESSFUL; 64 JVM tests, 0 failures
+# BUILD SUCCESSFUL; 65 JVM tests, 0 failures
 
 python3 -m unittest scripts.test_cellular_acceptance_matrix scripts.test_hook_verdict
-# 12 tests, 0 failures
+# 13 tests, 0 failures
 
 ./scripts/test-hook.sh --cellular-matrix
 # durable SIGKILL recovery verified
 # two exact scenarios × 274 assertions = 548/548 verified
-# enabled-fluctuation scenario = 20/20 verified plus 3 × 256 complete-range samples
+# enabled-fluctuation scenario = 21/21 verified plus 3 × 256 complete-range samples
 # database unchanged; database-backed safe-zone fingerprint restored
 ```
 
