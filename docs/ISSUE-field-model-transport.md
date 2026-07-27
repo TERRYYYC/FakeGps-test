@@ -103,32 +103,28 @@ hook 仅作用于**应用进程内的读取类 API**（`getAllCellInfo` / `getNe
 
 ---
 
-## 遗留调查结论：`getAllCellInfo()` 空列表 = 设备/环境层，非本项目 bug（2026-07-27, opus-5）
+## 遗留调查更正：空列表来自锁屏 AppOps，不是设备/ROM 限制（2026-07-27）
 
-kimi 复验放行时列的遗留项，已用排除法穷尽定位。**结论：与本项目 hook 无关，是设备/ROM 层现象。**
+上一版把 `getAllCellInfo()` 空列表归因为“设备/ROM 不向此 App 提供实时 modem
+数据”。该结论遗漏了 Android 的 AppOps 前台门控，已被解锁对照实验推翻。
 
-### 关键事实
-- 系统层（`dumpsys telephony.registry`）**有真实 LTE 小区** `mCellInfo=[CellInfoLte...]`
-- 但 App 进程调 `getAllCellInfo()` **原始返回值就是空**（在 hook 改动它之前，`raw=0 items`）
-- 差异根源：registry 是**缓存快照**；App 的 `getAllCellInfo()` 是**实时向 modem 请求**——这台设备/ROM 不给此 App 进程实时 modem 数据
+### 更正后的证据链
 
-### 已推翻的 8 个假设（逐一实测）
-| # | 假设 | 排除依据 |
-|---|---|---|
-| 1 | 节流缓存 | `requestCellInfoUpdate()` 强制刷新后仍为 0，无 error |
-| 2 | ACCESS_FINE_LOCATION 缺失 | granted=true |
-| 3 | ACCESS_COARSE_LOCATION 缺失 | granted=true |
-| 4 | 位置总开关关闭 | `location_mode=3`, enabled=true |
-| 5 | 前台限制 | 探针跑时 `topResumedActivity=name.caiyao.fakegps` |
-| 6 | subscription hook 干扰 | 源码核实：仅双卡 `size>1` 时 trim，单卡不触发，有守卫 |
-| 7 | **telephony hook 注册副作用** | **二分实测**：全禁用 telephony hook 注册后仍为 0 |
-| 8 | READ_PHONE_STATE 缺失 | granted=true，授予后仍为 0 |
+- PackageManager 显示 `ACCESS_FINE_LOCATION: granted=true`，但 AppOps 是
+  `FINE_LOCATION: foreground`；锁屏/Dozing 时 logcat 明确记录
+  `LocationAccessPolicy ... app-ops permission is specifically denied`
+- 同一设备、同一进程执行 `KEYCODE_WAKEUP + wm dismiss-keyguard` 后立即读到 7 个真实小区
+- 因此 `granted=true` 不等于调用时 AppOps 放行；原来的 8 项排除法漏查了这层
 
-### 对产品的影响（有限）
-- **fail-safe 正确兜底**：读不到基线 → 整组透传，不编造矛盾小区（安全）
-- B3 逐字段透传的前提（能读到真实基线）在**能响应 getAllCellInfo 的目标 App**（如前台使用的 Maps）里成立
-- **我方探针 App 读不到，是探针 App 的设备层局限，不是产品 bug**——不能用探针 App 验证蜂窝基线透传
+测试脚本现在把“设备已唤醒且 keyguard 未显示”作为蜂窝验证前置条件，避免再把权限时态
+误判为 ROM 行为。
 
-### 待办（如需继续，非阻塞）
-- 换一台设备/ROM 验证 getAllCellInfo 是否可用（区分是否 MediaTek MT6855/RETEU 特定）
-- 或在真实目标 App（Maps）进程内观察基线是否可取（需目标 App 侧探针）
+### 随后暴露的真实实现缺陷
+
+1. Android 15 上不存在代码原先调用的 6 参数 `CellIdentityLte` 构造函数，异常被吞后
+   会把真实小区列表替换为空列表。
+2. `CellBaseline.from()` 通过已经被本模块 hook 的 getter 读取所谓“真实值”，导致
+   `tac`、信号强度等基线被当前配置/波动逻辑污染。
+
+修复以设备运行时实际存在的构造函数形状为准，并在基线提取的同步调用栈内临时旁路
+CellInfo/CellIdentity/CellSignalStrength getter hook；离开提取栈后立即恢复正常伪造。

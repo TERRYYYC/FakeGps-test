@@ -26,6 +26,24 @@ echo "════════════════════════�
 echo " FakeGps hook end-to-end test"
 echo "════════════════════════════════════════════════════════════════"
 
+# Android grants FINE_LOCATION to this app in AppOps "foreground" mode. When the device is locked
+# or Dozing, the permission is therefore denied at the operation layer even though
+# `dumpsys package` still says granted=true; getAllCellInfo() then returns an empty list without an
+# exception. Wake and dismiss the test keyguard before collecting a cellular baseline, otherwise
+# the harness can misdiagnose an AppOps denial as a hook/ROM failure.
+adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
+adb shell wm dismiss-keyguard >/dev/null 2>&1
+adb shell input keyevent 82 >/dev/null 2>&1
+sleep 1
+WAKEFULNESS=$(adb shell dumpsys power 2>/dev/null | grep -Eo 'mWakefulness=[A-Za-z]+' | head -1)
+KEYGUARD=$(adb shell dumpsys window policy 2>/dev/null |
+    sed -n '/KeyguardStateMonitor/,+8p' | grep -Eo 'mIsShowing=(true|false)' | head -1)
+if [ "$WAKEFULNESS" != "mWakefulness=Awake" ] || [ "$KEYGUARD" != "mIsShowing=false" ]; then
+    echo "❌ device must be awake and unlocked for foreground AppOps: $WAKEFULNESS $KEYGUARD"
+    exit 2
+fi
+echo "[preflight] $WAKEFULNESS, $KEYGUARD"
+
 # ── [DB] ground truth: the configured profile (first row) ─────────────────────
 # Queried through `su`: the provider is exported=false (review FC-6), so the plain shell uid can no
 # longer read it — which is the point, since any app being tested could otherwise read the profile
@@ -151,7 +169,7 @@ if unseen:
           "fail-safe, or the API is unavailable): %s" % ", ".join(unseen))
 if not broken and not unseen and configured > 0:
     print("   🎉 all configured fields spoofed end-to-end")
-sys.exit(1 if broken else 0)
+sys.exit(1 if broken or unseen else 0)
 PYEOF
 RC=$?
 echo "════════════════════════════════════════════════════════════════"
