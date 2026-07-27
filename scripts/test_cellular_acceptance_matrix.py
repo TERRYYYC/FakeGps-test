@@ -146,6 +146,39 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
             matrix_preflight,
         )
 
+    def test_current_profile_waits_for_the_asynchronous_probe_result(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        current_profile = self._shell_function(script, "run_current_profile")
+
+        self.assertNotIn("sleep 11", current_profile)
+        self.assertIn('while [ "$attempt" -lt 25 ]', current_profile)
+        self.assertIn('if [ -n "$probe" ]; then', current_profile)
+
+    def test_release_probe_controller_is_a_noop_without_probe_references(self):
+        root = Path(__file__).resolve().parents[1]
+        compose = (
+            root
+            / "app/src/main/java/name/caiyao/fakegps/ui/ComposeActivity.kt"
+        ).read_text(encoding="utf-8")
+        release_controller_path = (
+            root
+            / "app/src/release/java/name/caiyao/fakegps/probe/DebugHookProbeController.kt"
+        )
+        debug_controller_path = (
+            root
+            / "app/src/debug/java/name/caiyao/fakegps/probe/DebugHookProbeController.kt"
+        )
+        self.assertTrue(release_controller_path.exists())
+        self.assertTrue(debug_controller_path.exists())
+        release_controller = release_controller_path.read_text(encoding="utf-8")
+        debug_controller = debug_controller_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("HookProbe.run", compose)
+        self.assertNotIn("HookProbe.run", release_controller)
+        self.assertNotIn("HookProbeRunner", release_controller)
+        self.assertIn("HookProbeRunner", debug_controller)
+        self.assertIn("HookProbe.run", debug_controller)
+
     def test_cli_emits_deterministic_json_and_rejects_unknown_scenarios(self):
         first = matrix.emit_json("full-rssi", matrix.OUTPUT_EXPECTED, SESSION_ID)
         second = matrix.emit_json("full-rssi", matrix.OUTPUT_EXPECTED, SESSION_ID)

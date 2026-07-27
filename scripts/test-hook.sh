@@ -239,11 +239,20 @@ run_current_profile() {
     adb logcat -c >/dev/null 2>&1
     adb shell am start -W -n "$ACT" >/dev/null 2>&1 ||
         { echo "HARNESS_ERROR normal activity failed to start" >&2; return 2; }
-    sleep 11
 
+    attempt=0
+    probe=""
+    while [ "$attempt" -lt 25 ]; do
+        probe=$(adb logcat -d -v brief -s FakeGPSProbe:W '*:S' \
+            2>/dev/null | tail -1)
+        if [ -n "$probe" ]; then
+            break
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
     diag=$(adb logcat -d 2>/dev/null |
         grep -F 'FakeGPS: [DIAG] prefs loaded fields=' | tail -1)
-    probe=$(adb logcat -d -v brief -s FakeGPSProbe:W '*:S' 2>/dev/null | tail -1)
     [ -n "$diag" ] ||
         { echo "HARNESS_ERROR no Xposed prefs-loaded diagnostic" >&2; return 1; }
     [ -n "$probe" ] ||

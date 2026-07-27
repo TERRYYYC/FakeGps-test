@@ -14,6 +14,7 @@ import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.probe.HookAcceptanceStateMachine.Event
 import name.caiyao.fakegps.probe.HookAcceptanceStateMachine.State
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.Executor
 
 /**
  * Debug-only acceptance entry point.
@@ -24,6 +25,10 @@ import java.nio.charset.StandardCharsets
  * mutated by this activity.
  */
 class HookAcceptanceActivity : Activity() {
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val probeRunner = HookProbeRunner(
+        callbackExecutor = Executor(mainHandler::post),
+    )
     private var state = State.IDLE
     private var sessionId = "unparsed"
     private var restoreAttempted = false
@@ -61,7 +66,7 @@ class HookAcceptanceActivity : Activity() {
                 logState("recovery_test_armed")
                 return
             }
-            Handler(Looper.getMainLooper()).postDelayed(
+            mainHandler.postDelayed(
                 { runProbeAndRestore() },
                 PROBE_DELAY_MS,
             )
@@ -94,13 +99,24 @@ class HookAcceptanceActivity : Activity() {
             }
             state = HookAcceptanceStateMachine.transition(state, Event.PROBE_STARTED)
             logState("probing")
-            val report = HookProbe.run(this, sessionId)
-            val resultFile = cacheDir.resolve("hook-acceptance-$sessionId.json")
-            resultFile.writeText(report.toString(), StandardCharsets.UTF_8)
-            logState("report_ready", resultPath = resultFile.absolutePath)
+            val probeSessionId = sessionId
+            probeRunner.submit(
+                task = {
+                    val report = HookProbe.run(applicationContext, probeSessionId)
+                    val resultFile = cacheDir.resolve("hook-acceptance-$probeSessionId.json")
+                    resultFile.writeText(report.toString(), StandardCharsets.UTF_8)
+                    resultFile.absolutePath
+                },
+                completion = { result ->
+                    result.fold(
+                        onSuccess = { logState("report_ready", resultPath = it) },
+                        onFailure = { logState("probe_failed", it) },
+                    )
+                    restoreAndFinish()
+                },
+            )
         } catch (failure: Throwable) {
             logState("probe_failed", failure)
-        } finally {
             restoreAndFinish()
         }
     }
@@ -136,6 +152,8 @@ class HookAcceptanceActivity : Activity() {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
+        probeRunner.close()
         if (HookAcceptanceStateMachine.requiresRestore(state) && !restoreAttempted) {
             restoreAndFinish()
         }

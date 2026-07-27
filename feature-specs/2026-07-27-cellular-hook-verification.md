@@ -238,7 +238,11 @@ Expected: new tests fail because the payload builder does not exist.
 **Files:**
 
 - Modify: `app/src/main/java/name/caiyao/fakegps/probe/HookProbe.kt`
+- Create: `app/src/debug/java/name/caiyao/fakegps/probe/HookProbeRunner.kt`
+- Create: debug/release variants of
+  `name/caiyao/fakegps/probe/DebugHookProbeController.kt`
 - Create: `app/src/test/java/name/caiyao/fakegps/probe/ProbeFieldContractTest.kt`
+- Create: `app/src/test/java/name/caiyao/fakegps/probe/HookProbeRunnerTest.kt`
 
 **Red:**
 
@@ -251,6 +255,8 @@ Expected: new tests fail because the payload builder does not exist.
 - Always exercise both cached `allCellInfo` and `requestCellInfoUpdate`.
 - Register a composite `TelephonyCallback` for service state, display info, physical channel, and
   cell info; wait with a bounded latch and unregister in `finally`.
+- Dispatch the blocking probe on a lifecycle-owned worker; route result/state transitions back
+  through the activity main executor and suppress queued completion after destruction.
 - Include API level, session ID, errors, and callback timeouts in the JSON.
 - Shut down executors so the probe cannot leak threads.
 

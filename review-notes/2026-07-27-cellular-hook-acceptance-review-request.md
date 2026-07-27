@@ -63,6 +63,12 @@ stale sessions, probe errors, restore failures, or database changes all fail the
 - The payload's `acceptanceSessionId` must match the intent, `operator_name` carries a derived
   public marker, and the activity checks `getNetworkOperatorName()` before the full probe. The
   host verdict also expects that marker, closing stale-refresh false greens.
+- `HookProbe` can wait for multiple framework callbacks, so both debug entry points dispatch it on
+  a lifecycle-owned worker. Only completion, acceptance state transitions, restore, and finish are
+  marshalled through the main executor; destruction cancels pending work and suppresses a queued
+  completion. The normal activity reaches that code through a debug-source-set controller with a
+  release no-op counterpart, keeping probe code out of release DEX. The current-profile harness
+  polls for the asynchronous result instead of assuming an 11-second fixed deadline.
 - `ConfigPrefsSync.sync()` reports success only when the world-readable path commits. A private
   fallback may preserve local state, but it cannot be consumed by target-process
   `XSharedPreferences` and therefore fails the cross-process publication contract.
@@ -123,11 +129,13 @@ git checkout --detach origin/feat/cellular-hook-acceptance
 
 ```bash
 ./gradlew clean testDebugUnitTest assembleDebug assembleRelease lintVitalRelease
-# BUILD SUCCESSFUL; 65 JVM tests, 0 failures
+# BUILD SUCCESSFUL; 67 JVM tests, 0 failures
 
 python3 -m unittest scripts.test_cellular_acceptance_matrix scripts.test_hook_verdict
-# 13 tests, 0 failures
+# 15 tests, 0 failures
 
+./scripts/test-hook.sh --current-profile
+# asynchronous public-API diagnostic observed on API 35
 ./scripts/test-hook.sh --cellular-matrix
 # durable SIGKILL recovery verified
 # two exact scenarios × 274 assertions = 548/548 verified
