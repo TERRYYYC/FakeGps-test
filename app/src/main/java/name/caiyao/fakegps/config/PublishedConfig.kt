@@ -22,6 +22,15 @@ data class PublishedConfig(
     val schemaVersion: Int,
     val mode: String,
     val fields: Map<String, String>,
+    /**
+     * Whether the payload carried a `fields` object at all.
+     *
+     * Absent is NOT the same as empty. MainHook treats a v2-valid payload with no `fields` as
+     * structurally incomplete and keeps its last-known-good Snapshot — it goes on spoofing from a
+     * config this payload does not describe. Collapsing the two would make the UI announce
+     * "没有配置、全部透传" while the hook is actively spoofing.
+     */
+    val fieldsPresent: Boolean = true,
     val activeHourStart: Int? = null,
     val activeHourEnd: Int? = null,
 ) {
@@ -44,8 +53,9 @@ data class PublishedConfig(
             if (text.isNullOrBlank()) return null
             val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
 
+            val fieldsObject = root["fields"] as? JsonObject
             val fields = mutableMapOf<String, String>()
-            (root["fields"] as? JsonObject)?.forEach { (key, value) ->
+            fieldsObject?.forEach { (key, value) ->
                 // Only scalars are spoofable; a nested object/array has no field row to compare
                 // against and would render as noise.
                 (value as? JsonPrimitive)?.let { fields[key] = it.content }
@@ -57,6 +67,7 @@ data class PublishedConfig(
                 schemaVersion = root["schemaVersion"]?.intOrNull() ?: SCHEMA_UNKNOWN,
                 mode = (root["mode"] as? JsonPrimitive)?.content ?: DEFAULT_MODE,
                 fields = fields,
+                fieldsPresent = fieldsObject != null,
                 activeHourStart = hours?.get("start")?.intOrNull(),
                 activeHourEnd = hours?.get("end")?.intOrNull(),
             )

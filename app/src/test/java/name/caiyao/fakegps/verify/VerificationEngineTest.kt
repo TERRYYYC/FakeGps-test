@@ -266,6 +266,78 @@ class VerificationEngineTest {
     }
 
     @Test
+    fun `some fields verified and others unreadable is PARTIALLY_EFFECTIVE not EFFECTIVE`() {
+        // review P1-3: one matching field among ten unreadable ones is not "伪装生效". Claiming full
+        // success while most of the config is unverified is exactly the overclaim this screen exists
+        // to eliminate.
+        val specs = linkedMapOf(
+            "c" to listOf(
+                FieldSpec("tac", "TAC", "", FieldType.INTEGER),
+                FieldSpec("ci", "CI", "", FieldType.INTEGER),
+                FieldSpec("pci", "PCI", "", FieldType.INTEGER),
+            ),
+        )
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("tac" to "1", "ci" to "2", "pci" to "3"),
+            observed = mapOf("tac" to "1"),
+            specs = specs,
+        )
+        assertEquals(1, r.summary.spoofed)
+        assertEquals(2, r.summary.unobservable)
+        assertEquals(VerificationStatus.PARTIALLY_EFFECTIVE, r.summary.status)
+    }
+
+    @Test
+    fun `EFFECTIVE requires every configured field to be confirmed`() {
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("tac" to "1", "ci" to "2"),
+            observed = mapOf("tac" to "1", "ci" to "2"),
+            specs = lteSpecs,
+        )
+        assertEquals(0, r.summary.unobservable)
+        assertEquals(VerificationStatus.EFFECTIVE, r.summary.status)
+    }
+
+    @Test
+    fun `mismatch right after saving is PENDING_PROPAGATION not FAILING`() {
+        // review P1-1: ConfigPrefsSync republishes synchronously on save, but MainHook re-reads the
+        // prefs on a 30s timer. Between those two moments the app still serves the PREVIOUS config,
+        // so every changed field reads back "wrong" — a deterministic false red that would send the
+        // user debugging a hook which is simply one tick behind.
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("tac" to "12345"),
+            observed = mapOf("tac" to "26999"),
+            propagationPending = true,
+            specs = lteSpecs,
+        )
+        assertEquals(1, r.summary.mismatch)
+        assertEquals(VerificationStatus.PENDING_PROPAGATION, r.summary.status)
+    }
+
+    @Test
+    fun `once the propagation window has passed the same mismatch is a real failure`() {
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("tac" to "12345"),
+            observed = mapOf("tac" to "26999"),
+            propagationPending = false,
+            specs = lteSpecs,
+        )
+        assertEquals(VerificationStatus.FAILING, r.summary.status)
+    }
+
+    @Test
+    fun `pending propagation does not mask an otherwise fully confirmed result`() {
+        // Nothing mismatched, so there is no staleness to wait out.
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("tac" to "1"),
+            observed = mapOf("tac" to "1"),
+            propagationPending = true,
+            specs = lteSpecs,
+        )
+        assertEquals(VerificationStatus.EFFECTIVE, r.summary.status)
+    }
+
+    @Test
     fun `overall status is NOTHING_CONFIGURED when the profile spoofs nothing`() {
         val r = VerificationEngine.buildReport(
             configured = emptyMap(),

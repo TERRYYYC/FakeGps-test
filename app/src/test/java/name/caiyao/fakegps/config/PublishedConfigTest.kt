@@ -47,10 +47,25 @@ class PublishedConfigTest {
     }
 
     @Test
-    fun `absent fields object yields an empty map rather than failing`() {
+    fun `absent fields object is flagged incomplete, not treated as an empty config`() {
+        // review P1-2. Verified against MainHook#loadSnapshot: a v2-valid payload with no `fields`
+        // object is "structurally incomplete, not an instruction to stop spoofing" — the hook keeps
+        // its last-known-good Snapshot and carries on spoofing.
+        //
+        // Reporting that as "0 个字段、全部透传" tells the user nothing is being spoofed while the
+        // hook is actively spoofing from a config the UI cannot see. Absent must be distinguishable
+        // from empty.
         val p = PublishedConfig.parse("""{"schemaVersion":2,"mode":"off"}""")!!
         assertTrue(p.fields.isEmpty())
+        assertEquals(false, p.fieldsPresent)
         assertEquals("off", p.mode)
+    }
+
+    @Test
+    fun `an explicitly empty fields object really does mean nothing is configured`() {
+        val p = PublishedConfig.parse("""{"schemaVersion":2,"fields":{}}""")!!
+        assertTrue(p.fields.isEmpty())
+        assertEquals(true, p.fieldsPresent)
     }
 
     @Test

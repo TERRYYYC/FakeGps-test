@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import name.caiyao.fakegps.config.ConfigPrefsSync
+import name.caiyao.fakegps.config.PublishPropagation
 import name.caiyao.fakegps.data.SpoofSettings
 import name.caiyao.fakegps.verify.FieldReport
 import name.caiyao.fakegps.verify.FieldVerdict
@@ -198,6 +199,11 @@ private fun VerdictCard(state: VerifyUiState) {
                     detail = "payload 的 schemaVersion 与 hook 期望的不一致，hook 会保留上一次可用配置。" +
                         "因此本页的对比结果不代表这份配置的实际效果 —— 请重新保存一次档案。"
                 }
+                HookApplicability.PAYLOAD_INCOMPLETE -> {
+                    headline = "配置不完整，hook 仍在用旧配置"
+                    detail = "已发布的 payload 没有 fields 内容，hook 按契约保留上一次可用配置继续伪装。" +
+                        "也就是说当前生效的并不是这份配置，本页无法据此判断 —— 请重新保存一次档案。"
+                }
                 HookApplicability.APPLYING -> { headline = ""; detail = "" }
             }
         }
@@ -209,8 +215,21 @@ private fun VerdictCard(state: VerifyUiState) {
         else -> when (summary.status) {
             VerificationStatus.EFFECTIVE -> {
                 headline = "伪装生效"
-                detail = "${summary.spoofed} 个字段读回值与配置一致。"
+                detail = "${summary.spoofed} 个字段读回值与配置一致，且没有读不到的字段。"
                 tone = MaterialTheme.colorScheme.primary
+            }
+            VerificationStatus.PARTIALLY_EFFECTIVE -> {
+                headline = "部分验证通过"
+                detail = "${summary.spoofed} 个字段确认生效，另有 ${summary.unobservable} 个字段本进程读不到、" +
+                    "无法验证。没有发现矛盾，但也不能说全部生效。"
+                tone = MaterialTheme.colorScheme.primary
+            }
+            VerificationStatus.PENDING_PROPAGATION -> {
+                headline = "配置刚保存，尚未生效"
+                detail = "hook 每 ${PublishPropagation.HOOK_REFRESH_INTERVAL_MS / 1000} 秒才重新读取一次配置，" +
+                    "刚保存的改动可能还没被读到。请等一会儿再点右上角重新验证 —— " +
+                    "现在读到旧值是正常的，不代表失败。"
+                tone = MaterialTheme.colorScheme.onSurfaceVariant
             }
             VerificationStatus.FAILING -> {
                 headline = "${summary.mismatch} 个字段未生效"

@@ -28,8 +28,18 @@ enum class VerificationStatus {
     /** Every configured field was observed back. */
     EFFECTIVE,
 
+    /** Some fields confirmed, others unreadable — real evidence, but not a complete verdict. */
+    PARTIALLY_EFFECTIVE,
+
     /** At least one configured field was observed with a different value. */
     FAILING,
+
+    /**
+     * Fields mismatch, but the config was published so recently that the hook may not have re-read
+     * it yet. Reporting failure here would blame the hook for being one refresh tick behind —
+     * right after saving, which is exactly when users check.
+     */
+    PENDING_PROPAGATION,
 
     /** Fields are configured but none could be observed — cannot conclude anything. */
     INCONCLUSIVE,
@@ -72,14 +82,22 @@ data class VerificationSummary(
     val mismatch: Int,
     val unobservable: Int,
     val passthrough: Int,
+    /** True while the hook may still be serving the previous config. See [VerificationStatus.PENDING_PROPAGATION]. */
+    val propagationPending: Boolean = false,
 ) {
     val configuredCount: Int get() = spoofed + mismatch + unobservable
 
     val status: VerificationStatus
         get() = when {
             configuredCount == 0 -> VerificationStatus.NOTHING_CONFIGURED
+            // A mismatch inside the propagation window is more likely staleness than failure, so
+            // it must not be announced as one.
+            mismatch > 0 && propagationPending -> VerificationStatus.PENDING_PROPAGATION
             mismatch > 0 -> VerificationStatus.FAILING
             spoofed == 0 -> VerificationStatus.INCONCLUSIVE
+            // Confirming one field out of eleven is not "伪装生效". Announcing full success while
+            // most of the config is unverified is the same overclaim this screen exists to remove.
+            unobservable > 0 -> VerificationStatus.PARTIALLY_EFFECTIVE
             else -> VerificationStatus.EFFECTIVE
         }
 }
@@ -133,6 +151,7 @@ object VerificationEngine {
         configured: Map<String, String>,
         observed: Map<String, String>,
         baseline: Map<String, String> = emptyMap(),
+        propagationPending: Boolean = false,
         specs: LinkedHashMap<String, List<FieldSpec>> = FieldSpec.allCategories(),
     ): VerificationReport {
         val groups = mutableListOf<CategoryReport>()
@@ -187,7 +206,9 @@ object VerificationEngine {
 
         return VerificationReport(
             groups = groups,
-            summary = VerificationSummary(spoofed, mismatch, unobservable, passthrough),
+            summary = VerificationSummary(
+                spoofed, mismatch, unobservable, passthrough, propagationPending,
+            ),
             payloadFieldCount = configured.size,
             unmappedPayloadColumns = configured.keys
                 .filterNot { it in mappedColumns || it in NOT_DEVICE_OBSERVABLE }

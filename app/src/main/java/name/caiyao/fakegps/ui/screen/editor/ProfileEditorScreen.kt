@@ -117,6 +117,8 @@ fun ProfileEditorScreen(
                             FieldType.BOOLEAN -> BooleanField(
                                 spec = spec,
                                 value = value,
+                                reference = reference[spec.dbColumn],
+                                scope = vm.scope,
                                 onValueChange = { vm.updateField(spec.dbColumn, it) },
                             )
                             else -> TextField(
@@ -248,11 +250,24 @@ private fun TextField(
 private fun BooleanField(
     spec: FieldSpec,
     value: String,
+    reference: String?,
+    scope: ObservationScope,
     onValueChange: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val options = listOf("" to "透传", "1" to "是", "0" to "否")
     val selectedLabel = options.firstOrNull { it.first == value }?.second ?: "透传"
+
+    // Booleans need the same reference and collision treatment as text fields: with only two
+    // possible values a collision with reality is far MORE likely here, not less.
+    val collides = scope == ObservationScope.REAL_BASELINE && value.isNotBlank() &&
+        reference != null && VerificationEngine.valuesMatch(value, reference)
+
+    val referenceLabel = when (scope) {
+        ObservationScope.REAL_BASELINE -> "本机真实值"
+        ObservationScope.SELF_HOOKED -> "本机当前读到（调试构建已自我 hook，可能已是伪造值）"
+    }
+    val referenceText = reference?.let { if (it.equals("true", true) || it == "1") "是" else "否" }
 
     ExposedDropdownMenuBox(
         expanded = expanded,
@@ -263,6 +278,14 @@ private fun BooleanField(
             onValueChange = {},
             readOnly = true,
             label = { Text(spec.displayName) },
+            isError = collides,
+            supportingText = {
+                when {
+                    collides -> Text("与$referenceLabel 相同 — 即使生效也无法区分，建议改成相反的值")
+                    referenceText != null -> Text("$referenceLabel：$referenceText")
+                    else -> Text("透传 = 保持真实值")
+                }
+            },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier
                 .fillMaxWidth()

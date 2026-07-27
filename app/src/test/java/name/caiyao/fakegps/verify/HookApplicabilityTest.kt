@@ -84,10 +84,38 @@ class HookApplicabilityTest {
     }
 
     @Test
+    fun `a payload with no fields object means the hook is running last-known-good`() {
+        // review P1-2: MainHook keeps its previous Snapshot rather than dropping the spoof, so the
+        // config actually in force is NOT the one this payload describes. Verdicts computed against
+        // it would describe a config the hook is not using.
+        assertEquals(
+            HookApplicability.PAYLOAD_INCOMPLETE,
+            HookApplicability.of("always_on", 2, currentHour = 3, fieldsPresent = false),
+        )
+    }
+
+    @Test
+    fun `an explicitly empty fields object is a real config and stays applying`() {
+        assertEquals(
+            HookApplicability.APPLYING,
+            HookApplicability.of("always_on", 2, currentHour = 3, fieldsPresent = true),
+        )
+    }
+
+    @Test
+    fun `schema rejection outranks an incomplete payload`() {
+        assertEquals(
+            HookApplicability.SCHEMA_REJECTED,
+            HookApplicability.of("always_on", 1, currentHour = 3, fieldsPresent = false),
+        )
+    }
+
+    @Test
     fun `only APPLYING allows verdicts to be trusted`() {
         assertEquals(true, HookApplicability.APPLYING.verdictsMeaningful)
         assertEquals(false, HookApplicability.MODE_OFF.verdictsMeaningful)
         assertEquals(false, HookApplicability.OUTSIDE_ACTIVE_HOURS.verdictsMeaningful)
         assertEquals(false, HookApplicability.SCHEMA_REJECTED.verdictsMeaningful)
+        assertEquals(false, HookApplicability.PAYLOAD_INCOMPLETE.verdictsMeaningful)
     }
 }

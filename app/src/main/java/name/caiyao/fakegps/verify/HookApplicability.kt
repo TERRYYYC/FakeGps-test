@@ -23,7 +23,14 @@ enum class HookApplicability {
     OUTSIDE_ACTIVE_HOURS,
 
     /** The hook refuses a payload version it cannot interpret and keeps last-known-good instead. */
-    SCHEMA_REJECTED;
+    SCHEMA_REJECTED,
+
+    /**
+     * The payload carries no `fields` object. MainHook calls that structurally incomplete and keeps
+     * its previous Snapshot, so the config actually in force is one the UI cannot see — any verdict
+     * would describe a config the hook is not running.
+     */
+    PAYLOAD_INCOMPLETE;
 
     val verdictsMeaningful: Boolean get() = this == APPLYING
 
@@ -34,9 +41,11 @@ enum class HookApplicability {
             currentHour: Int,
             activeStart: Int? = null,
             activeEnd: Int? = null,
+            fieldsPresent: Boolean = true,
         ): HookApplicability {
             // Checked first: a rejected payload never loads at all, so its mode and hours are moot.
             if (schemaVersion != ConfigPrefsSync.SCHEMA_VERSION) return SCHEMA_REJECTED
+            if (!fieldsPresent) return PAYLOAD_INCOMPLETE
             if (mode == "off") return MODE_OFF
             if (mode == "time_based" && activeStart != null && activeEnd != null) {
                 val inRange = if (activeStart <= activeEnd) {

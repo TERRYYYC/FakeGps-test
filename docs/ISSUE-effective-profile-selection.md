@@ -1,3 +1,13 @@
+---
+feature_ids: [F001]
+topics: [profile-selection, config-transport, ux-consistency]
+doc_kind: issue
+created: 2026-07-27
+status: confirmed-pending-decision
+discovered_by: fable-5
+decision_owner: co-creator
+---
+
 # 生效档案的选取规则自相矛盾（UI 顺序 / 文案 / 实际行为三者不一致）
 
 > 状态：**已确认，待定夺**（发现于 verify UX 重构，未在该 PR 内擅自修改）

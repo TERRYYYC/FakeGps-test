@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import name.caiyao.fakegps.config.ConfigPrefsSync
+import name.caiyao.fakegps.config.PublishPropagation
 import name.caiyao.fakegps.config.PublishedConfig
 import name.caiyao.fakegps.verify.DeviceObserver
 import name.caiyao.fakegps.verify.HookApplicability
@@ -56,9 +57,14 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 // process down; and without the finally the spinner would never clear while the
                 // retry button stays disabled on `loading`. Neither is acceptable on the screen
                 // whose entire job is to report what went wrong.
+                //
+                // The previous report is DROPPED rather than kept: leaving a stale green
+                // "伪装生效" on screen after the refresh that was meant to re-check it failed would
+                // present an unverified claim as a current one.
                 _state.value = _state.value.copy(
                     loading = false,
-                    notes = listOf("读取设备信息时出错：${t.javaClass.simpleName}: ${t.message}"),
+                    report = null,
+                    notes = listOf("读取设备信息时出错，结果无法刷新：${t.javaClass.simpleName}: ${t.message}"),
                 )
             } finally {
                 if (_state.value.loading) _state.value = _state.value.copy(loading = false)
@@ -79,6 +85,13 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
 
             val observation = DeviceObserver(ctx).observe()
 
+            // The hook re-reads the prefs on a timer, so a config saved seconds ago may not be in
+            // force yet. Without this, saving and immediately verifying shows a deterministic red.
+            val pending = PublishPropagation.isPending(
+                publishedAtMs = ConfigPrefsSync.readPublishedAt(ctx),
+                nowMs = System.currentTimeMillis(),
+            )
+
             // The same readings feed different columns depending on what they can prove. Under
             // SELF_HOOKED they are observations that confirm or refute the config; under
             // REAL_BASELINE they are untouched device values, so every configured field is honestly
@@ -89,6 +102,7 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 configured = parsed?.fields.orEmpty(),
                 observed = if (selfHooked) observation.values else emptyMap(),
                 baseline = if (selfHooked) emptyMap() else observation.values,
+                propagationPending = pending,
             )
 
             _state.value = VerifyUiState(
@@ -102,6 +116,7 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                     currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
                     activeStart = parsed?.activeHourStart,
                     activeEnd = parsed?.activeHourEnd,
+                    fieldsPresent = parsed?.fieldsPresent ?: true,
                 ),
                 fingerprint = raw?.let { PublishedConfig.fingerprint(it) },
                 report = report,

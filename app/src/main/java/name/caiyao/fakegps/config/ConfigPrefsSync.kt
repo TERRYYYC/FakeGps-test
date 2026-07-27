@@ -32,6 +32,9 @@ object ConfigPrefsSync {
     const val PREFS_NAME = "spoof_config"
     const val KEY_JSON = "json"
 
+    /** Wall-clock time of the last publish. Read by the UI only; the hook ignores it. */
+    const val KEY_PUBLISHED_AT = "published_at"
+
     /**
      * Transport payload version. Bumped from SpoofConfig's v1 typed schema to the flat field map.
      * The hook rejects a payload it cannot interpret rather than silently mis-reading it, and keeps
@@ -70,7 +73,14 @@ object ConfigPrefsSync {
                 Log.e(TAG, "MODE_WORLD_READABLE rejected (${se.javaClass.simpleName}) — falling back to MODE_PRIVATE", se)
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             }
-            val ok = prefs.edit().putString(KEY_JSON, jsonStr).commit()
+            // Recorded alongside — NOT inside — the payload: the hook reads only KEY_JSON, and
+            // embedding a timestamp would change the bytes on every sync, destroying the
+            // fingerprint's value as a content identity. Lets the UI tell "the hook has not
+            // re-read yet" apart from "the hook is ignoring this config".
+            val ok = prefs.edit()
+                .putString(KEY_JSON, jsonStr)
+                .putLong(KEY_PUBLISHED_AT, System.currentTimeMillis())
+                .commit()
             Log.w(TAG, "published commit=$ok fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}")
         } catch (e: Throwable) {
             Log.e(TAG, "sync failed", e)
@@ -138,6 +148,14 @@ object ConfigPrefsSync {
     @JvmStatic
     fun readPublishedRaw(context: Context): String? = runCatching {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_JSON, null)
+    }.getOrNull()
+
+    /** Wall-clock time of the last publish, or null if never published / not recorded. */
+    @JvmStatic
+    fun readPublishedAt(context: Context): Long? = runCatching {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(KEY_PUBLISHED_AT, 0L)
+            .takeIf { it > 0L }
     }.getOrNull()
 
     /** SHA-256 of the published payload — config provenance, comparable across UI / log / probe. */
