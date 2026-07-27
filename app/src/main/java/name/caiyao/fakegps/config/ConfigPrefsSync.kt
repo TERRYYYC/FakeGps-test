@@ -53,27 +53,39 @@ object ConfigPrefsSync {
      * Invariants preserved: only non-null values are written (NULL = passthrough), the payload
      * carries [SCHEMA_VERSION] so the reader can reject an incompatible build, and a content
      * fingerprint is emitted so config provenance stays verifiable across UI / log / probe.
-     */
+    */
     @JvmStatic
-    fun sync(context: Context) {
+    fun sync(context: Context): Boolean {
         Log.w(TAG, "sync() ENTER")
-        try {
+        return try {
             val jsonStr = buildFieldMapJson(context)
 
             // MODE_WORLD_READABLE throws SecurityException on Android N+ unless the Xposed
             // framework suppresses it (Vector hooks checkMode for this). Fall back to a private
             // write so we can tell the two failure modes apart in the log.
+            var worldReadable = true
             @Suppress("DEPRECATION")
             val prefs = try {
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_WORLD_READABLE)
             } catch (se: Throwable) {
+                worldReadable = false
                 Log.e(TAG, "MODE_WORLD_READABLE rejected (${se.javaClass.simpleName}) — falling back to MODE_PRIVATE", se)
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             }
-            val ok = prefs.edit().putString(KEY_JSON, jsonStr).commit()
-            Log.w(TAG, "published commit=$ok fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}")
+            val committed = prefs.edit().putString(KEY_JSON, jsonStr).commit()
+            val published = ConfigPublicationContract.isCrossProcessPublishSuccessful(
+                worldReadable,
+                committed,
+            )
+            Log.w(
+                TAG,
+                "published crossProcess=$published worldReadable=$worldReadable commit=$committed " +
+                    "fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}",
+            )
+            published
         } catch (e: Throwable) {
             Log.e(TAG, "sync failed", e)
+            false
         }
     }
 

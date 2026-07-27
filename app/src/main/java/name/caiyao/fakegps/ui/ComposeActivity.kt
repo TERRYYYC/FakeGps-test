@@ -5,10 +5,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.navigation.compose.rememberNavController
+import name.caiyao.fakegps.probe.DebugHookProbeController
 import name.caiyao.fakegps.ui.navigation.AppNavGraph
 import name.caiyao.fakegps.ui.theme.FakeGpsTheme
 
 class ComposeActivity : ComponentActivity() {
+    private val debugProbeController = DebugHookProbeController()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -24,11 +27,7 @@ class ComposeActivity : ComponentActivity() {
         // Deliberately delayed: the hook loads its config on a timer ~3s after process start (the
         // very first load runs before Application exists). Probing in onCreate raced that and read
         // pre-spoof values, which looked exactly like a broken hook.
-        if (name.caiyao.fakegps.BuildConfig.DEBUG) {
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                name.caiyao.fakegps.probe.HookProbe.run(this)
-            }, 5000)
-        }
+        debugProbeController.schedule(applicationContext)
 
         enableEdgeToEdge()
         setContent {
@@ -37,5 +36,10 @@ class ComposeActivity : ComponentActivity() {
                 AppNavGraph(navController = navController)
             }
         }
+    }
+
+    override fun onDestroy() {
+        debugProbeController.close()
+        super.onDestroy()
     }
 }

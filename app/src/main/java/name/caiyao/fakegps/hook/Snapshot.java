@@ -67,6 +67,31 @@ class Snapshot {
         return configured != null ? configured : real;
     }
 
+    /**
+     * Resolve the public WCDMA signal-power surface.
+     *
+     * Android's public {@code CellSignalStrengthWcdma#getDbm()} is backed by RSCP on modern
+     * releases; there is no public {@code getRscp()} method on API 35. Keep {@code wcdma_rssi} as
+     * the legacy/profile alias only when the explicit RSCP field is absent.
+     */
+    static Integer resolveWcdmaDbm(Integer rscp, Integer rssi) {
+        return rscp != null ? rscp : rssi;
+    }
+
+    /**
+     * Map the profile's generic channel bandwidth to API 33's uplink bandwidth getter.
+     *
+     * Downlink has its own independent {@code cell_bandwidth_downlink} profile column.
+     */
+    static Integer resolvePhysicalUplinkBandwidth(Integer channelBandwidth) {
+        return channelBandwidth;
+    }
+
+    /** Map the configured manager network type onto TelephonyDisplayInfo.getNetworkType(). */
+    static Integer resolveDisplayNetworkType(Integer networkType) {
+        return networkType;
+    }
+
     // ==========================================
     // A. LOCATION (resolved by MainHook per hour)
     // ==========================================
