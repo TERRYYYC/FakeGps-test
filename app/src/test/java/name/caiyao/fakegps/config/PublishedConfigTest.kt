@@ -99,6 +99,33 @@ class PublishedConfigTest {
     }
 
     @Test
+    fun `parses the exact payload published on the moto g54 test device`() {
+        // Captured verbatim from /data/misc/.../spoof_config.xml on the reference device
+        // (moto g54 5G / Android 15). Locks the parser against real production output rather than
+        // only against payloads this test authored itself.
+        val real = """{"schemaVersion":2,"activeHours":{"start":7,"end":22},"mode":"always_on",""" +
+            """"fields":{"latitude":50.255807131309595,"longitude":28.65328009396879,""" +
+            """"addname":"50.255807, 28.653280","tac":26999}}"""
+
+        val p = PublishedConfig.parse(real)!!
+        assertEquals(2, p.schemaVersion)
+        assertEquals("always_on", p.mode)
+        assertEquals(7, p.activeHourStart)
+        assertEquals(22, p.activeHourEnd)
+
+        // Full double precision must survive — a truncated latitude would read as a MISMATCH
+        // against the location the app reports back.
+        assertEquals("50.255807131309595", p.fields["latitude"])
+        assertEquals("28.65328009396879", p.fields["longitude"])
+        // Integer column stays integral rather than becoming "26999.0".
+        assertEquals("26999", p.fields["tac"])
+        // addname rides along in the payload but has no FieldSpec row, so it must surface as an
+        // unmapped column rather than silently masquerading as a verifiable field.
+        assertEquals("50.255807, 28.653280", p.fields["addname"])
+        assertEquals(4, p.fields.size)
+    }
+
+    @Test
     fun `nested objects inside fields are skipped rather than stringified`() {
         // Only scalars are spoofable; a nested object would render as unusable JSON noise in the UI.
         val p = PublishedConfig.parse(
