@@ -99,15 +99,91 @@ class VerificationEngineTest {
     }
 
     @Test
-    fun `numerically equal values with different padding still match`() {
-        // SQLite stores mnc as INTEGER 0; the radio reports mncString "00".
+    fun `zero-padded observation is a MISMATCH because a working hook never pads`() {
+        // Verified against HookUtils#registerCellIdentityHooks: getMncString returns
+        // String.valueOf(s.mnc), so a hooked mnc=0 comes back as "0" — NEVER "00". Padding can
+        // therefore only originate from the real radio passing through unhooked.
+        //
+        // Treating "0" == "00" as a match reports an entirely inert module as 已生效: a China
+        // Mobile user enters mnc=0 (exactly what the field hint suggests), the module is not in
+        // the framework scope, the radio reports "00", and the screen congratulates them.
         val specs = linkedMapOf("x" to listOf(FieldSpec("mnc", "MNC", "", FieldType.INTEGER)))
         val r = VerificationEngine.buildReport(
             configured = mapOf("mnc" to "0"),
             observed = mapOf("mnc" to "00"),
             specs = specs,
         )
-        assertEquals(FieldVerdict.SPOOFED, r.field("mnc").verdict)
+        assertEquals(FieldVerdict.MISMATCH, r.field("mnc").verdict)
+    }
+
+    @Test
+    fun `trailing decimal formatting differences still match`() {
+        // REAL columns round-trip through JSON as 5.0 while the getter reports "5" (or vice versa).
+        // That IS pure formatting and must not be reported as a failure.
+        val specs = linkedMapOf("x" to listOf(FieldSpec("altitude", "海拔", "", FieldType.DOUBLE)))
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("altitude" to "5.0"),
+            observed = mapOf("altitude" to "5"),
+            specs = specs,
+        )
+        assertEquals(FieldVerdict.SPOOFED, r.field("altitude").verdict)
+    }
+
+    @Test
+    fun `wifi ssid quoting is normalised because the platform wraps it in quotes`() {
+        // WifiInfo#getSSID returns the SSID wrapped in double quotes, and the hook reproduces that
+        // contract ("\"" + ssid + "\""). The configured column is plain text, so comparing verbatim
+        // makes a correctly-spoofed SSID read as 未生效 every single time.
+        val specs = linkedMapOf("x" to listOf(FieldSpec("wifi_ssid", "SSID", "", FieldType.TEXT)))
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("wifi_ssid" to "HomeNet"),
+            observed = mapOf("wifi_ssid" to "\"HomeNet\""),
+            specs = specs,
+        )
+        assertEquals(FieldVerdict.SPOOFED, r.field("wifi_ssid").verdict)
+    }
+
+    @Test
+    fun `a genuinely different quoted ssid is still a mismatch`() {
+        val specs = linkedMapOf("x" to listOf(FieldSpec("wifi_ssid", "SSID", "", FieldType.TEXT)))
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("wifi_ssid" to "HomeNet"),
+            observed = mapOf("wifi_ssid" to "\"CafeWiFi\""),
+            specs = specs,
+        )
+        assertEquals(FieldVerdict.MISMATCH, r.field("wifi_ssid").verdict)
+    }
+
+    @Test
+    fun `module control fields with no device API are not counted as evidence`() {
+        // signal_fluctuation_* is a module knob, not something any Android getter reports. Filing it
+        // under "读不到" would drag an otherwise-conclusive screen to INCONCLUSIVE and train the
+        // user to ignore the count.
+        val specs = linkedMapOf(
+            "信号波动" to listOf(
+                FieldSpec("signal_fluctuation_enabled", "启用波动", "", FieldType.BOOLEAN),
+                FieldSpec("tac", "TAC", "", FieldType.INTEGER),
+            ),
+        )
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("signal_fluctuation_enabled" to "1", "tac" to "1"),
+            observed = mapOf("tac" to "1"),
+            specs = specs,
+        )
+        assertEquals(0, r.summary.unobservable)
+        assertEquals(VerificationStatus.EFFECTIVE, r.summary.status)
+    }
+
+    @Test
+    fun `auto-generated addname is not reported as transport drift`() {
+        // addname is written on every save and rides in every payload. A drift alarm that is always
+        // on is a drift alarm nobody reads.
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("tac" to "1", "addname" to "50.2, 28.6"),
+            observed = mapOf("tac" to "1"),
+            specs = lteSpecs,
+        )
+        assertEquals(emptyList<String>(), r.unmappedPayloadColumns)
     }
 
     @Test

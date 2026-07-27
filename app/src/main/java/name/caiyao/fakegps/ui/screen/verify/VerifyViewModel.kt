@@ -10,9 +10,11 @@ import kotlinx.coroutines.launch
 import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.config.PublishedConfig
 import name.caiyao.fakegps.verify.DeviceObserver
+import name.caiyao.fakegps.verify.HookApplicability
 import name.caiyao.fakegps.verify.ObservationScope
 import name.caiyao.fakegps.verify.VerificationEngine
 import name.caiyao.fakegps.verify.VerificationReport
+import java.util.Calendar
 
 sealed interface PayloadStatus {
     /** Nothing has ever been published — the hook has no config to apply. */
@@ -32,6 +34,7 @@ data class VerifyUiState(
     val scope: ObservationScope = ObservationScope.REAL_BASELINE,
     val payload: PayloadStatus = PayloadStatus.NeverPublished,
     val mode: String = "always_on",
+    val applicability: HookApplicability = HookApplicability.APPLYING,
     val fingerprint: String? = null,
     val report: VerificationReport? = null,
     val notes: List<String> = emptyList(),
@@ -46,7 +49,24 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
     fun refresh() {
         viewModelScope.launch(Dispatchers.IO) {
             _state.value = _state.value.copy(loading = true)
+            try {
+                collect()
+            } catch (t: Throwable) {
+                // viewModelScope installs no exception handler, so an escaping throwable takes the
+                // process down; and without the finally the spinner would never clear while the
+                // retry button stays disabled on `loading`. Neither is acceptable on the screen
+                // whose entire job is to report what went wrong.
+                _state.value = _state.value.copy(
+                    loading = false,
+                    notes = listOf("读取设备信息时出错：${t.javaClass.simpleName}: ${t.message}"),
+                )
+            } finally {
+                if (_state.value.loading) _state.value = _state.value.copy(loading = false)
+            }
+        }
+    }
 
+    private fun collect() {
             val ctx = getApplication<Application>()
             val raw = ConfigPrefsSync.readPublishedRaw(ctx)
             val parsed = PublishedConfig.parse(raw)
@@ -76,11 +96,17 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 scope = scope,
                 payload = payloadStatus,
                 mode = parsed?.mode ?: "always_on",
+                applicability = HookApplicability.of(
+                    mode = parsed?.mode ?: "always_on",
+                    schemaVersion = parsed?.schemaVersion ?: ConfigPrefsSync.SCHEMA_VERSION,
+                    currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
+                    activeStart = parsed?.activeHourStart,
+                    activeEnd = parsed?.activeHourEnd,
+                ),
                 fingerprint = raw?.let { PublishedConfig.fingerprint(it) },
                 report = report,
                 notes = observation.notes,
                 cellCount = observation.cellCount,
             )
-        }
     }
 }

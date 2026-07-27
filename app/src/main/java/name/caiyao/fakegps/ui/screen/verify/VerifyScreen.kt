@@ -44,6 +44,7 @@ import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.data.SpoofSettings
 import name.caiyao.fakegps.verify.FieldReport
 import name.caiyao.fakegps.verify.FieldVerdict
+import name.caiyao.fakegps.verify.HookApplicability
 import name.caiyao.fakegps.verify.ObservationScope
 import name.caiyao.fakegps.verify.VerificationStatus
 
@@ -170,16 +171,35 @@ private fun FieldReport.visibleUnder(filter: RowFilter): Boolean = when (filter)
 @Composable
 private fun VerdictCard(state: VerifyUiState) {
     val summary = state.report?.summary
-    val spoofingOff = state.mode == SpoofSettings.MODE_OFF
+    // Verdicts are only believable while the hook is actually applying this payload. In every other
+    // state passthrough is the DESIGNED behaviour, and scoring it naively would blame the module for
+    // doing exactly what it was told.
+    val notApplying = !state.applicability.verdictsMeaningful
 
     val headline: String
     val detail: String
     val tone: Color
     when {
-        spoofingOff -> {
-            headline = "伪装已关闭"
-            detail = "当前模式为「关闭」，hook 会原样透传真实设备信息。到「设置 → 伪装模式」开启后再验证。"
+        notApplying -> {
             tone = MaterialTheme.colorScheme.onSurfaceVariant
+            when (state.applicability) {
+                HookApplicability.MODE_OFF -> {
+                    headline = "伪装已关闭"
+                    detail = "当前模式为「关闭」，hook 原样透传真实设备信息。" +
+                        "到「设置 → 伪装模式」开启后再验证。"
+                }
+                HookApplicability.OUTSIDE_ACTIVE_HOURS -> {
+                    headline = "当前不在生效时段"
+                    detail = "模式为「按时段」，现在不在配置的时间窗口内，hook 按设计透传真实值。" +
+                        "此时读到真实值是正常的，不代表伪装失败。"
+                }
+                HookApplicability.SCHEMA_REJECTED -> {
+                    headline = "hook 拒绝了当前配置"
+                    detail = "payload 的 schemaVersion 与 hook 期望的不一致，hook 会保留上一次可用配置。" +
+                        "因此本页的对比结果不代表这份配置的实际效果 —— 请重新保存一次档案。"
+                }
+                HookApplicability.APPLYING -> { headline = ""; detail = "" }
+            }
         }
         summary == null -> {
             headline = "无法验证"
@@ -230,7 +250,7 @@ private fun VerdictCard(state: VerifyUiState) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (summary != null && !spoofingOff) {
+            if (summary != null && !notApplying) {
                 Row(
                     modifier = Modifier.padding(top = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -249,7 +269,12 @@ private fun VerdictCard(state: VerifyUiState) {
 private fun ScopeCard(state: VerifyUiState) {
     val text = when (state.scope) {
         ObservationScope.SELF_HOOKED ->
-            "调试构建：本应用已 hook 自身进程，所以这里的读回值可以直接证明 hook 是否生效（受控探针模式）。"
+            "调试构建：本应用已 hook 自身进程，所以这里的读回值可以直接证明 hook 是否生效（受控探针模式）。" +
+                // Being behind its own hook, this process cannot see the real value, so it cannot
+                // tell "spoof succeeded" from "spoof equals reality". Saying so beats silently
+                // skipping the check.
+                "注意：本进程看不到自己 hook 之前的真实值，因此无法判断某个字段配的值是否恰好与真实值相同；" +
+                "若相同，「已生效」并不能证明什么 —— 请在编辑页对照真实值挑一个明显不同的值。"
         ObservationScope.REAL_BASELINE ->
             "正式构建不会 hook 自己的进程 —— 否则配置界面会把伪造值当成真值显示回来。" +
                 "因此本页读到的是本机真实值，不能用来判断目标 App 内的 hook 是否生效；" +

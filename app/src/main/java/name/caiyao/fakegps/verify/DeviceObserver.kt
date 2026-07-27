@@ -16,6 +16,7 @@ import android.telephony.CellInfoWcdma
 import android.telephony.CellIdentityNr
 import android.telephony.CellSignalStrengthNr
 import android.telephony.TelephonyManager
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import java.net.NetworkInterface
 import java.util.concurrent.CountDownLatch
@@ -115,6 +116,7 @@ class DeviceObserver(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun requestFreshCellInfo(tm: TelephonyManager): List<CellInfo> {
         val latch = CountDownLatch(1)
         val fresh = AtomicReference<List<CellInfo>>(emptyList())
@@ -137,48 +139,64 @@ class DeviceObserver(private val context: Context) {
         }
     }
 
+    /**
+     * minSdk is 24, so every getter below its own `since` level must be guarded — an unguarded call
+     * throws NoSuchMethodError, and because this runs inside a coroutine that would take the whole
+     * process down rather than degrade one row to "读不到".
+     */
     private fun readServingCell(cell: CellInfo, out: MutableMap<String, String>) {
+        val api28 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+        val api29 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+
         when (cell) {
             is CellInfoGsm -> {
                 val id = cell.cellIdentity
-                out.putStr("mcc", id.mccString)
-                out.putStr("mnc", id.mncString)
+                if (api28) {
+                    out.putStr("mcc", id.mccString)   // API 28
+                    out.putStr("mnc", id.mncString)   // API 28
+                    out.putInt("arfcn", id.arfcn)     // API 28
+                    out.putInt("bsic", id.bsic)       // API 28
+                }
                 out.putInt("lac", id.lac)
                 out.putInt("cid", id.cid)
-                out.putInt("arfcn", id.arfcn)
-                out.putInt("bsic", id.bsic)
                 out.putInt("gsm_rssi", cell.cellSignalStrength.dbm)
-                out.putInt("gsm_ber", cell.cellSignalStrength.bitErrorRate)
+                if (api29) {
+                    out.putInt("gsm_ber", cell.cellSignalStrength.bitErrorRate)  // API 29
+                }
             }
             is CellInfoWcdma -> {
                 val id = cell.cellIdentity
-                out.putStr("mcc", id.mccString)
-                out.putStr("mnc", id.mncString)
+                if (api28) {
+                    out.putStr("mcc", id.mccString)
+                    out.putStr("mnc", id.mncString)
+                    out.putInt("uarfcn", id.uarfcn)   // API 28
+                }
                 out.putInt("lac", id.lac)
                 out.putInt("cid", id.cid)
                 out.putInt("psc", id.psc)
-                out.putInt("uarfcn", id.uarfcn)
                 out.putInt("wcdma_rssi", cell.cellSignalStrength.dbm)
             }
             is CellInfoLte -> {
                 val id = cell.cellIdentity
-                out.putStr("mcc", id.mccString)
-                out.putStr("mnc", id.mncString)
+                if (api28) {
+                    out.putStr("mcc", id.mccString)
+                    out.putStr("mnc", id.mncString)
+                    out.putInt("lte_bandwidth", id.bandwidth)   // API 28
+                }
                 out.putInt("tac", id.tac)
                 out.putInt("ci", id.ci)
                 out.putInt("pci", id.pci)
                 out.putInt("earfcn", id.earfcn)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    out.putInt("lte_bandwidth", id.bandwidth)
-                }
                 val ss = cell.cellSignalStrength
-                out.putInt("lte_rsrp", ss.rsrp)
-                out.putInt("lte_rsrq", ss.rsrq)
-                out.putInt("lte_rssi", ss.rssi)
-                out.putInt("lte_cqi", ss.cqi)
                 out.putInt("lte_ta", ss.timingAdvance)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    out.putInt("lte_sinr", ss.rssnr)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    out.putInt("lte_rsrp", ss.rsrp)      // API 26
+                    out.putInt("lte_rsrq", ss.rsrq)      // API 26
+                    out.putInt("lte_cqi", ss.cqi)        // API 26
+                    out.putInt("lte_sinr", ss.rssnr)     // API 26
+                }
+                if (api29) {
+                    out.putInt("lte_rssi", ss.rssi)      // API 29
                 }
             }
             else -> {
@@ -223,11 +241,17 @@ class DeviceObserver(private val context: Context) {
             return
         }
         runCatching {
+            // network_type is hooked (HookUtils getNetworkType) but was never read back, leaving a
+            // headline field permanently unverifiable.
+            @Suppress("DEPRECATION")
+            out["network_type"] = tm.networkType.toString()
             out["data_network_type"] = tm.dataNetworkType.toString()
             out["voice_network_type"] = tm.voiceNetworkType.toString()
             out["data_state"] = tm.dataState.toString()
             out["data_activity"] = tm.dataActivity.toString()
-            tm.serviceState?.let { out["service_state"] = it.state.toString() }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                tm.serviceState?.let { out["service_state"] = it.state.toString() }  // API 26
+            }
         }
     }
 
@@ -242,6 +266,12 @@ class DeviceObserver(private val context: Context) {
             notes += "WiFi：已关闭，WiFi 字段无法读回"
             return
         }
+        // Without location permission the platform hands back redacted placeholders rather than
+        // failing. Storing those would present "<unknown ssid>" to the user as a genuine reading.
+        if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            notes += "WiFi：缺少 ACCESS_FINE_LOCATION 权限，系统只返回脱敏占位值，无法读回"
+            return
+        }
         @Suppress("DEPRECATION")
         val info = wm.connectionInfo
         if (info == null) {
@@ -250,16 +280,19 @@ class DeviceObserver(private val context: Context) {
         }
         @Suppress("DEPRECATION")
         run {
-            out.putStr("wifi_ssid", info.ssid)
+            out.putStr("wifi_ssid", info.ssid?.let(::stripQuotes))
             out.putStr("wifi_bssid", info.bssid)
             out["wifi_rssi"] = info.rssi.toString()
             out["wifi_frequency"] = info.frequency.toString()
             out["wifi_link_speed"] = info.linkSpeed.toString()
-            out.putStr("wifi_mac", info.macAddress)
+            // getMacAddress has returned a constant placeholder for every app since Android 6, so
+            // reporting it as "this device's real MAC" would be a fabrication.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                out["wifi_tx_link_speed"] = info.txLinkSpeedMbps.toString()
-                out["wifi_rx_link_speed"] = info.rxLinkSpeedMbps.toString()
-                out["wifi_standard"] = info.wifiStandard.toString()
+                out["wifi_standard"] = info.wifiStandard.toString()          // API 30
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                out["wifi_tx_link_speed"] = info.txLinkSpeedMbps.toString()  // API 29
+                out["wifi_rx_link_speed"] = info.rxLinkSpeedMbps.toString()  // API 29
             }
         }
     }
@@ -292,8 +325,18 @@ class DeviceObserver(private val context: Context) {
     private fun granted(perm: String) =
         ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
 
+    /** `WifiInfo#getSSID` wraps its result in double quotes; the configured column does not. */
+    private fun stripQuotes(v: String): String =
+        if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) v.substring(1, v.length - 1) else v
+
+    /**
+     * Values the platform substitutes when it will not disclose the real one. They are non-blank, so
+     * without this they would be stored and displayed as genuine readings.
+     */
+    private val redacted = setOf("<unknown ssid>", "02:00:00:00:00:00", "00:00:00:00:00:00")
+
     private fun MutableMap<String, String>.putStr(key: String, value: String?) {
-        if (!value.isNullOrBlank()) this[key] = value
+        if (!value.isNullOrBlank() && value.lowercase() !in redacted) this[key] = value
     }
 
     /**

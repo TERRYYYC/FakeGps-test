@@ -52,9 +52,12 @@ data class FieldReport(
     val baseline: String? = null,
     val verdict: FieldVerdict,
     /**
-     * True when the configured value equals the device's real value, which makes a [SPOOFED]
-     * verdict meaningless: "observed == configured" is indistinguishable from the hook doing
-     * nothing. The user has to pick a distinguishing value for this field to be provable.
+     * True when the configured value equals the device's real value, so the field can never prove
+     * anything: "observed == configured" is indistinguishable from the hook doing nothing.
+     *
+     * Only computable where a real baseline is knowable, i.e. when this process is NOT self-hooked.
+     * A self-hooked process cannot see past its own hook, so ambiguity is undetectable there — the
+     * scope banner states that limitation rather than pretending the check ran.
      */
     val ambiguous: Boolean = false,
 )
@@ -111,6 +114,21 @@ data class VerificationReport(
  */
 object VerificationEngine {
 
+    /**
+     * Columns that reach the hook but that no Android getter can ever report back.
+     *
+     * `signal_fluctuation_*` are module control knobs, and `addname` is a display label regenerated
+     * on every save. Filing them under 读不到 would drag an otherwise-conclusive screen to
+     * INCONCLUSIVE and keep a transport-drift alarm permanently lit — and an alarm that is always on
+     * is one nobody reads.
+     */
+    private val NOT_DEVICE_OBSERVABLE = setOf(
+        "signal_fluctuation_enabled",
+        "signal_fluctuation_range_db",
+        "neighbor_cells_json",
+        "addname",
+    )
+
     fun buildReport(
         configured: Map<String, String>,
         observed: Map<String, String>,
@@ -143,11 +161,16 @@ object VerificationEngine {
                     else -> FieldVerdict.MISMATCH
                 }
 
-                when (verdict) {
-                    FieldVerdict.SPOOFED -> spoofed++
-                    FieldVerdict.MISMATCH -> mismatch++
-                    FieldVerdict.UNOBSERVABLE -> unobservable++
-                    FieldVerdict.PASSTHROUGH -> passthrough++
+                // A field no getter can report is not evidence either way, so it must not sway the
+                // roll-up. It is still listed, so the user can see it was configured.
+                val countsAsEvidence = spec.dbColumn !in NOT_DEVICE_OBSERVABLE
+                if (countsAsEvidence) {
+                    when (verdict) {
+                        FieldVerdict.SPOOFED -> spoofed++
+                        FieldVerdict.MISMATCH -> mismatch++
+                        FieldVerdict.UNOBSERVABLE -> unobservable++
+                        FieldVerdict.PASSTHROUGH -> passthrough++
+                    }
                 }
 
                 rows += FieldReport(
@@ -166,33 +189,57 @@ object VerificationEngine {
             groups = groups,
             summary = VerificationSummary(spoofed, mismatch, unobservable, passthrough),
             payloadFieldCount = configured.size,
-            unmappedPayloadColumns = configured.keys.filterNot { it in mappedColumns }.sorted(),
+            unmappedPayloadColumns = configured.keys
+                .filterNot { it in mappedColumns || it in NOT_DEVICE_OBSERVABLE }
+                .sorted(),
         )
     }
 
     /**
      * Whether an observed value is the configured one.
      *
-     * The two sides travel through different type systems — SQLite INTEGER → JSON number → String
-     * on one side, typed Android getters → String on the other — so equal values legitimately
-     * arrive in different shapes (`460` vs `"460"`, `0` vs `"00"`, `1` vs `"true"`). Comparing
-     * those verbatim would report a working hook as broken.
+     * The two sides travel through different type systems — SQLite INTEGER/REAL → JSON number →
+     * String on one side, typed Android getters → String on the other — so equal values legitimately
+     * arrive in different shapes (`5.0` vs `"5"`, `1` vs `"true"`, `HomeNet` vs `"HomeNet"` with
+     * literal quotes). Comparing those verbatim would report a working hook as broken.
      *
-     * Non-numeric, non-boolean text is compared verbatim (case included): the hook returns the
-     * configured string untouched, so any difference means the value did not come from us.
+     * The tolerance is bounded by what a WORKING hook can actually emit. HookUtils returns
+     * `String.valueOf(value)`, which never zero-pads, so an observed `"00"` against a configured
+     * `0` cannot have come from the hook — it is the real radio passing through unhooked, and
+     * calling it a match would report an entirely inert module as working.
+     *
+     * Remaining text is compared verbatim, case included: the hook hands back the configured string
+     * untouched, so any other difference means the value did not come from us.
      */
     internal fun valuesMatch(configured: String, observed: String): Boolean {
-        val a = configured.trim()
-        val b = observed.trim()
-        if (a.equals(b, ignoreCase = false)) return true
+        val a = unquote(configured.trim())
+        val b = unquote(observed.trim())
+        if (a == b) return true
 
         asBoolean(a)?.let { ba -> asBoolean(b)?.let { bb -> return ba == bb } }
+
+        // Zero padding is never something the hook produces, so it is signal, not noise.
+        if (isZeroPadded(a) || isZeroPadded(b)) return false
 
         val na = a.toDoubleOrNull()
         val nb = b.toDoubleOrNull()
         if (na != null && nb != null) return na == nb
 
         return false
+    }
+
+    /**
+     * `WifiInfo#getSSID` wraps its result in double quotes and the hook reproduces that contract,
+     * while the configured column stores plain text. Without this, a correctly spoofed SSID reads
+     * as 未生效 on every single refresh.
+     */
+    private fun unquote(v: String): String =
+        if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) v.substring(1, v.length - 1) else v
+
+    /** `"00"`, `"007"` — significant, because `String.valueOf` cannot generate it. `"0.5"` is not. */
+    private fun isZeroPadded(v: String): Boolean {
+        val s = v.removePrefix("-")
+        return s.length > 1 && s[0] == '0' && s[1] != '.'
     }
 
     /** `1`/`0` (SQLite) and `true`/`false` (Android getters) denote the same boolean. */
