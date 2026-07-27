@@ -1,4 +1,5 @@
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -113,10 +114,17 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
             ],
         )
 
-    def test_fixed_matrix_preflight_requires_api_33(self):
+    def test_api_33_gate_belongs_only_to_fixed_matrix_preflight(self):
         script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
-        self.assertIn('[ "$api" -ge 33 ]', script)
-        self.assertIn("Android API 33+ required", script)
+        device_preflight = self._shell_function(script, "preflight_device")
+        matrix_preflight = self._shell_function(script, "preflight_matrix")
+
+        self.assertNotIn("API 33", device_preflight)
+        self.assertIn('[ "$DEVICE_API" -ge 33 ]', matrix_preflight)
+        self.assertIn(
+            "Android API 33+ required for --cellular-matrix",
+            matrix_preflight,
+        )
 
     def test_cli_emits_deterministic_json_and_rejects_unknown_scenarios(self):
         first = matrix.emit_json("full-rssi", matrix.OUTPUT_EXPECTED)
@@ -137,6 +145,17 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
         )
         self.assertEqual(1, len(lines))
         self.assertTrue(lines[0].startswith("MATRIX_ERROR "))
+
+    @staticmethod
+    def _shell_function(script, name):
+        match = re.search(
+            r"^{}\(\) \{{\n(.*?)^\}}\n".format(re.escape(name)),
+            script,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if match is None:
+            raise AssertionError("missing shell function: {}".format(name))
+        return match.group(1)
 
 
 if __name__ == "__main__":

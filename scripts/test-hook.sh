@@ -37,6 +37,7 @@ TRANSACTION_ACTIVE=0
 DB_BEFORE=""
 PREFS_BEFORE=""
 RESTORE_FAILED=0
+DEVICE_API=""
 
 device_count() {
     adb devices | awk 'NR > 1 && $2 == "device" { count++ } END { print count + 0 }'
@@ -156,15 +157,13 @@ preflight_device() {
     root_shell id 2>/dev/null | grep -q 'uid=0' ||
         { echo "HARNESS_ERROR rooted development device required" >&2; return 2; }
 
-    api=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')
-    case "$api" in
+    DEVICE_API=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')
+    case "$DEVICE_API" in
         ''|*[!0-9]*)
-            echo "HARNESS_ERROR invalid Android API level: $api" >&2
+            echo "HARNESS_ERROR invalid Android API level: $DEVICE_API" >&2
             return 2
             ;;
     esac
-    [ "$api" -ge 33 ] ||
-        { echo "HARNESS_ERROR Android API 33+ required, found $api" >&2; return 2; }
 
     adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
     adb shell wm dismiss-keyguard >/dev/null 2>&1
@@ -179,10 +178,15 @@ preflight_device() {
         echo "HARNESS_ERROR device must be awake and unlocked: wake=$wakefulness keyguard=$keyguard" >&2
         return 2
     }
-    echo "VERIFIED preflight.device api=$api awake unlocked rooted"
+    echo "VERIFIED preflight.device api=$DEVICE_API awake unlocked rooted"
 }
 
 preflight_matrix() {
+    [ "$DEVICE_API" -ge 33 ] ||
+        {
+            echo "HARNESS_ERROR Android API 33+ required for --cellular-matrix, found $DEVICE_API" >&2
+            return 2
+        }
     [ -f "$APK" ] ||
         { echo "HARNESS_ERROR debug APK missing; run ./gradlew assembleDebug" >&2; return 2; }
     [ -f "$MATRIX_TOOL" ] && [ -f "$VERDICT_TOOL" ] ||
