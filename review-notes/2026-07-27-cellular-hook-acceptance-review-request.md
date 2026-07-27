@@ -50,6 +50,9 @@ stale sessions, probe errors, restore failures, or database changes all fail the
   must replace it with a real API-35 `PhysicalChannelConfig`; every getter is then asserted.
 - Signal fluctuation is disabled for exact device assertions, while deterministic unit coverage
   proves the enabled range and variation behavior.
+- `ConfigPrefsSync.sync()` reports success only when the world-readable path commits. A private
+  fallback may preserve local state, but it cannot be consumed by target-process
+  `XSharedPreferences` and therefore fails the cross-process publication contract.
 
 ## Architecture Ownership
 
@@ -107,7 +110,7 @@ git checkout --detach origin/feat/cellular-hook-acceptance
 
 ```bash
 ./gradlew clean testDebugUnitTest assembleDebug assembleRelease lintVitalRelease
-# BUILD SUCCESSFUL; 57 JVM tests, 0 failures
+# BUILD SUCCESSFUL; 60 JVM tests, 0 failures
 
 python3 -m unittest scripts.test_cellular_acceptance_matrix scripts.test_hook_verdict
 # 10 tests, 0 failures
