@@ -12,7 +12,7 @@ created: 2026-07-27
 
 # Review Request: Complete cellular hook acceptance
 
-Review-Target-ID: cellular-hook-acceptance  
+Review-Target-ID: cellular-hook-acceptance
 Branch: `feat/cellular-hook-acceptance`
 
 ## What
@@ -31,8 +31,8 @@ stale sessions, probe errors, restore failures, or database changes all fail the
 
 ## Original Requirements
 
-> “继续你的任务，目标是完成蜂窝网络信息hook的验证。  
-> 你可以邀请fable5.0进行更加合理的ui重构，  
+> “继续你的任务，目标是完成蜂窝网络信息hook的验证。
+> 你可以邀请fable5.0进行更加合理的ui重构，
 > 有计划了你们直接进行，带着最终的版本见我就行。”
 
 - Source: Cat Café thread `thread_mrmp97akqux0a16w`, message
@@ -53,8 +53,8 @@ stale sessions, probe errors, restore failures, or database changes all fail the
 
 ## Architecture Ownership
 
-Architecture cell: Android hook/config transport and public-API probe  
-Map delta: none  
+Architecture cell: Android hook/config transport and public-API probe
+Map delta: none
 Why: the change exercises the existing schema-v2 safe-zone transport and hook boundaries; it does
 not add a parallel store, router, adapter, or production entry point.
 
