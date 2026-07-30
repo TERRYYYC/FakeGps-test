@@ -268,6 +268,12 @@ class Snapshot {
      * Returns baseValue +/- random offset within configured range.
      */
     int fluctuate(int baseValue, Random rnd) {
+        // A sentinel means "no data", not "a reading of 2147483647". Adding jitter to it
+        // overflows into a large NEGATIVE number, which reads as a perfectly plausible signal
+        // level — i.e. it would silently turn "unavailable" into fabricated data.
+        if (name.caiyao.fakegps.config.UnavailableSpec.isUnavailableSentinel(baseValue)) {
+            return baseValue;
+        }
         if (signalFluctuationEnabled != null && signalFluctuationEnabled
                 && signalFluctuationRangeDb != null && signalFluctuationRangeDb > 0) {
             int halfRange = signalFluctuationRangeDb / 2;
