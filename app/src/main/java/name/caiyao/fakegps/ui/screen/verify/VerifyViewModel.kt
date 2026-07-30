@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import name.caiyao.fakegps.config.ConfigPrefsSync
+import name.caiyao.fakegps.config.PayloadRead
 import name.caiyao.fakegps.config.PublishPropagation
 import name.caiyao.fakegps.config.PublishedConfig
 import name.caiyao.fakegps.verify.DeviceObserver
@@ -24,6 +25,9 @@ sealed interface PayloadStatus {
 
     /** A payload exists but cannot be parsed; the hook keeps its last-known-good config. */
     data object Malformed : PayloadStatus
+
+    /** The read itself failed; we cannot tell what config the hook is running. */
+    data class Unreadable(val cause: String) : PayloadStatus
 
     data class Ok(val schemaVersion: Int, val fieldCount: Int) : PayloadStatus {
         /** The hook rejects a version it does not recognise rather than mis-reading the payload. */
@@ -81,11 +85,12 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun collect() {
             val ctx = getApplication<Application>()
-            val raw = ConfigPrefsSync.readPublishedRaw(ctx)
-            val parsed = PublishedConfig.parse(raw)
+            val read = ConfigPrefsSync.readPublished(ctx)
+            val parsed = PublishedConfig.parse(read.textOrNull)
 
             val payloadStatus = when {
-                raw == null -> PayloadStatus.NeverPublished
+                read is PayloadRead.ReadError -> PayloadStatus.Unreadable(read.cause)
+                read is PayloadRead.Absent -> PayloadStatus.NeverPublished
                 parsed == null -> PayloadStatus.Malformed
                 else -> PayloadStatus.Ok(parsed.schemaVersion, parsed.fields.size)
             }
@@ -121,11 +126,11 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 // payload (a compatible schemaVersion, fieldsPresent=true) silently yielded APPLYING
                 // and made the verdict card contradict the payload card on the same screen.
                 applicability = HookApplicability.forPayload(
-                    rawPresent = raw != null,
+                    read = read,
                     parsed = parsed,
                     currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
                 ),
-                fingerprint = raw?.let { PublishedConfig.fingerprint(it) },
+                fingerprint = read.textOrNull?.let { PublishedConfig.fingerprint(it) },
                 report = report,
                 notes = observation.notes,
                 cellCount = observation.cellCount,

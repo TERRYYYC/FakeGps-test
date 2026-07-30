@@ -155,6 +155,39 @@ class VerificationEngineTest {
     }
 
     @Test
+    fun `a module-control field gets its own verdict so the row matches the summary`() {
+        // review 4822242223 P1: these fields were given FieldVerdict.UNOBSERVABLE, so each row
+        // rendered a "读不到" chip while the summary counted them under notVerifiable and printed
+        // "读不到 0". The same screen contradicted itself.
+        val specs = linkedMapOf(
+            "信号波动" to listOf(FieldSpec("signal_fluctuation_enabled", "启用波动", "", FieldType.BOOLEAN)),
+        )
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("signal_fluctuation_enabled" to "1"),
+            observed = emptyMap(),
+            specs = specs,
+        )
+        assertEquals(FieldVerdict.NOT_VERIFIABLE, r.field("signal_fluctuation_enabled").verdict)
+        assertEquals(1, r.summary.notVerifiable)
+        assertEquals(0, r.summary.unobservable)
+    }
+
+    @Test
+    fun `an unconfigured module-control field is omitted entirely`() {
+        val specs = linkedMapOf(
+            "信号波动" to listOf(FieldSpec("signal_fluctuation_enabled", "启用波动", "", FieldType.BOOLEAN)),
+            "x" to listOf(FieldSpec("tac", "TAC", "", FieldType.INTEGER)),
+        )
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("tac" to "1"),
+            observed = mapOf("tac" to "1"),
+            specs = specs,
+        )
+        assertEquals(listOf("tac"), r.allFields().map { it.spec.dbColumn })
+        assertEquals(0, r.summary.notVerifiable)
+    }
+
+    @Test
     fun `configuring only module-control fields is not reported as configuring nothing`() {
         // review 4822122472 P1: signal_fluctuation_* is excluded from EVIDENCE because no getter can
         // report it — but it IS configured, rides in the payload, and the hook applies it. Excluding

@@ -1,5 +1,6 @@
 package name.caiyao.fakegps.verify
 
+import name.caiyao.fakegps.config.PayloadRead
 import name.caiyao.fakegps.config.PublishedConfig
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -112,6 +113,18 @@ class HookApplicabilityTest {
     }
 
     @Test
+    fun `a read failure is distinct from never having published`() {
+        // review 4822242223 P1: readPublishedRaw collapsed "the read threw" and "no key" both into
+        // null, so an unreadable prefs file was announced as "尚未发布过配置，所有字段都会透传" —
+        // while the hook is in fact still spoofing from its last-known-good config.
+        assertEquals(
+            HookApplicability.PAYLOAD_UNREADABLE,
+            HookApplicability.forPayload(PayloadRead.ReadError("EACCES"), parsed = null, currentHour = 3),
+        )
+        assertEquals(false, HookApplicability.PAYLOAD_UNREADABLE.verdictsMeaningful)
+    }
+
+    @Test
     fun `an unparseable payload is never reported as applying`() {
         // review 4822122472 P1: when raw bytes exist but cannot be parsed, the previous code fell
         // back to schemaVersion=SCHEMA_VERSION / fieldsPresent=true / mode=always_on, i.e. APPLYING
@@ -120,7 +133,7 @@ class HookApplicabilityTest {
         // The hook is in fact still spoofing from a config we cannot read.
         assertEquals(
             HookApplicability.PAYLOAD_MALFORMED,
-            HookApplicability.forPayload(rawPresent = true, parsed = null, currentHour = 3),
+            HookApplicability.forPayload(PayloadRead.Raw("{oops"), parsed = null, currentHour = 3),
         )
         assertEquals(false, HookApplicability.PAYLOAD_MALFORMED.verdictsMeaningful)
     }
@@ -129,7 +142,7 @@ class HookApplicabilityTest {
     fun `nothing ever published is distinct from unparseable`() {
         assertEquals(
             HookApplicability.NEVER_PUBLISHED,
-            HookApplicability.forPayload(rawPresent = false, parsed = null, currentHour = 3),
+            HookApplicability.forPayload(PayloadRead.Absent, parsed = null, currentHour = 3),
         )
         assertEquals(false, HookApplicability.NEVER_PUBLISHED.verdictsMeaningful)
     }
@@ -141,7 +154,7 @@ class HookApplicabilityTest {
         )
         assertEquals(
             HookApplicability.MODE_OFF,
-            HookApplicability.forPayload(rawPresent = true, parsed = cfg, currentHour = 3),
+            HookApplicability.forPayload(PayloadRead.Raw("{}"), parsed = cfg, currentHour = 3),
         )
     }
 

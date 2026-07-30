@@ -1,6 +1,7 @@
 package name.caiyao.fakegps.verify
 
 import name.caiyao.fakegps.config.ConfigPrefsSync
+import name.caiyao.fakegps.config.PayloadRead
 import name.caiyao.fakegps.config.PublishedConfig
 
 /**
@@ -41,7 +42,13 @@ enum class HookApplicability {
     PAYLOAD_MALFORMED,
 
     /** Nothing has ever been published; the hook has no config at all. */
-    NEVER_PUBLISHED;
+    NEVER_PUBLISHED,
+
+    /**
+     * The payload could not be read at all (permissions, I/O). Unlike [NEVER_PUBLISHED] the hook is
+     * almost certainly still spoofing from last-known-good — we simply cannot see what.
+     */
+    PAYLOAD_UNREADABLE;
 
     val verdictsMeaningful: Boolean get() = this == APPLYING
 
@@ -55,7 +62,7 @@ enum class HookApplicability {
          * `fieldsPresent = true` for an unparseable payload, which silently produced [APPLYING].
          */
         fun forPayload(
-            rawPresent: Boolean,
+            read: PayloadRead,
             parsed: PublishedConfig?,
             currentHour: Int,
         ): HookApplicability = when {
@@ -67,7 +74,8 @@ enum class HookApplicability {
                 activeEnd = parsed.activeHourEnd,
                 fieldsPresent = parsed.fieldsPresent,
             )
-            rawPresent -> PAYLOAD_MALFORMED
+            read is PayloadRead.ReadError -> PAYLOAD_UNREADABLE
+            read is PayloadRead.Raw -> PAYLOAD_MALFORMED
             else -> NEVER_PUBLISHED
         }
         fun of(

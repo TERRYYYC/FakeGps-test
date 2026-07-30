@@ -209,6 +209,11 @@ private fun VerdictCard(state: VerifyUiState) {
                     detail = "磁盘上有 payload 但解析失败，hook 按契约保留上一次可用配置继续伪装。" +
                         "也就是说当前生效的配置本页读不出来，任何对比结论都不作数 —— 请重新保存一次档案。"
                 }
+                HookApplicability.PAYLOAD_UNREADABLE -> {
+                    headline = "读不到已发布的配置"
+                    detail = "磁盘上的 payload 读取失败（权限或文件异常）。hook 按契约保留上一次可用配置继续伪装，" +
+                        "所以当前很可能仍在伪装，只是本页看不到用的是哪份配置 —— 不要据此判断已停止伪装。"
+                }
                 HookApplicability.NEVER_PUBLISHED -> {
                     headline = "尚未发布过配置"
                     detail = "还没有任何配置送达 hook，所有字段都会透传真实值。到档案编辑页保存一次即可。"
@@ -239,9 +244,11 @@ private fun VerdictCard(state: VerifyUiState) {
             }
             VerificationStatus.CONFIGURED_UNVERIFIABLE -> {
                 headline = "已配置，但本页无法验证"
-                detail = "当前档案只配置了 ${summary.notVerifiable} 个模块开关类字段" +
-                    "（如信号波动），这类字段没有对应的系统读取接口，任何 App 都读不回来，" +
-                    "因此无法验证 —— 但它们确实已送达 hook 并生效。"
+                // Claims only what the payload proves. "已生效" would be unprovable here: the hook
+                // may not have re-read yet, and in a target app it may not be running at all.
+                detail = "当前档案只配置了 ${summary.notVerifiable} 个模块开关类字段（如信号波动）。" +
+                    "这类字段没有对应的系统读取接口，任何 App 都读不回来，因此本页无法验证它们是否已应用 —— " +
+                    "只能确认它们已写入发布给 hook 的配置。"
                 tone = MaterialTheme.colorScheme.onSurfaceVariant
             }
             VerificationStatus.PENDING_PROPAGATION -> {
@@ -297,6 +304,11 @@ private fun VerdictCard(state: VerifyUiState) {
                     CountPill("已生效", summary.spoofed, verdictColor(FieldVerdict.SPOOFED))
                     CountPill("未生效", summary.mismatch, verdictColor(FieldVerdict.MISMATCH))
                     CountPill("读不到", summary.unobservable, verdictColor(FieldVerdict.UNOBSERVABLE))
+                    // Must be shown, or rows chipped 不可验证 have no counterpart in the summary —
+                    // which is how "读不到 0" ended up sitting above a row that said 读不到.
+                    if (summary.notVerifiable > 0) {
+                        CountPill("不可验证", summary.notVerifiable, verdictColor(FieldVerdict.NOT_VERIFIABLE))
+                    }
                     CountPill("透传", summary.passthrough, verdictColor(FieldVerdict.PASSTHROUGH))
                 }
             }
@@ -332,6 +344,8 @@ private fun PayloadCard(state: VerifyUiState) {
             lines += "配置通道" to "从未发布过配置 — hook 无配置可用"
         is PayloadStatus.Malformed ->
             lines += "配置通道" to "payload 解析失败 — hook 将保留上一次可用配置"
+        is PayloadStatus.Unreadable ->
+            lines += "配置通道" to "读取失败（${p.cause}）— hook 仍在用上一次可用配置"
         is PayloadStatus.Ok -> {
             lines += "已送达 hook 的字段数" to "${p.fieldCount}"
             lines += "schemaVersion" to
@@ -468,6 +482,7 @@ private fun VerdictChip(verdict: FieldVerdict) {
         FieldVerdict.MISMATCH -> "未生效"
         FieldVerdict.UNOBSERVABLE -> "读不到"
         FieldVerdict.PASSTHROUGH -> "透传"
+        FieldVerdict.NOT_VERIFIABLE -> "不可验证"
     }
     val color = verdictColor(verdict)
     Box(
@@ -496,6 +511,7 @@ private fun verdictColor(v: FieldVerdict): Color = when (v) {
     FieldVerdict.MISMATCH -> MaterialTheme.colorScheme.error
     FieldVerdict.UNOBSERVABLE -> MaterialTheme.colorScheme.tertiary
     FieldVerdict.PASSTHROUGH -> MaterialTheme.colorScheme.outline
+    FieldVerdict.NOT_VERIFIABLE -> MaterialTheme.colorScheme.tertiary
 }
 
 private fun modeLabel(mode: String): String = when (mode) {

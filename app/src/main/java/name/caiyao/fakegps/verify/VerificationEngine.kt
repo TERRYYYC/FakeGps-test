@@ -19,6 +19,16 @@ enum class FieldVerdict {
     /** Configured, but this process cannot read the field at all. No evidence either way. */
     UNOBSERVABLE,
 
+    /**
+     * Configured, but NO Android getter exists for it in any app — a module control knob such as
+     * signal_fluctuation_*. Distinct from [UNOBSERVABLE], which is a device/API limitation the user
+     * could work around on other hardware; this one is unverifiable everywhere, by design.
+     *
+     * Kept separate so the row chip and the summary counter agree. Reusing UNOBSERVABLE made rows
+     * render "读不到" while the summary printed "读不到 0".
+     */
+    NOT_VERIFIABLE,
+
     /** Not configured, so the app correctly sees the real device value. */
     PASSTHROUGH,
 }
@@ -191,25 +201,26 @@ object VerificationEngine {
                 // Rendering these would bury the informative rows under ~80 empty ones.
                 if (cfg == null && obs == null && real == null) continue
 
+                // A field no getter can report is not evidence either way, so it must not sway the
+                // verifiable counters — but if the user configured it, it still counts as
+                // configured, or the screen would claim nothing is being spoofed.
+                val moduleKnob = spec.dbColumn in NOT_DEVICE_OBSERVABLE
+                if (moduleKnob && cfg == null) continue   // nothing configured, nothing to say
+
                 val verdict = when {
+                    moduleKnob -> FieldVerdict.NOT_VERIFIABLE
                     cfg == null -> FieldVerdict.PASSTHROUGH
                     obs == null -> FieldVerdict.UNOBSERVABLE
                     valuesMatch(cfg, obs) -> FieldVerdict.SPOOFED
                     else -> FieldVerdict.MISMATCH
                 }
 
-                // A field no getter can report is not evidence either way, so it must not sway the
-                // verifiable counters — but if the user configured it, it still counts as
-                // configured, or the screen would claim nothing is being spoofed.
-                if (spec.dbColumn in NOT_DEVICE_OBSERVABLE) {
-                    if (cfg != null) notVerifiable++
-                } else {
-                    when (verdict) {
-                        FieldVerdict.SPOOFED -> spoofed++
-                        FieldVerdict.MISMATCH -> mismatch++
-                        FieldVerdict.UNOBSERVABLE -> unobservable++
-                        FieldVerdict.PASSTHROUGH -> passthrough++
-                    }
+                when (verdict) {
+                    FieldVerdict.SPOOFED -> spoofed++
+                    FieldVerdict.MISMATCH -> mismatch++
+                    FieldVerdict.UNOBSERVABLE -> unobservable++
+                    FieldVerdict.PASSTHROUGH -> passthrough++
+                    FieldVerdict.NOT_VERIFIABLE -> notVerifiable++
                 }
 
                 rows += FieldReport(

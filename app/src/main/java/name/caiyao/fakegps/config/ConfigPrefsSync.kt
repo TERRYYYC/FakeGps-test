@@ -180,9 +180,15 @@ object ConfigPrefsSync {
      * between the DB and this payload.
      */
     @JvmStatic
-    fun readPublishedRaw(context: Context): String? = runCatching {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_JSON, null)
-    }.getOrNull()
+    fun readPublished(context: Context): PayloadRead = try {
+        val text = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_JSON, null)
+        if (text == null) PayloadRead.Absent else PayloadRead.Raw(text)
+    } catch (t: Throwable) {
+        // Distinct from Absent on purpose: a failed read means the hook is still running its
+        // last-known-good config, which is the opposite of "nothing is being spoofed".
+        PayloadRead.ReadError("${t.javaClass.simpleName}: ${t.message}")
+    }
 
     /** Wall-clock time of the last publish, or null if never published / not recorded. */
     @JvmStatic
