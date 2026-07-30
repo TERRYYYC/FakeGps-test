@@ -95,7 +95,7 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 else -> PayloadStatus.Ok(parsed.schemaVersion, parsed.fields.size)
             }
 
-            val observation = DeviceObserver(ctx).observe()
+            val observation = DeviceObserver(ctx, parsed?.fields?.keys.orEmpty()).observe()
 
             // The hook re-reads the prefs on a timer, so a config saved seconds ago may not be in
             // force yet. Without this, saving and immediately verifying shows a deterministic red.

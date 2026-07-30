@@ -1,6 +1,7 @@
 package name.caiyao.fakegps.verify
 
 import name.caiyao.fakegps.data.model.FieldSpec
+import name.caiyao.fakegps.data.model.FieldType
 
 /**
  * Outcome for a single field: did the value the user configured actually reach the app?
@@ -174,6 +175,38 @@ object VerificationEngine {
         "addname",
     )
 
+    /**
+     * Columns served by HookUtils#hookSignal, which pipes every value through
+     * [name.caiyao.fakegps.hook.Snapshot.fluctuate] before returning it.
+     *
+     * Only these may be compared against a fluctuation window: cell identity (tac/ci/mcc…) is
+     * returned verbatim, so relaxing it would let a genuinely broken identity spoof pass.
+     */
+    private val FLUCTUATING_SIGNAL_COLUMNS = setOf(
+        "gsm_rssi", "gsm_ber", "gsm_ta",
+        "wcdma_rscp", "wcdma_rssi", "wcdma_ecno",
+        "lte_rsrp", "lte_rsrq", "lte_sinr", "lte_cqi", "lte_ta", "lte_rssi",
+        "nr_ss_rsrp", "nr_ss_rsrq", "nr_ss_sinr",
+        "nr_csi_rsrp", "nr_csi_rsrq", "nr_csi_sinr",
+    )
+
+    /**
+     * The interval a configured signal value can legitimately be observed within.
+     *
+     * Mirrors `Snapshot.fluctuate`: `base + rnd.nextInt(range + 1) - range / 2`, i.e.
+     * `[base - range/2, base + range - range/2]` with integer division. Derived from the payload's
+     * own fluctuation settings, so it cannot drift from what the hook will actually emit.
+     */
+    internal fun fluctuationWindow(configured: Map<String, String>): IntRange? {
+        val enabled = configured["signal_fluctuation_enabled"]?.trim()
+        val on = enabled == "1" || enabled.equals("true", ignoreCase = true)
+        if (!on) return null
+        val range = configured["signal_fluctuation_range_db"]?.trim()?.toIntOrNull() ?: return null
+        if (range <= 0) return null   // fluctuate() perturbs nothing unless range > 0
+        val half = range / 2
+        return -half..(range - half)
+    }
+
     fun buildReport(
         configured: Map<String, String>,
         observed: Map<String, String>,
@@ -186,6 +219,7 @@ object VerificationEngine {
         var mismatch = 0
         var unobservable = 0
         var notVerifiable = 0
+        val window = fluctuationWindow(configured)
         var passthrough = 0
         val mappedColumns = mutableSetOf<String>()
 
@@ -211,7 +245,7 @@ object VerificationEngine {
                     moduleKnob -> FieldVerdict.NOT_VERIFIABLE
                     cfg == null -> FieldVerdict.PASSTHROUGH
                     obs == null -> FieldVerdict.UNOBSERVABLE
-                    valuesMatch(cfg, obs) -> FieldVerdict.SPOOFED
+                    fieldMatches(spec, cfg, obs, window) -> FieldVerdict.SPOOFED
                     else -> FieldVerdict.MISMATCH
                 }
 
@@ -263,6 +297,43 @@ object VerificationEngine {
      * Remaining text is compared verbatim, case included: the hook hands back the configured string
      * untouched, so any other difference means the value did not come from us.
      */
+    /**
+     * Whether [observed] is a value the hook could have produced from [configured] for this field.
+     *
+     * Two field-specific relaxations on top of [valuesMatch], each bounded by hook behaviour:
+     *
+     *  - FLOAT columns round-trip Float → SQLite REAL → JSON double, so a configured `0.1f` is
+     *    published as `0.10000000149011612` while the getter reports `0.1`. Comparing as Float
+     *    collapses exactly that artefact and nothing else.
+     *  - Signal columns pass through `Snapshot.fluctuate`, so with fluctuation enabled the hook
+     *    deliberately returns a randomised value inside a known window.
+     *
+     * Neither applies to identity columns, so `mnc=3` against a real, unhooked `"03"` stays a
+     * mismatch.
+     */
+    internal fun fieldMatches(
+        spec: FieldSpec,
+        configured: String,
+        observed: String,
+        window: IntRange?,
+    ): Boolean {
+        if (valuesMatch(configured, observed)) return true
+
+        if (spec.type == FieldType.FLOAT) {
+            val a = configured.trim().toFloatOrNull()
+            val b = observed.trim().toFloatOrNull()
+            if (a != null && b != null) return a == b
+        }
+
+        if (window != null && spec.dbColumn in FLUCTUATING_SIGNAL_COLUMNS) {
+            val base = configured.trim().toIntOrNull()
+            val seen = observed.trim().toIntOrNull()
+            if (base != null && seen != null) return (seen - base) in window
+        }
+
+        return false
+    }
+
     internal fun valuesMatch(configured: String, observed: String): Boolean {
         val a = unquote(configured.trim())
         val b = unquote(observed.trim())

@@ -35,7 +35,28 @@ import java.util.concurrent.atomic.AtomicReference
  * Deliberately free of judgement — it reports values, never verdicts. All interpretation lives in
  * [VerificationEngine], which is pure and unit-tested.
  */
-class DeviceObserver(private val context: Context) {
+class DeviceObserver(
+    private val context: Context,
+    /**
+     * Columns present in the published payload. Needed only to disambiguate readings that the
+     * platform exposes through a single getter but the profile splits across two columns.
+     */
+    private val configuredColumns: Set<String> = emptySet(),
+) {
+
+    companion object {
+        /**
+         * Which column WCDMA's single public `getDbm()` reading belongs to.
+         *
+         * Mirrors `Snapshot.resolveWcdmaDbm(rscp, rssi)` — RSCP wins, RSSI is the fallback. Filing
+         * the reading under RSSI unconditionally meant a profile configuring only RSCP saw 读不到
+         * on RSCP (nothing ever landed there) while the RSCP value was compared against a
+         * configured RSSI, inventing a mismatch for a hook doing exactly what it was told.
+         */
+        @JvmStatic
+        fun wcdmaDbmColumn(configuredColumns: Set<String>): String =
+            if ("wcdma_rscp" in configuredColumns) "wcdma_rscp" else "wcdma_rssi"
+    }
 
     data class Observation(
         /** dbColumn -> value as observed. Absent key == this process could not read the field. */
@@ -174,7 +195,7 @@ class DeviceObserver(private val context: Context) {
                 out.putInt("lac", id.lac)
                 out.putInt("cid", id.cid)
                 out.putInt("psc", id.psc)
-                out.putInt("wcdma_rssi", cell.cellSignalStrength.dbm)
+                out.putInt(wcdmaDbmColumn(configuredColumns), cell.cellSignalStrength.dbm)
             }
             is CellInfoLte -> {
                 val id = cell.cellIdentity
