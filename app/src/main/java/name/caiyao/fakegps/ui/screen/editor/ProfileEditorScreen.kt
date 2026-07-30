@@ -31,6 +31,7 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import name.caiyao.fakegps.data.model.FieldSpec
 import name.caiyao.fakegps.data.model.FieldType
+import name.caiyao.fakegps.config.UnavailableSpec
 import name.caiyao.fakegps.verify.ObservationScope
 import name.caiyao.fakegps.verify.VerificationEngine
 
@@ -214,7 +216,9 @@ private fun TextField(
     // Only meaningful against a REAL baseline: a debug build hooks itself, so there "reference" is
     // already the spoofed value and a match means the hook WORKS — warning about it would be
     // exactly backwards.
-    val collides = scope == ObservationScope.REAL_BASELINE && value.isNotBlank() &&
+    val unavailable = value == ProfileFieldDraft.UNAVAILABLE_TOKEN
+    val supportsUnavailable = UnavailableSpec.supportsUnavailable(spec.dbColumn)
+    val collides = !unavailable && scope == ObservationScope.REAL_BASELINE && value.isNotBlank() &&
         reference != null && VerificationEngine.valuesMatch(value, reference)
 
     val referenceLabel = when (scope) {
@@ -233,11 +237,26 @@ private fun TextField(
             isError = collides,
             supportingText = {
                 when {
+                    unavailable -> Text("不上报：目标 App 将看到该 API 的“无数据”值")
                     collides -> Text("与$referenceLabel 相同 — 即使生效也无法区分，建议换一个明显不同的值")
                     reference != null -> Text("$referenceLabel：$reference")
-                    else -> Text("留空 = 透传真实值")
+                    supportsUnavailable -> Text("留空 = 透传真实值；不上报 = 该 API 返回无数据")
+                    else -> Text("留空 = 透传真实值；此字段不支持不上报")
                 }
             },
+            trailingIcon = if (supportsUnavailable) {
+                {
+                    TextButton(
+                        onClick = {
+                            onValueChange(
+                                if (unavailable) "" else ProfileFieldDraft.UNAVAILABLE_TOKEN,
+                            )
+                        },
+                    ) {
+                        Text(if (unavailable) "透传" else "不上报")
+                    }
+                }
+            } else null,
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),

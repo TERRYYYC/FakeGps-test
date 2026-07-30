@@ -63,6 +63,29 @@ class VerificationEngineTest {
     }
 
     @Test
+    fun `explicit unavailable observed through platform empty form is SPOOFED`() {
+        val r = VerificationEngine.buildReport(
+            configured = emptyMap(),
+            unavailable = setOf("tac"),
+            observed = mapOf("tac" to "--"),
+            specs = lteSpecs,
+        )
+        assertEquals(FieldVerdict.SPOOFED, r.field("tac").verdict)
+        assertEquals("--", r.field("tac").configured)
+    }
+
+    @Test
+    fun `explicit unavailable returning a real value is MISMATCH`() {
+        val r = VerificationEngine.buildReport(
+            configured = emptyMap(),
+            unavailable = setOf("tac"),
+            observed = mapOf("tac" to "26999"),
+            specs = lteSpecs,
+        )
+        assertEquals(FieldVerdict.MISMATCH, r.field("tac").verdict)
+    }
+
+    @Test
     fun `unconfigured field showing a real value is PASSTHROUGH not a failure`() {
         // NULL = passthrough is the project's core invariant; seeing the real value here is correct.
         val r = VerificationEngine.buildReport(

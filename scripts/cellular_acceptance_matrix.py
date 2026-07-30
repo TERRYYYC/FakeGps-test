@@ -17,6 +17,7 @@ class Scenario:
     name: str
     fields: Mapping[str, Any]
     fluctuation: bool = False
+    unavailable: Tuple[str, ...] = ()
 
 
 _NEIGHBOR_CELLS = [
@@ -122,6 +123,19 @@ _COMMON_FIELDS = {
     ),
 }
 
+_UNAVAILABLE_NATIVE_VALUES = {
+    "tac": 2_147_483_647,
+    "nci": 9_223_372_036_854_775_807,
+    "lte_rsrp": 2_147_483_647,
+    "operator_numeric": "",
+    "network_type": 0,
+    "band": 0,
+    "physical_cell_id": -1,
+}
+_UNAVAILABLE_FIELDS = dict(_COMMON_FIELDS, wcdma_rscp=-88)
+for _field in _UNAVAILABLE_NATIVE_VALUES:
+    _UNAVAILABLE_FIELDS.pop(_field)
+
 _SCENARIOS = {
     "full-rscp": Scenario(
         "full-rscp",
@@ -148,6 +162,11 @@ _SCENARIOS = {
         },
         fluctuation=True,
     ),
+    "unavailable": Scenario(
+        "unavailable",
+        _UNAVAILABLE_FIELDS,
+        unavailable=tuple(sorted(_UNAVAILABLE_NATIVE_VALUES)),
+    ),
 }
 
 
@@ -170,10 +189,11 @@ def get_scenario(name: str) -> Scenario:
 def payload_for(name: str, session_id: str) -> Dict[str, Any]:
     scenario = _scenario_for_session(name, session_id)
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "acceptanceSessionId": session_id,
         "mode": "always_on",
         "fields": dict(scenario.fields),
+        "unavailable": list(scenario.unavailable),
     }
 
 
@@ -233,6 +253,7 @@ def _scenario_for_session(name: str, session_id: str) -> Scenario:
         name=scenario.name,
         fields=fields,
         fluctuation=scenario.fluctuation,
+        unavailable=scenario.unavailable,
     )
 
 
@@ -240,7 +261,9 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
     if scenario.fluctuation:
         return _build_fluctuation_expected(scenario)
 
-    fields = scenario.fields
+    fields = dict(scenario.fields)
+    for field in scenario.unavailable:
+        fields[field] = _UNAVAILABLE_NATIVE_VALUES[field]
     expected: Dict[str, Any] = {}
     covered: Set[str] = set()
 

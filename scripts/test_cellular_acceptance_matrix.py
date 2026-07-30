@@ -12,7 +12,7 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
 
     def test_two_scenarios_cover_wcdma_power_aliases_without_ambiguity(self):
         self.assertEqual(
-            ("full-rscp", "full-rssi", "fluctuation-enabled"),
+            ("full-rscp", "full-rssi", "fluctuation-enabled", "unavailable"),
             matrix.scenario_names(),
         )
 
@@ -28,14 +28,15 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
             set(rssi.fields).difference({"wcdma_rssi"}),
         )
 
-    def test_payload_is_canonical_schema_v2_and_preserves_nr_long_width(self):
+    def test_payload_is_canonical_schema_v3_and_preserves_nr_long_width(self):
         payload = matrix.payload_for("full-rscp", SESSION_ID)
 
         self.assertEqual(
-            ["acceptanceSessionId", "fields", "mode", "schemaVersion"],
+            ["acceptanceSessionId", "fields", "mode", "schemaVersion", "unavailable"],
             sorted(payload),
         )
-        self.assertEqual(2, payload["schemaVersion"])
+        self.assertEqual(3, payload["schemaVersion"])
+        self.assertEqual([], payload["unavailable"])
         self.assertEqual(SESSION_ID, payload["acceptanceSessionId"])
         self.assertEqual("always_on", payload["mode"])
         self.assertEqual(68_719_400_000, payload["fields"]["nci"])
@@ -101,12 +102,39 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
         for name in matrix.scenario_names():
             scenario = matrix.get_scenario(name)
             covered = matrix.covered_profile_fields(name)
-            self.assertEqual(set(scenario.fields), covered, name)
+            self.assertEqual(
+                set(scenario.fields).union(scenario.unavailable),
+                covered,
+                name,
+            )
 
         self.assertNotIn(
             "signal_fluctuation_enabled",
             matrix.get_scenario("full-rscp").fields,
         )
+
+    def test_unavailable_scenario_uses_orthogonal_set_and_native_surface_values(self):
+        payload = matrix.payload_for("unavailable", SESSION_ID)
+        selected = {
+            "tac",
+            "nci",
+            "lte_rsrp",
+            "operator_numeric",
+            "network_type",
+            "band",
+            "physical_cell_id",
+        }
+        self.assertEqual(sorted(selected), payload["unavailable"])
+        self.assertTrue(selected.isdisjoint(payload["fields"]))
+
+        expected = matrix.expected_for("unavailable", SESSION_ID)
+        self.assertEqual(2_147_483_647, expected["cellInfo.sync.lte.tac"])
+        self.assertEqual(9_223_372_036_854_775_807, expected["cellInfo.sync.nr.nci"])
+        self.assertEqual(2_147_483_647, expected["cellInfo.sync.lte.rsrp"])
+        self.assertEqual("", expected["telephony.networkOperator"])
+        self.assertEqual(0, expected["telephony.networkType"])
+        self.assertEqual(0, expected["callback.physicalChannel.band"])
+        self.assertEqual(-1, expected["callback.physicalChannel.physicalCellId"])
         fluctuation = matrix.get_scenario("fluctuation-enabled")
         self.assertEqual(1, fluctuation.fields["signal_fluctuation_enabled"])
         self.assertEqual(6, fluctuation.fields["signal_fluctuation_range_db"])
@@ -145,6 +173,22 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
             "Android API 33+ required for --cellular-matrix",
             matrix_preflight,
         )
+
+    def test_transport_snapshot_compares_payload_not_publish_metadata(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        snapshot = self._shell_function(script, "snapshot_prefs")
+
+        self.assertIn('name="json"', snapshot)
+        self.assertNotIn("sha256sum", snapshot)
+        self.assertNotIn("published_at", snapshot)
+
+    def test_matrix_preflight_waits_for_room_migration_before_protection_snapshot(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        matrix_preflight = self._shell_function(script, "preflight_matrix")
+        schema_wait = self._shell_function(script, "wait_for_profile_schema")
+
+        self.assertIn("wait_for_profile_schema", matrix_preflight)
+        self.assertIn("unavailable_fields=", schema_wait)
 
     def test_current_profile_waits_for_the_asynchronous_probe_result(self):
         script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")

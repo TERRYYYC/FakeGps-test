@@ -29,7 +29,8 @@ import java.util.Set;
  * <ul>
  *   <li><b>Layer 1 (this class)</b> — capability + decision: may the UI offer "--", and if not,
  *       why. One decision per field, exhaustive over {@code FieldSpec.allCategories()}.</li>
- *   <li><b>Layer 2 (to implement)</b> — a hook-surface resolver: {@code (field, surface) ->}
+ *   <li><b>Layer 2 ({@code UnavailableValueResolver})</b> — a hook-surface resolver:
+ *       {@code (field, surface) ->}
  *       {@code MAX_VALUE / -1 / 0 / null / empty collection}. Only the call site knows which
  *       surface it is writing to, so only it can pick the right "unknown".</li>
  * </ul>
@@ -63,13 +64,13 @@ public final class UnavailableSpec {
      * reach. Cellular identity/signal integers ({@code CellInfo.UNAVAILABLE}), {@code nci}
      * ({@code UNAVAILABLE_LONG}) and the operator/SIM text group (empty string).
      *
-     * <p>NOT included, deliberately: {@code lac}/{@code cid} (dual surface, see class doc) and
-     * the PhysicalChannelConfig group (band / bandwidths use {@code 0}, physical cell id uses
-     * {@code -1} — not MAX_VALUE).
+     * <p>Layer 2 now resolves dual-surface and non-CellInfo unknowns at their call sites, so the
+     * cellular network/state/physical-channel fields can also be selected here without folding
+     * them into one unsafe sentinel.
      */
     private static final Set<String> SUPPORTED = setOf(
             // cellular identity — single surface (CellIdentity*)
-            "mcc", "mnc", "arfcn", "bsic", "psc", "uarfcn",
+            "mcc", "mnc", "lac", "cid", "arfcn", "bsic", "psc", "uarfcn",
             "tac", "ci", "pci", "earfcn", "lte_bandwidth",
             "nci", "nrarfcn", "nr_pci", "nr_tac",
             // cellular signal
@@ -80,28 +81,29 @@ public final class UnavailableSpec {
             "nr_csi_rsrp", "nr_csi_rsrq", "nr_csi_sinr",
             // operator / SIM text — telephony's unknown really is ""
             "operator_name", "operator_numeric", "sim_operator", "sim_operator_name",
-            "sim_country_iso", "network_country_iso");
+            "sim_country_iso", "network_country_iso",
+            // network/service/display
+            "network_type", "data_network_type", "voice_network_type", "phone_type",
+            "data_state", "data_activity", "override_network_type",
+            // physical channel
+            "band", "channel_bandwidth", "cell_bandwidth_downlink", "physical_cell_id",
+            // structured cellular neighbors
+            "neighbor_cells_json");
 
     /**
      * Fields explicitly decided NOT to support "--", with the reason. Keeping these enumerated
      * (rather than letting them fall through) is what makes the decision set exhaustive: a newly
      * added field belongs to neither set and is caught by the coverage gate.
      */
-    private static final Set<String> UNSUPPORTED_DUAL_SURFACE = setOf("lac", "cid");
-
-    private static final Set<String> UNSUPPORTED_PHYSICAL_CHANNEL = setOf(
-            "band", "channel_bandwidth", "cell_bandwidth_downlink", "physical_cell_id");
-
     private static final Set<String> UNSUPPORTED_LOCATION = setOf(
             "latitude", "longitude", "altitude", "speed", "bearing", "accuracy");
 
     private static final Set<String> UNSUPPORTED_BOOLEAN = setOf(
             "is_roaming", "wifi_hidden", "wifi_enabled", "signal_fluctuation_enabled");
 
+    private static final Set<String> UNSUPPORTED_NO_EMPTY_STATE = setOf("service_state");
+
     private static final Set<String> UNSUPPORTED_UNVERIFIED = setOf(
-            // network / service state integers: unknown is a 0-based constant, not MAX_VALUE
-            "network_type", "data_network_type", "voice_network_type", "phone_type",
-            "service_state", "data_state", "data_activity", "override_network_type",
             // Wi-Fi integers: RSSI unknown is -127; frequency / link speed are -1
             "wifi_rssi", "wifi_frequency", "wifi_link_speed", "wifi_tx_link_speed",
             "wifi_rx_link_speed", "wifi_channel", "wifi_standard", "wifi_security_type",
@@ -110,18 +112,15 @@ public final class UnavailableSpec {
             // IP / DNS / routing text: each needs its own empty behaviour
             "local_ipv4", "local_ipv6", "dns_primary", "dns_secondary", "gateway",
             "subnet_mask", "connection_type", "interface_name",
-            // structured payload: unknown is an empty collection, not a scalar
-            "neighbor_cells_json",
             // module-internal knob, not a device field
             "signal_fluctuation_range_db");
 
     /** Every field that has an explicit decision. Must equal the editable field set. */
     public static Set<String> decidedColumns() {
         Set<String> all = new LinkedHashSet<>(SUPPORTED);
-        all.addAll(UNSUPPORTED_DUAL_SURFACE);
-        all.addAll(UNSUPPORTED_PHYSICAL_CHANNEL);
         all.addAll(UNSUPPORTED_LOCATION);
         all.addAll(UNSUPPORTED_BOOLEAN);
+        all.addAll(UNSUPPORTED_NO_EMPTY_STATE);
         all.addAll(UNSUPPORTED_UNVERIFIED);
         return Collections.unmodifiableSet(all);
     }
@@ -146,20 +145,15 @@ public final class UnavailableSpec {
     public static String reasonFor(String column) {
         if (column == null) return "unknown field";
         if (SUPPORTED.contains(column)) return "";
-        if (UNSUPPORTED_DUAL_SURFACE.contains(column)) {
-            return "written to two surfaces with different unknowns "
-                    + "(CellIdentity=MAX_VALUE, GsmCellLocation=-1); needs the surface resolver";
-        }
-        if (UNSUPPORTED_PHYSICAL_CHANNEL.contains(column)) {
-            return "PhysicalChannelConfig unknown is 0 (band/bandwidth) or -1 (physical cell id), "
-                    + "not CellInfo.UNAVAILABLE";
-        }
         if (UNSUPPORTED_LOCATION.contains(column)) {
             return "Location geometry has no per-field unavailable form "
                     + "(altitude/speed/bearing/accuracy use hasX/removeX, not a sentinel)";
         }
         if (UNSUPPORTED_BOOLEAN.contains(column)) {
             return "a boolean has no third value";
+        }
+        if (UNSUPPORTED_NO_EMPTY_STATE.contains(column)) {
+            return "ServiceState has no UNKNOWN/empty constant; OUT_OF_SERVICE is a real state";
         }
         if (UNSUPPORTED_UNVERIFIED.contains(column)) {
             return "platform unknown not yet verified against AOSP for this surface";

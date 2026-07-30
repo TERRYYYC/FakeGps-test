@@ -18,7 +18,7 @@ class HookApplicabilityTest {
     fun `always_on with a compatible payload is applying`() {
         assertEquals(
             HookApplicability.APPLYING,
-            HookApplicability.of(mode = "always_on", schemaVersion = 2, currentHour = 3),
+            HookApplicability.of(mode = "always_on", schemaVersion = 3, currentHour = 3),
         )
     }
 
@@ -26,7 +26,7 @@ class HookApplicabilityTest {
     fun `mode off means the hook passes everything through by design`() {
         assertEquals(
             HookApplicability.MODE_OFF,
-            HookApplicability.of(mode = "off", schemaVersion = 2, currentHour = 3),
+            HookApplicability.of(mode = "off", schemaVersion = 3, currentHour = 3),
         )
     }
 
@@ -34,7 +34,7 @@ class HookApplicabilityTest {
     fun `inside the active window time_based is applying`() {
         assertEquals(
             HookApplicability.APPLYING,
-            HookApplicability.of("time_based", 2, currentHour = 9, activeStart = 7, activeEnd = 22),
+            HookApplicability.of("time_based", 3, currentHour = 9, activeStart = 7, activeEnd = 22),
         )
     }
 
@@ -44,7 +44,7 @@ class HookApplicabilityTest {
         // screen blamed the module scope.
         assertEquals(
             HookApplicability.OUTSIDE_ACTIVE_HOURS,
-            HookApplicability.of("time_based", 2, currentHour = 23, activeStart = 7, activeEnd = 22),
+            HookApplicability.of("time_based", 3, currentHour = 23, activeStart = 7, activeEnd = 22),
         )
     }
 
@@ -53,11 +53,11 @@ class HookApplicabilityTest {
         // MainHook: (start <= end) ? (h >= start && h < end) : (h >= start || h < end)
         assertEquals(
             HookApplicability.APPLYING,
-            HookApplicability.of("time_based", 2, currentHour = 2, activeStart = 22, activeEnd = 7),
+            HookApplicability.of("time_based", 3, currentHour = 2, activeStart = 22, activeEnd = 7),
         )
         assertEquals(
             HookApplicability.OUTSIDE_ACTIVE_HOURS,
-            HookApplicability.of("time_based", 2, currentHour = 12, activeStart = 22, activeEnd = 7),
+            HookApplicability.of("time_based", 3, currentHour = 12, activeStart = 22, activeEnd = 7),
         )
     }
 
@@ -65,7 +65,7 @@ class HookApplicabilityTest {
     fun `time_based without an active window falls back to applying`() {
         assertEquals(
             HookApplicability.APPLYING,
-            HookApplicability.of("time_based", 2, currentHour = 12),
+            HookApplicability.of("time_based", 3, currentHour = 12),
         )
     }
 
@@ -92,7 +92,7 @@ class HookApplicabilityTest {
         // it would describe a config the hook is not using.
         assertEquals(
             HookApplicability.PAYLOAD_INCOMPLETE,
-            HookApplicability.of("always_on", 2, currentHour = 3, fieldsPresent = false),
+            HookApplicability.of("always_on", 3, currentHour = 3, fieldsPresent = false),
         )
     }
 
@@ -100,7 +100,16 @@ class HookApplicabilityTest {
     fun `an explicitly empty fields object is a real config and stays applying`() {
         assertEquals(
             HookApplicability.APPLYING,
-            HookApplicability.of("always_on", 2, currentHour = 3, fieldsPresent = true),
+            HookApplicability.of("always_on", 3, currentHour = 3, fieldsPresent = true),
+        )
+    }
+
+    @Test
+    fun `schema v3 without unavailable array is structurally incomplete`() {
+        val parsed = PublishedConfig.parse("""{"schemaVersion":3,"fields":{}}""")!!
+        assertEquals(
+            HookApplicability.PAYLOAD_INCOMPLETE,
+            HookApplicability.forPayload(PayloadRead.Raw("{}"), parsed, currentHour = 3),
         )
     }
 
@@ -150,7 +159,7 @@ class HookApplicabilityTest {
     @Test
     fun `a parseable payload still goes through the normal gates`() {
         val cfg = PublishedConfig(
-            schemaVersion = 2, mode = "off", fields = emptyMap(), fieldsPresent = true,
+            schemaVersion = 3, mode = "off", fields = emptyMap(), fieldsPresent = true,
         )
         assertEquals(
             HookApplicability.MODE_OFF,

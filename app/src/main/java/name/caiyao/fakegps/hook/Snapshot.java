@@ -2,7 +2,12 @@ package name.caiyao.fakegps.hook;
 
 import android.database.Cursor;
 
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.Random;
+import java.util.Set;
+
+import name.caiyao.fakegps.config.UnavailableSpec;
 
 /**
  * Thread-safe snapshot of current spoofing configuration.
@@ -16,6 +21,8 @@ class Snapshot {
 
     /** Default: everything null = passthrough all real values. */
     static final Snapshot PASSTHROUGH = new Snapshot();
+
+    private Set<String> unavailableFields = Collections.emptySet();
 
     /**
      * LAST-KNOWN-GOOD resolution for an unreadable / structurally incomplete config payload.
@@ -65,6 +72,20 @@ class Snapshot {
      */
     static Integer resolveCellField(Integer configured, Integer real) {
         return configured != null ? configured : real;
+    }
+
+    static Integer resolveGsmCellLocationField(
+            Integer configured, Integer real, boolean unavailable) {
+        if (unavailable) {
+            return (Integer) UnavailableValueResolver.resolve(
+                    "lac", UnavailableValueResolver.Surface.GSM_CELL_LOCATION).value();
+        }
+        return resolveCellField(configured, real);
+    }
+
+    static String resolvePlmnString(Integer configured, String real, boolean unavailable) {
+        if (unavailable) return null;
+        return configured != null ? String.valueOf(configured) : real;
     }
 
     /**
@@ -411,6 +432,37 @@ class Snapshot {
         return s;
     }
 
+    /**
+     * Build a snapshot with an orthogonal unavailable decision set.
+     *
+     * <p>The wrapper materializes the canonical value used by generic hooks; call sites whose
+     * Android surface differs (PLMN strings and {@code GsmCellLocation}) must inspect
+     * {@link #isUnavailable(String)} and use {@link UnavailableValueResolver} for that surface.
+     */
+    static Snapshot from(FieldSource src, Set<String> unavailable) {
+        Set<String> copy = unavailable == null
+                ? Collections.emptySet() : new LinkedHashSet<>(unavailable);
+        for (String field : copy) {
+            if (!UnavailableSpec.supportsUnavailable(field)) {
+                throw new IllegalArgumentException("unsupported unavailable field: " + field);
+            }
+            if (!UnavailableValueResolver.resolveSnapshotField(field).handled()) {
+                throw new IllegalArgumentException("no snapshot resolver for unavailable field: " + field);
+            }
+        }
+        Snapshot s = from(copy.isEmpty() ? src : new UnavailableSource(src, copy));
+        s.unavailableFields = Collections.unmodifiableSet(copy);
+        return s;
+    }
+
+    boolean isUnavailable(String field) {
+        return unavailableFields.contains(field);
+    }
+
+    Set<String> unavailableFields() {
+        return unavailableFields;
+    }
+
     /** Read the profile row out of a DB cursor (in-app path). */
     static Snapshot fromCursor(Cursor c) {
         return from(new CursorSource(c));
@@ -426,6 +478,10 @@ class Snapshot {
      */
     static Snapshot fromJson(org.json.JSONObject fields) {
         return from(new JsonSource(fields));
+    }
+
+    static Snapshot fromJson(org.json.JSONObject fields, Set<String> unavailable) {
+        return from(new JsonSource(fields), unavailable);
     }
 
     /**
@@ -473,6 +529,45 @@ class Snapshot {
             if (v instanceof Boolean) return (Boolean) v;
             if (v instanceof Number)  return ((Number) v).intValue() != 0;
             return Boolean.parseBoolean(String.valueOf(v));
+        }
+    }
+
+    private static final class UnavailableSource implements FieldSource {
+        private final FieldSource delegate;
+        private final Set<String> unavailable;
+
+        UnavailableSource(FieldSource delegate, Set<String> unavailable) {
+            this.delegate = delegate;
+            this.unavailable = unavailable;
+        }
+
+        private Object value(String col) {
+            if (!unavailable.contains(col)) return null;
+            UnavailableValueResolver.Resolution r =
+                    UnavailableValueResolver.resolveSnapshotField(col);
+            if (!r.handled()) {
+                throw new IllegalArgumentException("no unavailable resolver for " + col);
+            }
+            return r.value();
+        }
+
+        @Override public Double getDouble(String col) {
+            return unavailable.contains(col) ? (Double) value(col) : delegate.getDouble(col);
+        }
+        @Override public Float getFloat(String col) {
+            return unavailable.contains(col) ? (Float) value(col) : delegate.getFloat(col);
+        }
+        @Override public Integer getInt(String col) {
+            return unavailable.contains(col) ? (Integer) value(col) : delegate.getInt(col);
+        }
+        @Override public Long getLong(String col) {
+            return unavailable.contains(col) ? (Long) value(col) : delegate.getLong(col);
+        }
+        @Override public String getString(String col) {
+            return unavailable.contains(col) ? (String) value(col) : delegate.getString(col);
+        }
+        @Override public Boolean getBool(String col) {
+            return unavailable.contains(col) ? (Boolean) value(col) : delegate.getBool(col);
         }
     }
 }

@@ -18,6 +18,7 @@ import android.telephony.CellSignalStrengthNr
 import android.telephony.TelephonyManager
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
+import name.caiyao.fakegps.hook.UnavailableValueResolver
 import java.net.NetworkInterface
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -42,6 +43,8 @@ class DeviceObserver(
      * platform exposes through a single getter but the profile splits across two columns.
      */
     private val configuredColumns: Set<String> = emptySet(),
+    /** Columns the payload explicitly asks the public API to report as unavailable. */
+    private val unavailableColumns: Set<String> = emptySet(),
 ) {
 
     companion object {
@@ -255,7 +258,7 @@ class DeviceObserver(
         out.putStr("sim_country_iso", tm.simCountryIso)
         out.putStr("network_country_iso", tm.networkCountryIso)
         out["is_roaming"] = tm.isNetworkRoaming.toString()
-        out["phone_type"] = tm.phoneType.toString()
+        out.putInt("phone_type", tm.phoneType)
 
         if (!granted(Manifest.permission.READ_PHONE_STATE)) {
             notes += "网络类型/服务状态：缺少 READ_PHONE_STATE 权限，无法读回"
@@ -265,13 +268,13 @@ class DeviceObserver(
             // network_type is hooked (HookUtils getNetworkType) but was never read back, leaving a
             // headline field permanently unverifiable.
             @Suppress("DEPRECATION")
-            out["network_type"] = tm.networkType.toString()
-            out["data_network_type"] = tm.dataNetworkType.toString()
-            out["voice_network_type"] = tm.voiceNetworkType.toString()
-            out["data_state"] = tm.dataState.toString()
-            out["data_activity"] = tm.dataActivity.toString()
+            out.putInt("network_type", tm.networkType)
+            out.putInt("data_network_type", tm.dataNetworkType)
+            out.putInt("voice_network_type", tm.voiceNetworkType)
+            out.putInt("data_state", tm.dataState)
+            out.putInt("data_activity", tm.dataActivity)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                tm.serviceState?.let { out["service_state"] = it.state.toString() }  // API 26
+                tm.serviceState?.let { out.putInt("service_state", it.state) }  // API 26
             }
         }
     }
@@ -357,6 +360,10 @@ class DeviceObserver(
     private val redacted = setOf("<unknown ssid>", "02:00:00:00:00:00", "00:00:00:00:00:00")
 
     private fun MutableMap<String, String>.putStr(key: String, value: String?) {
+        if (key in unavailableColumns && unavailableMatches(key, value)) {
+            this[key] = "--"
+            return
+        }
         if (!value.isNullOrBlank() && value.lowercase() !in redacted) this[key] = value
     }
 
@@ -366,10 +373,28 @@ class DeviceObserver(
      * user configured — a fake failure. Absent is the honest representation.
      */
     private fun MutableMap<String, String>.putInt(key: String, value: Int) {
+        if (key in unavailableColumns && unavailableMatches(key, value)) {
+            this[key] = "--"
+            return
+        }
         if (value != Int.MAX_VALUE && value != CellInfo.UNAVAILABLE) this[key] = value.toString()
     }
 
     private fun MutableMap<String, String>.putLong(key: String, value: Long) {
+        if (key in unavailableColumns && unavailableMatches(key, value)) {
+            this[key] = "--"
+            return
+        }
         if (value != Long.MAX_VALUE && value != CellInfo.UNAVAILABLE.toLong()) this[key] = value.toString()
+    }
+
+    private fun unavailableMatches(key: String, observed: Any?): Boolean {
+        val expected = UnavailableValueResolver.resolveObservedField(key)
+        if (!expected.handled()) return false
+        val wanted = expected.value()
+        if (wanted is Number && observed is Number) {
+            return wanted.toLong() == observed.toLong()
+        }
+        return wanted == observed
     }
 }

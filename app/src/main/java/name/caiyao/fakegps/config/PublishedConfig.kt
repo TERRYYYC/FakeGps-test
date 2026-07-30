@@ -1,6 +1,7 @@
 package name.caiyao.fakegps.config
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
@@ -22,15 +23,17 @@ data class PublishedConfig(
     val schemaVersion: Int,
     val mode: String,
     val fields: Map<String, String>,
+    val unavailable: Set<String> = emptySet(),
     /**
      * Whether the payload carried a `fields` object at all.
      *
-     * Absent is NOT the same as empty. MainHook treats a v2-valid payload with no `fields` as
+     * Absent is NOT the same as empty. MainHook treats a v3-valid payload with no `fields` as
      * structurally incomplete and keeps its last-known-good Snapshot — it goes on spoofing from a
      * config this payload does not describe. Collapsing the two would make the UI announce
      * "没有配置、全部透传" while the hook is actively spoofing.
      */
     val fieldsPresent: Boolean = true,
+    val unavailablePresent: Boolean = true,
     val activeHourStart: Int? = null,
     val activeHourEnd: Int? = null,
 ) {
@@ -62,12 +65,28 @@ data class PublishedConfig(
             }
 
             val hours = root["activeHours"] as? JsonObject
+            val unavailableArray = root["unavailable"] as? JsonArray
+            val unavailable = if (unavailableArray == null) {
+                emptySet()
+            } else {
+                val names = mutableListOf<String>()
+                for (element in unavailableArray) {
+                    val primitive = element as? JsonPrimitive ?: return null
+                    if (!primitive.isString) return null
+                    names += primitive.content
+                }
+                runCatching {
+                    UnavailablePayloadContract.validate(fields.keys, names).asSet()
+                }.getOrNull() ?: return null
+            }
 
             return PublishedConfig(
                 schemaVersion = root["schemaVersion"]?.intOrNull() ?: SCHEMA_UNKNOWN,
                 mode = (root["mode"] as? JsonPrimitive)?.content ?: DEFAULT_MODE,
                 fields = fields,
+                unavailable = unavailable,
                 fieldsPresent = fieldsObject != null,
+                unavailablePresent = unavailableArray != null,
                 activeHourStart = hours?.get("start")?.intOrNull(),
                 activeHourEnd = hours?.get("end")?.intOrNull(),
             )

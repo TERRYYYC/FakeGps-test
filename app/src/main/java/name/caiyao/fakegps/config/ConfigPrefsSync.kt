@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -40,7 +41,7 @@ object ConfigPrefsSync {
      * The hook rejects a payload it cannot interpret rather than silently mis-reading it, and keeps
      * its last-known-good config instead of reverting to real device data mid-test.
      */
-    const val SCHEMA_VERSION = 2
+    const val SCHEMA_VERSION = 3
 
     private val APP_URI: Uri = Uri.parse("content://name.caiyao.fakegps.data.AppInfoProvider/app")
     private val SETTINGS_URI: Uri = Uri.parse("content://name.caiyao.fakegps.data.AppInfoProvider/settings")
@@ -147,13 +148,18 @@ object ConfigPrefsSync {
         }
         root.put("mode", mode)
 
-        // profile row -> flat field map (generic: every non-null column, whatever it is)
+        // profile row -> flat field map plus an orthogonal explicit-unavailable set.
         val fields = JSONObject()
+        var storedUnavailable: String? = null
         cr.query(APP_URI, null, null, null, "id ASC")?.use { c ->
             if (c.moveToFirst()) {
                 for (i in 0 until c.columnCount) {
-                    if (c.isNull(i)) continue                 // NULL = passthrough: never transported
                     val name = c.getColumnName(i)
+                    if (name == "unavailable_fields") {
+                        storedUnavailable = if (c.isNull(i)) null else c.getString(i)
+                        continue
+                    }
+                    if (c.isNull(i)) continue                 // NULL = passthrough: never transported
                     if (name == "id") continue
                     when (c.getType(i)) {
                         Cursor.FIELD_TYPE_INTEGER -> fields.put(name, c.getLong(i))
@@ -164,8 +170,19 @@ object ConfigPrefsSync {
                 }
             }
         }
+        val fieldNames = buildSet {
+            val keys = fields.keys()
+            while (keys.hasNext()) add(keys.next())
+        }
+        val requested = UnavailableFieldSet.decode(storedUnavailable).toList()
+        val unavailable = UnavailablePayloadContract.validate(fieldNames, requested)
         root.put("fields", fields)
-        Log.w(TAG, "field map built: ${fields.length()} non-null fields")
+        root.put("unavailable", JSONArray(unavailable.asList()))
+        Log.w(
+            TAG,
+            "field map built: ${fields.length()} spoof fields, " +
+                "${unavailable.asList().size} unavailable fields",
+        )
         return root.toString()
     }
 

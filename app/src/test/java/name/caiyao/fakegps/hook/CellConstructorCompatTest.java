@@ -195,6 +195,25 @@ public class CellConstructorCompatTest {
     }
 
     @Test
+    public void unavailablePlmnWorksOnModernAndLegacyConstructorShapes() throws Exception {
+        FakeLteIdentityModern modern = (FakeLteIdentityModern)
+                CellConstructorCompat.newLteIdentity(
+                        FakeLteIdentityModern.class,
+                        null, null, 28378431, 53, 26999, 39300, 20000,
+                        CellIdentityMetadata.EMPTY);
+        assertNull(modern.mcc);
+        assertNull(modern.mnc);
+
+        FakeLteIdentityLegacy legacy = (FakeLteIdentityLegacy)
+                CellConstructorCompat.newLteIdentity(
+                        FakeLteIdentityLegacy.class,
+                        null, null, 28378431, 53, 26999, 39300, 20000,
+                        CellIdentityMetadata.EMPTY);
+        assertEquals(Integer.MAX_VALUE, legacy.mcc);
+        assertEquals(Integer.MAX_VALUE, legacy.mnc);
+    }
+
+    @Test
     public void lteIdentity_supportsAndroidNineStringPlmnShape() throws Exception {
         FakeLteIdentityAndroidNine value = (FakeLteIdentityAndroidNine)
                 CellConstructorCompat.newLteIdentity(

@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import name.caiyao.fakegps.config.UnavailableFieldSet
 import name.caiyao.fakegps.data.db.AppDatabase
 import name.caiyao.fakegps.data.db.ProfileEntity
 import name.caiyao.fakegps.data.repository.ProfileRepository
@@ -17,7 +18,7 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = ProfileRepository(AppDatabase.getInstance(app), app)
 
-    private val _fieldValues = MutableStateFlow<MutableMap<String, String>>(mutableMapOf())
+    private val _fieldValues = MutableStateFlow<Map<String, String>>(emptyMap())
     val fieldValues: StateFlow<Map<String, String>> = _fieldValues
 
     private val _saved = MutableStateFlow(false)
@@ -64,13 +65,13 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateField(column: String, value: String) {
-        val current = _fieldValues.value.toMutableMap()
-        if (value.isBlank()) {
-            current.remove(column)
-        } else {
-            current[column] = value
+        _fieldValues.value = runCatching {
+            ProfileFieldDraft.update(_fieldValues.value, column, value)
+        }.getOrElse {
+            // Unsupported fields fail closed: reject a pasted "--" instead of persisting a state
+            // the hook cannot honestly represent.
+            _fieldValues.value
         }
-        _fieldValues.value = current
     }
 
     fun save() {
@@ -173,10 +174,12 @@ private fun entityToMap(entity: ProfileEntity): Map<String, String> {
     put("connection_type", entity.connectionType)
     put("interface_name", entity.interfaceName)
     put("neighbor_cells_json", entity.neighborCellsJson)
-    return m
+    return ProfileFieldDraft.forDisplay(m, UnavailableFieldSet.decode(entity.unavailableFields))
 }
 
-private fun mapToEntity(values: Map<String, String>, id: Long): ProfileEntity {
+private fun mapToEntity(draft: Map<String, String>, id: Long): ProfileEntity {
+    val split = ProfileFieldDraft.split(draft)
+    val values = split.values
     val lat = values["latitude"]?.toDoubleOrNull()
     val lon = values["longitude"]?.toDoubleOrNull()
     val addname = if (lat != null && lon != null) "%.6f, %.6f".format(lat, lon) else null
@@ -269,5 +272,6 @@ private fun mapToEntity(values: Map<String, String>, id: Long): ProfileEntity {
         connectionType = values["connection_type"],
         interfaceName = values["interface_name"],
         neighborCellsJson = values["neighbor_cells_json"],
+        unavailableFields = UnavailableFieldSet.encode(split.unavailable),
     )
 }

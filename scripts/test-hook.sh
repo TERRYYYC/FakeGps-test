@@ -4,7 +4,7 @@
 #
 #   --current-profile   Read-only diagnostics for the user's effective profile.
 #   --cellular-matrix   Strict, isolated acceptance transaction. Publishes
-#                       debug-only exact and behavioral schema-v2 payloads,
+#                       debug-only exact and behavioral schema-v3 payloads,
 #                       verifies every supported cellular field, and restores the
 #                       database-backed payload.
 set -u
@@ -54,9 +54,23 @@ snapshot_db() {
 
 snapshot_prefs() {
     root_shell \
-        "find /data/misc -type f -name spoof_config.xml -exec sha256sum {} \\;" \
+        "find /data/misc -type f -name spoof_config.xml -exec cat {} \\;" \
         2>/dev/null |
+        sed -n '/<string name="json">/p' |
         LC_ALL=C sort
+}
+
+wait_for_profile_schema() {
+    attempt=0
+    while [ "$attempt" -lt 12 ]; do
+        if snapshot_db | grep -F 'unavailable_fields=' >/dev/null; then
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    echo "HARNESS_ERROR Room migration did not expose unavailable_fields" >&2
+    return 2
 }
 
 read_acceptance_logs() {
@@ -219,13 +233,14 @@ preflight_matrix() {
         if adb logcat -d 2>/dev/null |
             grep -F 'FakeGPS: [DIAG] prefs loaded fields=' >/dev/null
         then
-            echo "VERIFIED preflight.xposed self-hook loaded schema-v2 prefs"
+            wait_for_profile_schema || return $?
+            echo "VERIFIED preflight.xposed self-hook loaded schema-v3 prefs"
             return 0
         fi
         sleep 1
         attempt=$((attempt + 1))
     done
-    echo "HARNESS_ERROR Xposed self-hook did not load schema-v2 prefs" >&2
+    echo "HARNESS_ERROR Xposed self-hook did not load schema-v3 prefs" >&2
     return 2
 }
 
@@ -415,7 +430,7 @@ run_cellular_matrix() {
         { echo "HARNESS_ERROR no saved profile to protect" >&2; return 2; }
     PREFS_BEFORE=$(snapshot_prefs)
     [ -n "$PREFS_BEFORE" ] ||
-        { echo "HARNESS_ERROR schema-v2 safe-zone prefs not found" >&2; return 2; }
+        { echo "HARNESS_ERROR schema-v3 safe-zone prefs not found" >&2; return 2; }
 
     TEMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fakegps-acceptance.XXXXXX") ||
         { echo "HARNESS_ERROR could not create temporary directory" >&2; return 2; }
@@ -428,7 +443,8 @@ run_cellular_matrix() {
     run_scenario full-rscp || return $?
     run_scenario full-rssi || return $?
     run_scenario fluctuation-enabled || return $?
-    echo "ACCEPTANCE_PASS two exact cellular scenarios plus fluctuation behavior verified"
+    run_scenario unavailable || return $?
+    echo "ACCEPTANCE_PASS exact, fluctuation, and unavailable cellular scenarios verified"
 }
 
 echo "════════════════════════════════════════════════════════════════"

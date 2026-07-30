@@ -92,10 +92,19 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 read is PayloadRead.ReadError -> PayloadStatus.Unreadable(read.cause)
                 read is PayloadRead.Absent -> PayloadStatus.NeverPublished
                 parsed == null -> PayloadStatus.Malformed
-                else -> PayloadStatus.Ok(parsed.schemaVersion, parsed.fields.size)
+                else -> PayloadStatus.Ok(
+                    parsed.schemaVersion,
+                    parsed.fields.size + parsed.unavailable.size,
+                )
             }
 
-            val observation = DeviceObserver(ctx, parsed?.fields?.keys.orEmpty()).observe()
+            val unavailable = parsed?.unavailable.orEmpty()
+            val configuredColumns = parsed?.fields?.keys.orEmpty() + unavailable
+            val observation = DeviceObserver(
+                ctx,
+                configuredColumns = configuredColumns,
+                unavailableColumns = unavailable,
+            ).observe()
 
             // The hook re-reads the prefs on a timer, so a config saved seconds ago may not be in
             // force yet. Without this, saving and immediately verifying shows a deterministic red.
@@ -112,6 +121,7 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
             val selfHooked = scope == ObservationScope.SELF_HOOKED
             val report = VerificationEngine.buildReport(
                 configured = parsed?.fields.orEmpty(),
+                unavailable = unavailable,
                 observed = if (selfHooked) observation.values else emptyMap(),
                 baseline = if (selfHooked) emptyMap() else observation.values,
                 propagationPending = pending,

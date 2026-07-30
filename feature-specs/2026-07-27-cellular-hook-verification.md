@@ -17,7 +17,7 @@ created: 2026-07-27
 > carrier, service-state, display-info, and physical-channel field reaches the public Android API
 > observed by an app, without modifying the user's saved profiles.
 
-**Architecture:** Add a debug-only acceptance activity that temporarily publishes a schema-v2
+**Architecture:** Add a debug-only acceptance activity that temporarily publishes a schema-v3
 field-map payload to the existing XSharedPreferences transport, waits for the hook refresh, runs an
 expanded public-API probe, and restores the real database-backed payload in `finally`. Before any
 override, a debug-only recovery record durably stores the previous transport payload; the next
@@ -152,7 +152,7 @@ third-party app can receive a framework event Android does not allow it to regis
 
 | Current state | Event | Next state | Required effect |
 |---|---|---|---|
-| `idle` | valid debug intent | `published` | First durably record the current transport payload in debug-private recovery state, then publish the schema-v2 test payload with top-level session ID and session-specific operator marker; do not touch Room |
+| `idle` | valid debug intent | `published` | First durably record the current transport payload in debug-private recovery state, then publish the schema-v3 test payload with top-level session ID and session-specific operator marker; do not touch Room |
 | `idle` | invalid/missing payload | `aborted` | Log validation error; do not alter transport |
 | `published` | hook refresh delay elapsed | `probing` | Read the public network-operator getter and probe only if it exposes this run's session marker |
 | `probing` | success or exception | `restoring` | Emit exactly one terminal probe/error record |
@@ -187,7 +187,7 @@ Invariants:
 - Reject missing/blank session IDs, non-object `fields`, unsupported schema versions, and keys
   outside the profile field map.
 - Prove the canonical envelope is
-  `{schemaVersion:2, acceptanceSessionId:"...", mode:"always_on", fields:{...}}`.
+  `{schemaVersion:3, acceptanceSessionId:"...", mode:"always_on", fields:{...}, unavailable:[]}`.
 - Reject an envelope session or public operator marker that differs from the activity session.
 - Prove numeric values retain integer/long width (`nci` must not round through `Double`).
 

@@ -72,7 +72,7 @@ enum class HookApplicability {
                 currentHour = currentHour,
                 activeStart = parsed.activeHourStart,
                 activeEnd = parsed.activeHourEnd,
-                fieldsPresent = parsed.fieldsPresent,
+                fieldsPresent = parsed.fieldsPresent && parsed.unavailablePresent,
             )
             read is PayloadRead.ReadError -> PAYLOAD_UNREADABLE
             read is PayloadRead.Raw -> PAYLOAD_MALFORMED

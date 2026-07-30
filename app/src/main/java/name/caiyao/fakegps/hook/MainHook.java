@@ -37,7 +37,7 @@ public class MainHook implements IXposedHookLoadPackage {
     /** Must match ConfigPrefsSync.PREFS_NAME / KEY_JSON / SCHEMA_VERSION on the app write side. */
     private static final String PREFS_NAME = "spoof_config";
     private static final String PREFS_KEY_JSON = "json";
-    private static final int TRANSPORT_SCHEMA_VERSION = 2;
+    private static final int TRANSPORT_SCHEMA_VERSION = 3;
 
     /**
      * Verbose diagnostics, debug builds only. These run inside the TARGET app's process, so in a
@@ -157,7 +157,7 @@ public class MainHook implements IXposedHookLoadPackage {
             // coverage equals the profile table instead of a hand-maintained subset.
             org.json.JSONObject fields = root.optJSONObject("fields");
             if (fields == null) {
-                // last-known-good (review FC-2): a v2-valid payload that carries no `fields` object
+                // last-known-good (review FC-2): a v3-valid payload that carries no `fields` object
                 // is structurally incomplete, not an instruction to stop spoofing. Publishing an
                 // all-null Snapshot here would silently drop an active spoof back to real data.
                 Snapshot resolved = Snapshot.keepLastKnownGoodOr(CURRENT.get());
@@ -166,8 +166,29 @@ public class MainHook implements IXposedHookLoadPackage {
                                                             : "keep last-known-good"));
                 return resolved;
             }
-            Snapshot s = Snapshot.fromJson(fields);
+            org.json.JSONArray unavailableJson = root.optJSONArray("unavailable");
+            if (unavailableJson == null) {
+                Snapshot resolved = Snapshot.keepLastKnownGoodOr(CURRENT.get());
+                debug("payload has no 'unavailable' array -> keep last-known-good");
+                return resolved;
+            }
+            java.util.List<String> requestedUnavailable = new java.util.ArrayList<>();
+            for (int i = 0; i < unavailableJson.length(); i++) {
+                Object value = unavailableJson.get(i);
+                if (!(value instanceof String)) {
+                    throw new IllegalArgumentException("unavailable entry is not a string");
+                }
+                requestedUnavailable.add((String) value);
+            }
+            java.util.Set<String> configuredFields = new java.util.HashSet<>();
+            java.util.Iterator<String> keys = fields.keys();
+            while (keys.hasNext()) configuredFields.add(keys.next());
+            name.caiyao.fakegps.config.UnavailablePayloadContract.Validated unavailable =
+                    name.caiyao.fakegps.config.UnavailablePayloadContract.validate(
+                            configuredFields, requestedUnavailable);
+            Snapshot s = Snapshot.fromJson(fields, unavailable.asSet());
             debug("prefs loaded fields=" + (fields == null ? 0 : fields.length())
+                    + " unavailable=" + unavailable.asList().size()
                     + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude
                     + " hasLte=" + s.hasLteCell() + " hasGsm=" + s.hasGsmCell());
             return s;

@@ -101,20 +101,17 @@ public class UnavailableSpecCoverageTest {
      * a single folded sentinel would be illegal on one of them.
      */
     @Test
-    public void dualSurfaceFields_areNotClearedYet() {
-        assertFalse("lac is written to two surfaces with different unknowns",
-                UnavailableSpec.supportsUnavailable("lac"));
-        assertFalse("cid is written to two surfaces with different unknowns",
-                UnavailableSpec.supportsUnavailable("cid"));
-        assertTrue(UnavailableSpec.reasonFor("lac").contains("GsmCellLocation"));
+    public void dualSurfaceFields_areSupportedBySurfaceResolver() {
+        assertTrue(UnavailableSpec.supportsUnavailable("lac"));
+        assertTrue(UnavailableSpec.supportsUnavailable("cid"));
     }
 
     /** PhysicalChannelConfig unknowns are 0 / -1, never CellInfo.UNAVAILABLE. */
     @Test
-    public void physicalChannelConfigFields_areNotCellularSentinels() {
+    public void physicalChannelConfigFields_areSupportedBySurfaceResolver() {
         for (String col : new String[] {
                 "band", "channel_bandwidth", "cell_bandwidth_downlink", "physical_cell_id"}) {
-            assertFalse(col + " unknown is 0 or -1, not CellInfo.UNAVAILABLE",
+            assertTrue(col + " has a surface-specific 0/-1 unavailable form",
                     UnavailableSpec.supportsUnavailable(col));
         }
     }
@@ -132,12 +129,14 @@ public class UnavailableSpecCoverageTest {
 
     /** Network/service state integers use 0-based UNKNOWN constants. */
     @Test
-    public void networkStateIntegers_areNotCleared() {
+    public void networkStateIntegers_areSupportedBySurfaceResolver() {
         for (String col : new String[] {
                 "network_type", "data_network_type", "voice_network_type", "phone_type",
-                "service_state", "data_state", "data_activity", "override_network_type"}) {
-            assertFalse(col + " unknown is a 0-based constant", UnavailableSpec.supportsUnavailable(col));
+                "data_state", "data_activity", "override_network_type"}) {
+            assertTrue(col + " has an explicit platform constant", UnavailableSpec.supportsUnavailable(col));
         }
+        assertFalse("ServiceState has no UNKNOWN constant",
+                UnavailableSpec.supportsUnavailable("service_state"));
     }
 
     /** SSID unknown is "&lt;unknown ssid&gt;", BSSID is null — neither is the empty string. */

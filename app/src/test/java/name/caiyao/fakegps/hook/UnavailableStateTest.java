@@ -5,6 +5,9 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Random;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import name.caiyao.fakegps.config.UnavailableSpec;
 import org.junit.Test;
 
@@ -65,13 +68,11 @@ public class UnavailableStateTest {
         assertTrue(UnavailableSpec.supportsUnavailable("operator_name"));
     }
 
-    /** Not-yet-verified groups stay unavailable-incapable rather than guessing a sentinel. */
+    /** Non-cellular groups stay unavailable-incapable rather than guessing a sentinel. */
     @Test
     public void unverifiedGroups_failClosed() {
         assertFalse("Wi-Fi RSSI unknown is -127, not MAX_VALUE",
                 UnavailableSpec.supportsUnavailable("wifi_rssi"));
-        assertFalse("network_type unknown is 0, not MAX_VALUE",
-                UnavailableSpec.supportsUnavailable("network_type"));
         assertFalse("SSID unknown is \"<unknown ssid>\", not \"\"",
                 UnavailableSpec.supportsUnavailable("wifi_ssid"));
     }
@@ -105,5 +106,53 @@ public class UnavailableStateTest {
         int out = s.fluctuate(-85, new Random(42));
 
         assertTrue("expected -85 +/- 5, got " + out, out >= -90 && out <= -80);
+    }
+
+    @Test
+    public void snapshotMaterializesCanonicalHookValuesAndRetainsDecisionSet() {
+        Set<String> selected = new LinkedHashSet<>(Arrays.asList(
+                "lac", "operator_name", "network_type", "data_state",
+                "band", "physical_cell_id", "lte_rsrp"));
+
+        Snapshot s = Snapshot.from(new EmptySource(), selected);
+
+        assertEquals(Integer.valueOf(Integer.MAX_VALUE), s.lac);
+        assertEquals("", s.operatorName);
+        assertEquals(Integer.valueOf(0), s.networkType);
+        assertEquals(Integer.valueOf(0), s.dataState);
+        assertEquals(Integer.valueOf(0), s.band);
+        assertEquals(Integer.valueOf(-1), s.physicalCellId);
+        assertEquals(Integer.valueOf(Integer.MAX_VALUE), s.lteRsrp);
+        assertTrue(s.isUnavailable("lac"));
+        assertTrue(s.isUnavailable("operator_name"));
+
+        selected.clear();
+        assertTrue("snapshot must defensively copy the decision set", s.isUnavailable("lac"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void snapshotRejectsUnsupportedUnavailableField() {
+        Snapshot.from(new EmptySource(), java.util.Collections.singleton("is_roaming"));
+    }
+
+    @Test
+    public void exceptionalSurfacesDoNotReuseSnapshotSentinel() {
+        assertEquals(Integer.valueOf(-1),
+                Snapshot.resolveGsmCellLocationField(Integer.MAX_VALUE, 42, true));
+        assertEquals(Integer.valueOf(42),
+                Snapshot.resolveGsmCellLocationField(null, 42, false));
+        org.junit.Assert.assertNull(
+                Snapshot.resolvePlmnString(Integer.MAX_VALUE, "460", true));
+        assertEquals("460", Snapshot.resolvePlmnString(null, "460", false));
+        assertEquals("310", Snapshot.resolvePlmnString(310, "460", false));
+    }
+
+    private static final class EmptySource implements Snapshot.FieldSource {
+        @Override public Double getDouble(String col) { return null; }
+        @Override public Float getFloat(String col) { return null; }
+        @Override public Integer getInt(String col) { return null; }
+        @Override public Long getLong(String col) { return null; }
+        @Override public String getString(String col) { return null; }
+        @Override public Boolean getBool(String col) { return null; }
     }
 }

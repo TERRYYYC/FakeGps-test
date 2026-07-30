@@ -389,9 +389,9 @@ class HookUtils {
 
         // NR/5G (API 29+)
         if (Build.VERSION.SDK_INT >= 29) {
-            hookGetter(cl, "android.telephony.CellIdentityNr", "getMccString",
+            hookPlmnStringGetter(cl, "android.telephony.CellIdentityNr", "getMccString", "mcc",
                     s -> s.mcc != null ? String.valueOf(s.mcc) : null);
-            hookGetter(cl, "android.telephony.CellIdentityNr", "getMncString",
+            hookPlmnStringGetter(cl, "android.telephony.CellIdentityNr", "getMncString", "mnc",
                     s -> s.mnc != null ? String.valueOf(s.mnc) : null);
             hookGetter(cl, "android.telephony.CellIdentityNr", "getNci", s -> s.nci);
             hookGetter(cl, "android.telephony.CellIdentityNr", "getNrarfcn", s -> s.nrarfcn);
@@ -405,9 +405,9 @@ class HookUtils {
                     "android.telephony.CellIdentityGsm",
                     "android.telephony.CellIdentityWcdma",
                     "android.telephony.CellIdentityLte"}) {
-                hookGetter(cl, cls, "getMccString",
+                hookPlmnStringGetter(cl, cls, "getMccString", "mcc",
                         s -> s.mcc != null ? String.valueOf(s.mcc) : null);
-                hookGetter(cl, cls, "getMncString",
+                hookPlmnStringGetter(cl, cls, "getMncString", "mnc",
                         s -> s.mnc != null ? String.valueOf(s.mnc) : null);
             }
         }
@@ -2030,8 +2030,10 @@ class HookUtils {
         if (realLac == null && last != null) realLac = last.lac;
         if (realCid == null && last != null) realCid = last.cid;
 
-        Integer lac = Snapshot.resolveCellField(s.lac, realLac);
-        Integer cid = Snapshot.resolveCellField(s.cid, realCid);
+        Integer lac = Snapshot.resolveGsmCellLocationField(
+                s.lac, realLac, s.isUnavailable("lac"));
+        Integer cid = Snapshot.resolveGsmCellLocationField(
+                s.cid, realCid, s.isUnavailable("cid"));
         if (lac == null || cid == null) {
             debug("no GSM cell-location baseline -> passthrough");
             return null;
@@ -2054,10 +2056,10 @@ class HookUtils {
         // Per-field passthrough: configured value > device's real value > last-resort default.
         int mcc = pick(s.mcc, base.mcc, 460);
         int mnc = pick(s.mnc, base.mnc, 0);
-        String mccString = s.mcc == null && base.mccString != null
-                ? base.mccString : String.valueOf(mcc);
-        String mncString = s.mnc == null && base.mncString != null
-                ? base.mncString : String.valueOf(mnc);
+        String mccString = Snapshot.resolvePlmnString(
+                s.mcc, base.mccString, s.isUnavailable("mcc"));
+        String mncString = Snapshot.resolvePlmnString(
+                s.mnc, base.mncString, s.isUnavailable("mnc"));
 
         // GSM cell
         if (s.hasGsmCell()) {
@@ -2300,6 +2302,34 @@ class HookUtils {
                         if (val != null) {
                             param.setResult(val);
                         }
+                    }
+                }));
+    }
+
+    /**
+     * PLMN string getters need an explicit-null override. The generic getter helper treats null as
+     * passthrough, but null is Android's actual unavailable result for getMccString/getMncString.
+     */
+    private static void hookPlmnStringGetter(
+            ClassLoader cl, String className, String methodName, String field, FieldGetter getter) {
+        tryHook(() -> XposedHelpers.findAndHookMethod(className, cl, methodName,
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        if (BaselineExtractionGuard.isActive()) return;
+                        if (NEIGHBOR_BYPASS.contains(param.thisObject)) return;
+                        Snapshot s = MainHook.CURRENT.get();
+                        if (s.isUnavailable(field)) {
+                            UnavailableValueResolver.Resolution r =
+                                    UnavailableValueResolver.resolve(
+                                            field,
+                                            UnavailableValueResolver.Surface
+                                                    .CELL_IDENTITY_PLMN_STRING);
+                            if (r.handled()) param.setResult(r.value());
+                            return;
+                        }
+                        Object val = getter.get(s);
+                        if (val != null) param.setResult(val);
                     }
                 }));
     }

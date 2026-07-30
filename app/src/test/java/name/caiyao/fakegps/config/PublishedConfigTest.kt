@@ -27,6 +27,38 @@ class PublishedConfigTest {
     }
 
     @Test
+    fun `parses validated unavailable set separately from spoof fields`() {
+        val p = PublishedConfig.parse(
+            """{"schemaVersion":3,"mode":"always_on","fields":{"tac":4095},"unavailable":["lac","operator_name"]}"""
+        )!!
+        assertEquals(setOf("lac", "operator_name"), p.unavailable)
+        assertTrue(p.unavailablePresent)
+        assertEquals(setOf("tac"), p.fields.keys)
+    }
+
+    @Test
+    fun `invalid unavailable contract makes payload malformed`() {
+        assertNull(PublishedConfig.parse(
+            """{"schemaVersion":3,"fields":{"tac":4095},"unavailable":["tac"]}"""
+        ))
+        assertNull(PublishedConfig.parse(
+            """{"schemaVersion":3,"fields":{},"unavailable":["tac","tac"]}"""
+        ))
+        assertNull(PublishedConfig.parse(
+            """{"schemaVersion":3,"fields":{},"unavailable":["is_roaming"]}"""
+        ))
+        assertNull(PublishedConfig.parse(
+            """{"schemaVersion":3,"fields":{},"unavailable":[1]}"""
+        ))
+    }
+
+    @Test
+    fun `schema v3 without unavailable array is structurally incomplete`() {
+        val p = PublishedConfig.parse("""{"schemaVersion":3,"fields":{}}""")!!
+        assertEquals(false, p.unavailablePresent)
+    }
+
+    @Test
     fun `integer column does not acquire a decimal point`() {
         // SQLite INTEGER -> JSON long. Rendering 26999 as "26999.0" would make every integer field
         // read as a MISMATCH against the radio's "26999".

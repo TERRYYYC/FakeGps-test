@@ -209,6 +209,7 @@ object VerificationEngine {
 
     fun buildReport(
         configured: Map<String, String>,
+        unavailable: Set<String> = emptySet(),
         observed: Map<String, String>,
         baseline: Map<String, String> = emptyMap(),
         propagationPending: Boolean = false,
@@ -227,7 +228,11 @@ object VerificationEngine {
             val rows = mutableListOf<FieldReport>()
             for (spec in fields) {
                 mappedColumns += spec.dbColumn
-                val cfg = configured[spec.dbColumn]?.takeIf { it.isNotBlank() }
+                val cfg = if (spec.dbColumn in unavailable) {
+                    "--"
+                } else {
+                    configured[spec.dbColumn]?.takeIf { it.isNotBlank() }
+                }
                 val obs = observed[spec.dbColumn]?.takeIf { it.isNotBlank() }
                 val real = baseline[spec.dbColumn]?.takeIf { it.isNotBlank() }
 
@@ -274,8 +279,8 @@ object VerificationEngine {
             summary = VerificationSummary(
                 spoofed, mismatch, unobservable, passthrough, notVerifiable, propagationPending,
             ),
-            payloadFieldCount = configured.size,
-            unmappedPayloadColumns = configured.keys
+            payloadFieldCount = configured.size + unavailable.size,
+            unmappedPayloadColumns = (configured.keys + unavailable)
                 .filterNot { it in mappedColumns || it in NOT_DEVICE_OBSERVABLE }
                 .sorted(),
         )
