@@ -28,8 +28,14 @@ enum class VerificationStatus {
     /** Every configured field was observed back. */
     EFFECTIVE,
 
-    /** Some fields confirmed, others unreadable — real evidence, but not a complete verdict. */
+    /** Some fields confirmed, others unreadable or unverifiable — real evidence, but incomplete. */
     PARTIALLY_EFFECTIVE,
+
+    /**
+     * Only fields that no getter can report were configured (module control knobs). Nothing could
+     * be checked, but the profile is definitely not empty.
+     */
+    CONFIGURED_UNVERIFIABLE,
 
     /** At least one configured field was observed with a different value. */
     FAILING,
@@ -82,10 +88,18 @@ data class VerificationSummary(
     val mismatch: Int,
     val unobservable: Int,
     val passthrough: Int,
+    /**
+     * Configured fields that no Android getter can ever report (module control knobs such as
+     * signal_fluctuation_*). Distinct from [unobservable], which is a device/API limitation: these
+     * are unverifiable BY DESIGN, so they are not evidence — but they ARE configured, and the hook
+     * does apply them.
+     */
+    val notVerifiable: Int = 0,
     /** True while the hook may still be serving the previous config. See [VerificationStatus.PENDING_PROPAGATION]. */
     val propagationPending: Boolean = false,
 ) {
-    val configuredCount: Int get() = spoofed + mismatch + unobservable
+    /** Everything the user actually configured, verifiable or not. */
+    val configuredCount: Int get() = spoofed + mismatch + unobservable + notVerifiable
 
     val status: VerificationStatus
         get() = when {
@@ -94,10 +108,13 @@ data class VerificationSummary(
             // it must not be announced as one.
             mismatch > 0 && propagationPending -> VerificationStatus.PENDING_PROPAGATION
             mismatch > 0 -> VerificationStatus.FAILING
+            // Only module knobs configured: nothing was checkable, but saying "没有配置任何字段"
+            // would contradict both the payload and the hook.
+            spoofed == 0 && unobservable == 0 -> VerificationStatus.CONFIGURED_UNVERIFIABLE
             spoofed == 0 -> VerificationStatus.INCONCLUSIVE
             // Confirming one field out of eleven is not "伪装生效". Announcing full success while
-            // most of the config is unverified is the same overclaim this screen exists to remove.
-            unobservable > 0 -> VerificationStatus.PARTIALLY_EFFECTIVE
+            // part of the config is unverified is the same overclaim this screen exists to remove.
+            unobservable > 0 || notVerifiable > 0 -> VerificationStatus.PARTIALLY_EFFECTIVE
             else -> VerificationStatus.EFFECTIVE
         }
 }
@@ -158,6 +175,7 @@ object VerificationEngine {
         var spoofed = 0
         var mismatch = 0
         var unobservable = 0
+        var notVerifiable = 0
         var passthrough = 0
         val mappedColumns = mutableSetOf<String>()
 
@@ -181,9 +199,11 @@ object VerificationEngine {
                 }
 
                 // A field no getter can report is not evidence either way, so it must not sway the
-                // roll-up. It is still listed, so the user can see it was configured.
-                val countsAsEvidence = spec.dbColumn !in NOT_DEVICE_OBSERVABLE
-                if (countsAsEvidence) {
+                // verifiable counters — but if the user configured it, it still counts as
+                // configured, or the screen would claim nothing is being spoofed.
+                if (spec.dbColumn in NOT_DEVICE_OBSERVABLE) {
+                    if (cfg != null) notVerifiable++
+                } else {
                     when (verdict) {
                         FieldVerdict.SPOOFED -> spoofed++
                         FieldVerdict.MISMATCH -> mismatch++
@@ -207,7 +227,7 @@ object VerificationEngine {
         return VerificationReport(
             groups = groups,
             summary = VerificationSummary(
-                spoofed, mismatch, unobservable, passthrough, propagationPending,
+                spoofed, mismatch, unobservable, passthrough, notVerifiable, propagationPending,
             ),
             payloadFieldCount = configured.size,
             unmappedPayloadColumns = configured.keys

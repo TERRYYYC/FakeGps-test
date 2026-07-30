@@ -94,7 +94,16 @@ object ConfigPrefsSync {
             // Timestamp is stored ALONGSIDE the payload, never inside it — embedding it would
             // change the bytes on every sync and destroy the fingerprint's value as content identity.
             val editor = prefs.edit().putString(KEY_JSON, jsonStr)
-            if (worldReadable) editor.putLong(KEY_PUBLISHED_AT, System.currentTimeMillis())
+            val stamp = if (worldReadable) {
+                System.currentTimeMillis()
+            } else {
+                PublishPropagation.timestampOnFailedPublish()
+            }
+            // null means REMOVE, not "leave alone". The prefs file is persistent, so merely skipping
+            // the write leaves the timestamp from the LAST successful publish on disk — and this
+            // new, cross-process-unreadable payload would borrow that still-open window and be
+            // reported as "刚保存，尚未生效" instead of the permanent failure it is.
+            if (stamp != null) editor.putLong(KEY_PUBLISHED_AT, stamp) else editor.remove(KEY_PUBLISHED_AT)
             val committed = editor.commit()
             val published = ConfigPublicationContract.isCrossProcessPublishSuccessful(
                 worldReadable,

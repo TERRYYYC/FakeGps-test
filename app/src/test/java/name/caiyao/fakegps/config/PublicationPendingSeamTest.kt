@@ -78,6 +78,40 @@ class PublicationPendingSeamTest {
         assertEquals(VerificationStatus.FAILING, statusFor(ts, afterWindow))
     }
 
+    /**
+     * Models what actually lands in SharedPreferences across successive publishes.
+     *
+     * [prior] is the timestamp already on disk. A failed publish must CLEAR it, not merely decline
+     * to write a new one — the file is persistent, so "don't write" leaves the previous success's
+     * timestamp behind.
+     */
+    private fun storedTimestampAfter(prior: Long?, worldReadable: Boolean, nowMs: Long): Long? =
+        if (worldReadable) nowMs else PublishPropagation.timestampOnFailedPublish()
+
+    @Test
+    fun `a failed publish clears the timestamp left by a previous successful one`() {
+        // review 4822122472 P1. Reachable sequence: publish succeeds at T, then 5s later the
+        // MODE_WORLD_READABLE path is refused and the payload lands in a private file. The NEW
+        // payload is unreadable cross-process, but the OLD timestamp is still on disk and still
+        // inside its window — so the UI borrows it and reports "配置刚保存，尚未生效" for a
+        // publication that can never succeed.
+        //
+        // The earlier seam test could not catch this: it started from no history at all.
+        val priorSuccess = 1_000L
+        val stored = storedTimestampAfter(prior = priorSuccess, worldReadable = false, nowMs = 5_000)
+
+        assertEquals("a failed publish must clear the stale timestamp", null, stored)
+        assertFalse(PublishPropagation.isPending(stored, nowMs = 5_000))
+        assertEquals(VerificationStatus.FAILING, statusFor(stored, nowMs = 5_000))
+    }
+
+    @Test
+    fun `back-to-back successful publishes keep refreshing the window`() {
+        val stored = storedTimestampAfter(prior = 1_000L, worldReadable = true, nowMs = 5_000)
+        assertEquals(5_000L, stored)
+        assertEquals(VerificationStatus.PENDING_PROPAGATION, statusFor(stored, nowMs = 5_000))
+    }
+
     @Test
     fun `publication contract is exactly world-readable AND committed`() {
         // Guards the assumption the seam is built on. If #4 ever widens this, the timestamp gate in

@@ -1,5 +1,6 @@
 package name.caiyao.fakegps.verify
 
+import name.caiyao.fakegps.config.PublishedConfig
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -107,6 +108,40 @@ class HookApplicabilityTest {
         assertEquals(
             HookApplicability.SCHEMA_REJECTED,
             HookApplicability.of("always_on", 1, currentHour = 3, fieldsPresent = false),
+        )
+    }
+
+    @Test
+    fun `an unparseable payload is never reported as applying`() {
+        // review 4822122472 P1: when raw bytes exist but cannot be parsed, the previous code fell
+        // back to schemaVersion=SCHEMA_VERSION / fieldsPresent=true / mode=always_on, i.e. APPLYING
+        // with an empty field map. The screen then announced "当前档案没有配置任何字段 / 全部透传"
+        // while the payload card simultaneously said "解析失败 — hook 将保留上一次可用配置".
+        // The hook is in fact still spoofing from a config we cannot read.
+        assertEquals(
+            HookApplicability.PAYLOAD_MALFORMED,
+            HookApplicability.forPayload(rawPresent = true, parsed = null, currentHour = 3),
+        )
+        assertEquals(false, HookApplicability.PAYLOAD_MALFORMED.verdictsMeaningful)
+    }
+
+    @Test
+    fun `nothing ever published is distinct from unparseable`() {
+        assertEquals(
+            HookApplicability.NEVER_PUBLISHED,
+            HookApplicability.forPayload(rawPresent = false, parsed = null, currentHour = 3),
+        )
+        assertEquals(false, HookApplicability.NEVER_PUBLISHED.verdictsMeaningful)
+    }
+
+    @Test
+    fun `a parseable payload still goes through the normal gates`() {
+        val cfg = PublishedConfig(
+            schemaVersion = 2, mode = "off", fields = emptyMap(), fieldsPresent = true,
+        )
+        assertEquals(
+            HookApplicability.MODE_OFF,
+            HookApplicability.forPayload(rawPresent = true, parsed = cfg, currentHour = 3),
         )
     }
 

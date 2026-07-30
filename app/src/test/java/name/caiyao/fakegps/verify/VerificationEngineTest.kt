@@ -155,10 +155,56 @@ class VerificationEngineTest {
     }
 
     @Test
-    fun `module control fields with no device API are not counted as evidence`() {
+    fun `configuring only module-control fields is not reported as configuring nothing`() {
+        // review 4822122472 P1: signal_fluctuation_* is excluded from EVIDENCE because no getter can
+        // report it — but it IS configured, rides in the payload, and the hook applies it. Excluding
+        // it from the configured count too made the screen say "当前档案没有配置任何字段 /
+        // 所有字段都会透传", contradicting both the payload card and the hook's actual behaviour.
+        val specs = linkedMapOf(
+            "信号波动" to listOf(
+                FieldSpec("signal_fluctuation_enabled", "启用波动", "", FieldType.BOOLEAN),
+                FieldSpec("signal_fluctuation_range_db", "波动范围", "", FieldType.INTEGER),
+            ),
+        )
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("signal_fluctuation_enabled" to "1", "signal_fluctuation_range_db" to "5"),
+            observed = emptyMap(),
+            specs = specs,
+        )
+        assertEquals(2, r.summary.notVerifiable)
+        assertEquals(0, r.summary.unobservable)   // not a device limitation — by design unreadable
+        assertEquals(VerificationStatus.CONFIGURED_UNVERIFIABLE, r.summary.status)
+    }
+
+    @Test
+    fun `module-control fields alongside a verified field downgrade EFFECTIVE to partial`() {
+        // Claiming outright success while part of the config can never be checked is the same
+        // overclaim as ignoring `unobservable`.
+        val specs = linkedMapOf(
+            "x" to listOf(
+                FieldSpec("tac", "TAC", "", FieldType.INTEGER),
+                FieldSpec("signal_fluctuation_enabled", "启用波动", "", FieldType.BOOLEAN),
+            ),
+        )
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("tac" to "1", "signal_fluctuation_enabled" to "1"),
+            observed = mapOf("tac" to "1"),
+            specs = specs,
+        )
+        assertEquals(1, r.summary.spoofed)
+        assertEquals(1, r.summary.notVerifiable)
+        assertEquals(VerificationStatus.PARTIALLY_EFFECTIVE, r.summary.status)
+    }
+
+    @Test
+    fun `module control fields are not miscounted as a device limitation`() {
         // signal_fluctuation_* is a module knob, not something any Android getter reports. Filing it
-        // under "读不到" would drag an otherwise-conclusive screen to INCONCLUSIVE and train the
-        // user to ignore the count.
+        // under `unobservable` would blame the device for a field no device could ever expose, and
+        // would drag the screen to INCONCLUSIVE.
+        //
+        // It is still COUNTED AS CONFIGURED (see notVerifiable) — the earlier version of this test
+        // asserted EFFECTIVE here, which was the overclaim review 4822122472 caught: part of the
+        // config had not been checked at all.
         val specs = linkedMapOf(
             "信号波动" to listOf(
                 FieldSpec("signal_fluctuation_enabled", "启用波动", "", FieldType.BOOLEAN),
@@ -171,7 +217,8 @@ class VerificationEngineTest {
             specs = specs,
         )
         assertEquals(0, r.summary.unobservable)
-        assertEquals(VerificationStatus.EFFECTIVE, r.summary.status)
+        assertEquals(1, r.summary.notVerifiable)
+        assertEquals(2, r.summary.configuredCount)
     }
 
     @Test

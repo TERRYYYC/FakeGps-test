@@ -1,6 +1,7 @@
 package name.caiyao.fakegps.verify
 
 import name.caiyao.fakegps.config.ConfigPrefsSync
+import name.caiyao.fakegps.config.PublishedConfig
 
 /**
  * Whether the hook is actually applying the published payload right now.
@@ -30,11 +31,45 @@ enum class HookApplicability {
      * its previous Snapshot, so the config actually in force is one the UI cannot see — any verdict
      * would describe a config the hook is not running.
      */
-    PAYLOAD_INCOMPLETE;
+    PAYLOAD_INCOMPLETE,
+
+    /**
+     * Bytes exist on disk but cannot be parsed. MainHook keeps its last-known-good Snapshot, so it
+     * is still spoofing — from a config the UI cannot read. Treating this as "no config" would make
+     * the verdict card claim nothing is being spoofed while the payload card says the opposite.
+     */
+    PAYLOAD_MALFORMED,
+
+    /** Nothing has ever been published; the hook has no config at all. */
+    NEVER_PUBLISHED;
 
     val verdictsMeaningful: Boolean get() = this == APPLYING
 
     companion object {
+
+        /**
+         * Applicability for a payload as actually read back from disk.
+         *
+         * Centralised here so the unreadable/absent cases cannot be papered over with defaults at
+         * the call site — the previous code substituted a compatible schemaVersion and
+         * `fieldsPresent = true` for an unparseable payload, which silently produced [APPLYING].
+         */
+        fun forPayload(
+            rawPresent: Boolean,
+            parsed: PublishedConfig?,
+            currentHour: Int,
+        ): HookApplicability = when {
+            parsed != null -> of(
+                mode = parsed.mode,
+                schemaVersion = parsed.schemaVersion,
+                currentHour = currentHour,
+                activeStart = parsed.activeHourStart,
+                activeEnd = parsed.activeHourEnd,
+                fieldsPresent = parsed.fieldsPresent,
+            )
+            rawPresent -> PAYLOAD_MALFORMED
+            else -> NEVER_PUBLISHED
+        }
         fun of(
             mode: String,
             schemaVersion: Int,

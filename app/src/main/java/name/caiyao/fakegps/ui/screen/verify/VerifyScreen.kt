@@ -204,6 +204,15 @@ private fun VerdictCard(state: VerifyUiState) {
                     detail = "已发布的 payload 没有 fields 内容，hook 按契约保留上一次可用配置继续伪装。" +
                         "也就是说当前生效的并不是这份配置，本页无法据此判断 —— 请重新保存一次档案。"
                 }
+                HookApplicability.PAYLOAD_MALFORMED -> {
+                    headline = "配置无法解析，hook 仍在用旧配置"
+                    detail = "磁盘上有 payload 但解析失败，hook 按契约保留上一次可用配置继续伪装。" +
+                        "也就是说当前生效的配置本页读不出来，任何对比结论都不作数 —— 请重新保存一次档案。"
+                }
+                HookApplicability.NEVER_PUBLISHED -> {
+                    headline = "尚未发布过配置"
+                    detail = "还没有任何配置送达 hook，所有字段都会透传真实值。到档案编辑页保存一次即可。"
+                }
                 HookApplicability.APPLYING -> { headline = ""; detail = "" }
             }
         }
@@ -220,9 +229,20 @@ private fun VerdictCard(state: VerifyUiState) {
             }
             VerificationStatus.PARTIALLY_EFFECTIVE -> {
                 headline = "部分验证通过"
-                detail = "${summary.spoofed} 个字段确认生效，另有 ${summary.unobservable} 个字段本进程读不到、" +
-                    "无法验证。没有发现矛盾，但也不能说全部生效。"
+                val unchecked = buildList {
+                    if (summary.unobservable > 0) add("${summary.unobservable} 个本进程读不到")
+                    if (summary.notVerifiable > 0) add("${summary.notVerifiable} 个没有系统读取接口")
+                }.joinToString("、")
+                detail = "${summary.spoofed} 个字段确认生效，另有 $unchecked，无法验证。" +
+                    "没有发现矛盾，但也不能说全部生效。"
                 tone = MaterialTheme.colorScheme.primary
+            }
+            VerificationStatus.CONFIGURED_UNVERIFIABLE -> {
+                headline = "已配置，但本页无法验证"
+                detail = "当前档案只配置了 ${summary.notVerifiable} 个模块开关类字段" +
+                    "（如信号波动），这类字段没有对应的系统读取接口，任何 App 都读不回来，" +
+                    "因此无法验证 —— 但它们确实已送达 hook 并生效。"
+                tone = MaterialTheme.colorScheme.onSurfaceVariant
             }
             VerificationStatus.PENDING_PROPAGATION -> {
                 headline = "配置刚保存，尚未生效"

@@ -17,6 +17,19 @@ object PublishPropagation {
     const val HOOK_REFRESH_INTERVAL_MS = 30_000L
 
     /**
+     * What the stored publish timestamp must become when publication fails: absent.
+     *
+     * Lives here, not on ConfigPrefsSync, for two reasons: this object is free of Android types so
+     * the rule is reachable from a JVM test, and the rule belongs to the propagation contract rather
+     * than to the writer.
+     *
+     * Crucially the failing path must CLEAR the key, not merely skip writing it — SharedPreferences
+     * is persistent, so skipping leaves the timestamp from the last SUCCESSFUL publish on disk, and
+     * a subsequent unreadable payload would borrow that still-open window.
+     */
+    fun timestampOnFailedPublish(): Long? = null
+
+    /**
      * Whether the hook may still be running the previous config.
      *
      * Returns false whenever the answer is not knowable (no recorded publish time) or the clock is

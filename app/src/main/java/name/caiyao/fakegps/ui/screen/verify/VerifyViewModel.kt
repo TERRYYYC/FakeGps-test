@@ -3,6 +3,7 @@ package name.caiyao.fakegps.ui.screen.verify
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,6 +53,12 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(loading = true)
             try {
                 collect()
+            } catch (c: CancellationException) {
+                // Structured concurrency: cancellation is how the scope tears itself down when the
+                // ViewModel is cleared. Swallowing it into the generic branch would both leave the
+                // coroutine "completing normally" and paint a bogus error note on a screen the user
+                // has already navigated away from.
+                throw c
             } catch (t: Throwable) {
                 // viewModelScope installs no exception handler, so an escaping throwable takes the
                 // process down; and without the finally the spinner would never clear while the
@@ -110,13 +117,13 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 scope = scope,
                 payload = payloadStatus,
                 mode = parsed?.mode ?: "always_on",
-                applicability = HookApplicability.of(
-                    mode = parsed?.mode ?: "always_on",
-                    schemaVersion = parsed?.schemaVersion ?: ConfigPrefsSync.SCHEMA_VERSION,
+                // Derived from what was actually read back. Substituting defaults for an unparseable
+                // payload (a compatible schemaVersion, fieldsPresent=true) silently yielded APPLYING
+                // and made the verdict card contradict the payload card on the same screen.
+                applicability = HookApplicability.forPayload(
+                    rawPresent = raw != null,
+                    parsed = parsed,
                     currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
-                    activeStart = parsed?.activeHourStart,
-                    activeEnd = parsed?.activeHourEnd,
-                    fieldsPresent = parsed?.fieldsPresent ?: true,
                 ),
                 fingerprint = raw?.let { PublishedConfig.fingerprint(it) },
                 report = report,
