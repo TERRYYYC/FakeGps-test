@@ -19,10 +19,15 @@ created: 2026-07-27
 
 **Architecture:** Add a debug-only acceptance activity that temporarily publishes a schema-v2
 field-map payload to the existing XSharedPreferences transport, waits for the hook refresh, runs an
-expanded public-API probe, and restores the real database-backed payload in `finally`. A host-side
-verdict module compares the exact configured matrix with the probe JSON. The shell harness owns a
-second, idempotent restore path for process/signal failures. Production builds contain no exported
-acceptance component, and the Room database is never written by the test.
+expanded public-API probe, and restores the real database-backed payload in `finally`. Before any
+override, a debug-only recovery record durably stores the previous transport payload; the next
+debug process launch republishes it if the acceptance process was killed. A host-side verdict
+module compares exact configured matrices and an enabled-fluctuation behavior scenario with the
+probe JSON. Each transport envelope carries a unique session ID and exposes the same ID through a
+session-specific operator-name marker; the activity requires that public getter to match before
+starting the full probe. The shell harness owns an additional idempotent restore path for
+process/signal failures. Production builds contain no acceptance component, and the Room database
+is never written by the test.
 
 **Tech Stack:** Kotlin, Java/Xposed, Android public telephony APIs, Gradle/JUnit 4, Python 3
 `unittest`, Bash/ADB, moto g54 5G on Android 15.
@@ -31,17 +36,20 @@ acceptance component, and the Room database is never written by the test.
 
 The work is complete only when all of the following are true:
 
-1. One unattended command installs the debug APK, injects a distinct cellular matrix, reads it back
-   through public Android APIs, restores the real config, and exits non-zero on any mismatch.
+1. One unattended command installs the debug APK, injects a distinct cellular matrix with a
+   per-run public marker, reads it back through public Android APIs, restores the real config, and
+   exits non-zero on any mismatch or stale hook snapshot.
 2. The matrix verifies synchronous and callback paths for LTE, GSM, WCDMA, NR, carrier/network,
    service state, display info, and physical channel config on API 35.
 3. Every configured and API-supported field has an exact `verified` verdict. `missing`,
    `real_value`, `error`, and silent omission are failures.
 4. The original Room rows are byte-for-byte/logically unchanged, and the normal database-backed
-   transport is republished after success, assertion failure, shell signal, or probe exception.
+   transport is republished after success, assertion failure, shell signal, probe exception, or
+   acceptance-process SIGKILL followed by the next debug app launch.
 5. `testDebugUnitTest`, Python unit tests, Debug/Release assembly, `lintVitalRelease`, and the real
    device acceptance run are green.
-6. The release manifest and APK do not contain the debug acceptance activity.
+6. The release manifest and APK do not contain the debug acceptance activity, recovery
+   application, recovery record, or payload validator.
 
 ## Terminal report schema
 
@@ -58,18 +66,27 @@ The probe emits one JSON object under `FakeGPSProbe`:
       "wcdma": {},
       "nr": {}
     },
-    "callback": {
+    "request": {
       "lte": {},
       "gsm": {},
       "wcdma": {},
       "nr": {}
-    }
+    },
+    "requestCompleted": true
   },
   "telephony": {},
   "callback": {
+    "completed": true,
+    "cellInfo": {
+      "lte": {},
+      "gsm": {},
+      "wcdma": {},
+      "nr": {}
+    },
     "serviceState": {},
     "displayInfo": {},
-    "physicalChannel": {}
+    "physicalChannel": {},
+    "physicalChannelDelivery": "hook_replay_after_permission_denied"
   },
   "errors": []
 }
@@ -103,34 +120,60 @@ environment:
 | LTE signal | `lte_rssi`, `lte_rsrp`, `lte_rsrq`, `lte_sinr`, `lte_cqi`, `lte_ta` |
 | NR identity | `mcc`, `mnc`, `nci`, `nrarfcn`, `nr_pci`, `nr_tac` |
 | NR signal | `nr_ss_rsrp`, `nr_ss_rsrq`, `nr_ss_sinr`, `nr_csi_rsrp`, `nr_csi_rsrq`, `nr_csi_sinr` |
+| Signal controls | Exact matrices omit the controls; a separate `signal_fluctuation_enabled=1`, `signal_fluctuation_range_db=6` behavior scenario requires all seven allowed LTE RSRP values across 256 public-getter calls on each of three delivery paths |
 | Carrier/network | `network_type`, `data_network_type`, `voice_network_type`, `operator_name`, `operator_numeric`, `sim_operator`, `sim_operator_name`, `sim_country_iso`, `network_country_iso`, `is_roaming`, `phone_type` |
 | State/display | `service_state`, `data_state`, `data_activity`, `override_network_type` |
 | Physical channel | `band`, `channel_bandwidth`, `cell_bandwidth_downlink`, `physical_cell_id` |
+| Neighbor cells | Distinct GSM, LTE, and WCDMA identities/signals from `neighbor_cells_json`, each observed as `registered=false` |
 
 Both `TelephonyManager.getAllCellInfo()` and `requestCellInfoUpdate()` must return the configured
-cell set. Telephony callbacks must expose the configured service/display/physical-channel values.
+serving and neighbor cell sets. Telephony callbacks must expose the configured
+service/display/physical-channel values.
+
+### API-35 physical-channel permission boundary
+
+`TelephonyCallback.PhysicalChannelConfigListener` is guarded by
+`android.permission.READ_PRECISE_PHONE_STATE`, which is `signature|privileged` on the attached
+Android 15 device. Root cannot grant that permission to an ordinary debug APK without turning the
+test package into a privileged/system app.
+
+The acceptance probe therefore separates ordinary callbacks from the physical-channel callback.
+It first calls `registerTelephonyCallback` for the physical listener so the real production Xposed
+before-hook instruments the concrete callback class. After the framework rejects registration at
+its privileged permission boundary, the probe locally replays one empty callback. The production
+hook must replace that empty list with a real `PhysicalChannelConfig` instance, and every public
+getter is then asserted exactly. The report records
+`physicalChannelDelivery=hook_replay_after_permission_denied`; a missing replacement, constructor
+failure, getter mismatch, unexpected exception, or missing ordinary callback remains a hard
+failure. This verifies the module's callback interception without claiming that an unprivileged
+third-party app can receive a framework event Android does not allow it to register for.
 
 ## Override lifecycle and invariants
 
 | Current state | Event | Next state | Required effect |
 |---|---|---|---|
-| `idle` | valid debug intent | `published` | Save no user data; publish schema-v2 test payload with session ID |
+| `idle` | valid debug intent | `published` | First durably record the current transport payload in debug-private recovery state, then publish the schema-v2 test payload with top-level session ID and session-specific operator marker; do not touch Room |
 | `idle` | invalid/missing payload | `aborted` | Log validation error; do not alter transport |
-| `published` | hook refresh delay elapsed | `probing` | Probe only if session ID still matches |
+| `published` | hook refresh delay elapsed | `probing` | Read the public network-operator getter and probe only if it exposes this run's session marker |
 | `probing` | success or exception | `restoring` | Emit exactly one terminal probe/error record |
-| `restoring` | database-backed sync commits | `restored` | Log restore marker; finish activity |
+| `restoring` | database-backed sync commits and recovery record clears | `restored` | Log restore marker; finish activity |
 | any nonterminal | shell exit/signal/timeout | `restoring` | Host trap launches the normal activity to republish saved config |
+| any nonterminal | process death / host loss / reboot | `restoring` | On the next debug process launch, publish the durable previous payload before normal app startup |
 
 Invariants:
 
 - The acceptance path never inserts, updates, deletes, copies, or replaces `fakegps.db`, its WAL,
   or any profile row.
 - The test payload exists only in the debug XSharedPreferences transport and carries a unique
-  session ID.
-- Restore is idempotent: activity `finally` and host trap may both run.
+  `acceptanceSessionId`. Its `operator_name` contains a derived public marker; a stale loaded
+  snapshot from an otherwise identical matrix cannot satisfy the current run.
+- Restore is idempotent: activity `finally`, next-launch durable recovery, and host trap may all
+  run. The recovery record clears only after the previous payload publish commits.
 - A stale probe line from another session cannot satisfy the current run.
 - Test mode is absent from release manifests and release bytecode entry points.
-- Signal fluctuation is disabled so exact comparisons are deterministic.
+- Exact scenarios omit signal fluctuation controls so equality remains deterministic. A separate
+  enabled scenario proves the controls reached the hook by observing the complete configured range,
+  not merely one value equal to the base RSRP.
 
 ## Task 1: Lock the debug payload contract
 
@@ -143,7 +186,9 @@ Invariants:
 
 - Reject missing/blank session IDs, non-object `fields`, unsupported schema versions, and keys
   outside the profile field map.
-- Prove the canonical envelope is `{schemaVersion:2, mode:"always_on", fields:{...}}`.
+- Prove the canonical envelope is
+  `{schemaVersion:2, acceptanceSessionId:"...", mode:"always_on", fields:{...}}`.
+- Reject an envelope session or public operator marker that differs from the activity session.
 - Prove numeric values retain integer/long width (`nci` must not round through `Double`).
 
 Run:
@@ -179,6 +224,12 @@ Expected: new tests fail because the payload builder does not exist.
 - Accept base64url UTF-8 JSON and session ID extras.
 - Publish with `commit()`, wait for the existing 3-second hook refresh, invoke the probe, then call
   `ConfigPrefsSync.sync(applicationContext)` in `finally`.
+- Before entering `probing`, require `TelephonyManager.getNetworkOperatorName()` to equal the
+  session-specific marker carried by the published payload. A stale hook snapshot fails and
+  restores without emitting a normal report.
+- Before publishing, atomically persist the current transport payload in a debug-only recovery
+  record. Recover any pending record from the debug `Application` before ordinary app startup, and
+  clear it only after restore publication commits.
 - Log `published`, `probing`, and `restored` markers with the same session ID.
 - Never open Room or the database from the acceptance activity.
 
@@ -187,7 +238,11 @@ Expected: new tests fail because the payload builder does not exist.
 **Files:**
 
 - Modify: `app/src/main/java/name/caiyao/fakegps/probe/HookProbe.kt`
+- Create: `app/src/debug/java/name/caiyao/fakegps/probe/HookProbeRunner.kt`
+- Create: debug/release variants of
+  `name/caiyao/fakegps/probe/DebugHookProbeController.kt`
 - Create: `app/src/test/java/name/caiyao/fakegps/probe/ProbeFieldContractTest.kt`
+- Create: `app/src/test/java/name/caiyao/fakegps/probe/HookProbeRunnerTest.kt`
 
 **Red:**
 
@@ -200,6 +255,8 @@ Expected: new tests fail because the payload builder does not exist.
 - Always exercise both cached `allCellInfo` and `requestCellInfoUpdate`.
 - Register a composite `TelephonyCallback` for service state, display info, physical channel, and
   cell info; wait with a bounded latch and unregister in `finally`.
+- Dispatch the blocking probe on a lifecycle-owned worker; route result/state transitions back
+  through the activity main executor and suppress queued completion after destruction.
 - Include API level, session ID, errors, and callback timeouts in the JSON.
 - Shut down executors so the probe cannot leak threads.
 
@@ -213,7 +270,8 @@ Expected: new tests fail because the payload builder does not exist.
 **Red:**
 
 - Test exact numeric/string/boolean equality, missing paths, stale session IDs, API-gated paths,
-  callback mismatches, probe errors, and restore-marker absence.
+  callback mismatches, probe errors, restore-marker absence, and complete integer-set matchers for
+  enabled signal fluctuation.
 - Test that `0`, `false`, and empty strings are compared rather than treated as missing.
 
 Run:
@@ -245,11 +303,15 @@ Expected: tests fail because the verdict module does not exist.
 **Green:**
 
 - Add `--cellular-matrix` while retaining `--current-profile` diagnostics.
-- Preflight: one rooted API-29+ development device, awake/unlocked, debug acceptance activity
+- Preflight: one rooted API-33+ development device, awake/unlocked, debug acceptance activity
   installed, required permissions granted, and Xposed self-hook active.
 - Snapshot the current DB query output and transport fingerprint without writing either.
 - Generate a unique session, launch the debug activity with the canonical payload, collect only
   matching-session logs, and call `hook_verdict.py`.
+- Run two full exact matrices plus one enabled-fluctuation behavior scenario; require all configured
+  fields to be credited by an observable verdict path.
+- Arm a debug-only post-publish hold, SIGKILL the process, relaunch the normal debug activity, and
+  prove the durable record restored the exact pre-test transport fingerprint before clearing.
 - Install `EXIT`, `INT`, `TERM`, and timeout restore traps that relaunch normal `ComposeActivity`.
 - Assert post-run DB output equals pre-run output and the activity emitted `restored`.
 
@@ -288,7 +350,7 @@ Run:
 export JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home'
 export ANDROID_HOME='/Users/terry/Library/Android/sdk'
 ./gradlew clean testDebugUnitTest assembleDebug assembleRelease lintVitalRelease
-python3 -m unittest scripts.test_hook_verdict
+python3 -m unittest scripts.test_cellular_acceptance_matrix scripts.test_hook_verdict
 ./scripts/test-hook.sh --cellular-matrix
 ```
 
@@ -297,10 +359,10 @@ Inspect the release artifact:
 ```bash
 "$ANDROID_HOME/build-tools/36.1.0/aapt" dump xmltree \
   app/build/outputs/apk/release/app-release-unsigned.apk AndroidManifest.xml |
-  rg 'HookAcceptanceActivity'
+  rg 'HookAcceptance(Activity|Application|Recovery|Payload)'
 ```
 
-Expected: `rg` exits `1` because the debug-only activity is absent.
+Expected: `rg` exits `1` because all debug-only acceptance and recovery classes are absent.
 
 Then:
 

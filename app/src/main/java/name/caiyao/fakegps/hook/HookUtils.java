@@ -63,10 +63,11 @@ class HookUtils {
      * created from neighbor_cells_json are added here. Global getter hooks (Section C/D)
      * and isRegistered() skip these objects so their constructor-set values aren't
      * overwritten by serving cell snapshot.
-     * Uses WeakHashMap so entries are GC'd when the app drops the objects.
+     * Uses weak identity membership because these framework value objects mutate their hash code
+     * after construction; ordinary WeakHashMap membership would be lost after their setters run.
      */
-    private static final Set<Object> NEIGHBOR_BYPASS = Collections.synchronizedSet(
-            Collections.newSetFromMap(new java.util.WeakHashMap<>()));
+    private static final NeighborBypassRegistry NEIGHBOR_BYPASS =
+            new NeighborBypassRegistry();
 
     /**
      * Single entry point: registers ALL hooks exactly once.
@@ -425,9 +426,9 @@ class HookUtils {
         }
 
         // WCDMA signal
-        hookSignal(cl, "android.telephony.CellSignalStrengthWcdma", "getDbm", s -> s.wcdmaRssi);
+        hookSignal(cl, "android.telephony.CellSignalStrengthWcdma", "getDbm",
+                s -> Snapshot.resolveWcdmaDbm(s.wcdmaRscp, s.wcdmaRssi));
         if (Build.VERSION.SDK_INT >= 28) {
-            hookSignal(cl, "android.telephony.CellSignalStrengthWcdma", "getRscp", s -> s.wcdmaRscp);
             hookSignal(cl, "android.telephony.CellSignalStrengthWcdma", "getEcNo", s -> s.wcdmaEcno);
         }
 
@@ -512,6 +513,8 @@ class HookUtils {
 
         // TelephonyDisplayInfo.getOverrideNetworkType() (API 30+)
         if (Build.VERSION.SDK_INT >= 30) {
+            hookGetter(cl, "android.telephony.TelephonyDisplayInfo", "getNetworkType",
+                    s -> Snapshot.resolveDisplayNetworkType(s.networkType));
             hookGetter(cl, "android.telephony.TelephonyDisplayInfo", "getOverrideNetworkType",
                     s -> s.overrideNetworkType);
         }
@@ -1035,7 +1038,8 @@ class HookUtils {
                         try {
                             Class<?> pccClass = XposedHelpers.findClass(
                                     "android.telephony.PhysicalChannelConfig", cl);
-                            Object fakePcc = XposedHelpers.newInstance(pccClass);
+                            Object fakePcc =
+                                    CellConstructorCompat.newPhysicalChannelConfig(pccClass);
                             ArrayList<Object> pccList = new ArrayList<>();
                             pccList.add(fakePcc);
                             param.args[0] = pccList;
@@ -1295,7 +1299,8 @@ class HookUtils {
             // API 33+: getCellBandwidthUplinkKhz()
             if (Build.VERSION.SDK_INT >= 33) {
                 hookGetter(cl, "android.telephony.PhysicalChannelConfig",
-                        "getCellBandwidthUplinkKhz", s -> s.cellBandwidthDownlink);
+                        "getCellBandwidthUplinkKhz",
+                        s -> Snapshot.resolvePhysicalUplinkBandwidth(s.channelBandwidth));
             }
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": PhysicalChannelConfig class not found, skipping: " + t.getMessage());
@@ -2043,7 +2048,7 @@ class HookUtils {
     }
 
     private static ArrayList buildCellInfoList(Snapshot s, CellBaseline base) {
-        // WeakHashMap-backed set: old neighbor objects are GC'd naturally
+        // Weak identity registry: old neighbor objects are GC'd naturally
         // when the app drops references. No manual clear() needed.
         ArrayList list = new ArrayList();
         // Per-field passthrough: configured value > device's real value > last-resort default.
@@ -2182,6 +2187,7 @@ class HookUtils {
         // Format: [{"type":"gsm","mcc":460,"mnc":0,"lac":1234,"cid":5678,"rssi":-85}, ...]
         // Supported types: gsm (rssi,ber,ta), lte (rssi,rsrp,rsrq,sinr,cqi,ta), wcdma (rssi,rscp,ecno)
         if (s.neighborCellsJson != null && !s.neighborCellsJson.isEmpty()) {
+            debug("building configured neighbor cells bytes=" + s.neighborCellsJson.length());
             try {
                 org.json.JSONArray arr = new org.json.JSONArray(s.neighborCellsJson);
                 for (int i = 0; i < arr.length(); i++) {
@@ -2267,6 +2273,7 @@ class HookUtils {
                         XposedBridge.log(TAG + ": Neighbor cell " + i + " creation failed: " + t);
                     }
                 }
+                debug("configured neighbor cells processed=" + arr.length());
             } catch (Throwable t) {
                 XposedBridge.log(TAG + ": Neighbor cells JSON parse failed: " + t);
             }

@@ -56,34 +56,59 @@ object ConfigPrefsSync {
      * Invariants preserved: only non-null values are written (NULL = passthrough), the payload
      * carries [SCHEMA_VERSION] so the reader can reject an incompatible build, and a content
      * fingerprint is emitted so config provenance stays verifiable across UI / log / probe.
-     */
+    */
     @JvmStatic
-    fun sync(context: Context) {
+    fun sync(context: Context): Boolean {
         Log.w(TAG, "sync() ENTER")
-        try {
+        return try {
             val jsonStr = buildFieldMapJson(context)
 
             // MODE_WORLD_READABLE throws SecurityException on Android N+ unless the Xposed
             // framework suppresses it (Vector hooks checkMode for this). Fall back to a private
             // write so we can tell the two failure modes apart in the log.
+            var worldReadable = true
             @Suppress("DEPRECATION")
             val prefs = try {
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_WORLD_READABLE)
             } catch (se: Throwable) {
+                worldReadable = false
                 Log.e(TAG, "MODE_WORLD_READABLE rejected (${se.javaClass.simpleName}) — falling back to MODE_PRIVATE", se)
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             }
-            // Recorded alongside — NOT inside — the payload: the hook reads only KEY_JSON, and
-            // embedding a timestamp would change the bytes on every sync, destroying the
-            // fingerprint's value as a content identity. Lets the UI tell "the hook has not
-            // re-read yet" apart from "the hook is ignoring this config".
-            val ok = prefs.edit()
-                .putString(KEY_JSON, jsonStr)
-                .putLong(KEY_PUBLISHED_AT, System.currentTimeMillis())
-                .commit()
-            Log.w(TAG, "published commit=$ok fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}")
+            // The publish timestamp rides in the SAME commit as the payload, and only when the
+            // write is cross-process readable.
+            //
+            // Both halves matter, for different reasons:
+            //  - same commit: the UI reads the timestamp to tell "the hook has not re-read yet"
+            //    from "the hook is ignoring this config". A second commit could be interrupted
+            //    (PR #4 hardens exactly this against SIGKILL), leaving a new payload beside a stale
+            //    timestamp — which reads as "not pending" and resurrects the false-red this was
+            //    added to remove.
+            //  - only when worldReadable: a MODE_PRIVATE fallback still commits successfully, but
+            //    XSharedPreferences can never read it from another process. Recording a timestamp
+            //    there would let the UI soften a permanent publication failure into "刚保存，稍等".
+            //
+            // `worldReadable` is known before edit(), and `committed` is atomic, so this yields
+            // exactly: timestamp present <=> published == true. No divergence window.
+            //
+            // Timestamp is stored ALONGSIDE the payload, never inside it — embedding it would
+            // change the bytes on every sync and destroy the fingerprint's value as content identity.
+            val editor = prefs.edit().putString(KEY_JSON, jsonStr)
+            if (worldReadable) editor.putLong(KEY_PUBLISHED_AT, System.currentTimeMillis())
+            val committed = editor.commit()
+            val published = ConfigPublicationContract.isCrossProcessPublishSuccessful(
+                worldReadable,
+                committed,
+            )
+            Log.w(
+                TAG,
+                "published crossProcess=$published worldReadable=$worldReadable commit=$committed " +
+                    "fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}",
+            )
+            published
         } catch (e: Throwable) {
             Log.e(TAG, "sync failed", e)
+            false
         }
     }
 
