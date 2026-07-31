@@ -17,6 +17,14 @@ created: 2026-07-30
 > **Goal:** Add a third profile field state that makes supported Android public APIs report
 > platform-native “unavailable” values without confusing it with passthrough.
 
+## Original requirement
+
+> “需要对档案添加一个数据类型，即为空、不上报的场景，我建议为 `--`。”
+
+Source: co-creator, 2026-07-30 19:26 UTC. The agreed interpretation is a true third state:
+blank remains passthrough, `--` forces the public API's native unavailable result, and a concrete
+value remains spoofing.
+
 ## Terminal contract
 
 Every editable profile field has exactly one persisted state:
