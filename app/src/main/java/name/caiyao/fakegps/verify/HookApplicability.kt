@@ -3,6 +3,7 @@ package name.caiyao.fakegps.verify
 import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.config.PayloadRead
 import name.caiyao.fakegps.config.PublishedConfig
+import name.caiyao.fakegps.config.TransportSchemaContract
 
 /**
  * Whether the hook is actually applying the published payload right now.
@@ -48,7 +49,10 @@ enum class HookApplicability {
      * The payload could not be read at all (permissions, I/O). Unlike [NEVER_PUBLISHED] the hook is
      * almost certainly still spoofing from last-known-good — we simply cannot see what.
      */
-    PAYLOAD_UNREADABLE;
+    PAYLOAD_UNREADABLE,
+
+    /** The database changed but the transport publish failed; the on-disk payload is stale. */
+    PUBLICATION_FAILED;
 
     val verdictsMeaningful: Boolean get() = this == APPLYING
 
@@ -72,7 +76,8 @@ enum class HookApplicability {
                 currentHour = currentHour,
                 activeStart = parsed.activeHourStart,
                 activeEnd = parsed.activeHourEnd,
-                fieldsPresent = parsed.fieldsPresent && parsed.unavailablePresent,
+                fieldsPresent = parsed.fieldsPresent &&
+                    (parsed.schemaVersion == ConfigPrefsSync.LEGACY_SCHEMA_VERSION || parsed.unavailablePresent),
             )
             read is PayloadRead.ReadError -> PAYLOAD_UNREADABLE
             read is PayloadRead.Raw -> PAYLOAD_MALFORMED
@@ -87,8 +92,7 @@ enum class HookApplicability {
             fieldsPresent: Boolean = true,
         ): HookApplicability {
             // Checked first: a rejected payload never loads at all, so its mode and hours are moot.
-            if (schemaVersion != ConfigPrefsSync.SCHEMA_VERSION) return SCHEMA_REJECTED
-            if (!fieldsPresent) return PAYLOAD_INCOMPLETE
+            if (!TransportSchemaContract.supports(schemaVersion)) return SCHEMA_REJECTED
             if (mode == "off") return MODE_OFF
             if (mode == "time_based" && activeStart != null && activeEnd != null) {
                 val inRange = if (activeStart <= activeEnd) {
@@ -99,6 +103,7 @@ enum class HookApplicability {
                 }
                 if (!inRange) return OUTSIDE_ACTIVE_HOURS
             }
+            if (!fieldsPresent) return PAYLOAD_INCOMPLETE
             return APPLYING
         }
     }

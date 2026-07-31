@@ -78,6 +78,19 @@ class HookApplicabilityTest {
     }
 
     @Test
+    fun `legacy schema v2 remains applying during a lossless v3 upgrade`() {
+        assertEquals(
+            HookApplicability.APPLYING,
+            HookApplicability.of(mode = "always_on", schemaVersion = 2, currentHour = 3),
+        )
+        val parsed = PublishedConfig.parse("""{"schemaVersion":2,"fields":{"tac":7}}""")!!
+        assertEquals(
+            HookApplicability.APPLYING,
+            HookApplicability.forPayload(PayloadRead.Raw("legacy"), parsed, currentHour = 3),
+        )
+    }
+
+    @Test
     fun `schema rejection outranks the active window because the payload never loads`() {
         assertEquals(
             HookApplicability.SCHEMA_REJECTED,

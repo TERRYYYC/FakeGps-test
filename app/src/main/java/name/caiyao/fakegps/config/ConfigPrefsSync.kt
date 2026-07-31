@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+import name.caiyao.fakegps.data.db.AppDatabase
 
 /**
  * WRITE side of the XSharedPreferences config transport.
@@ -35,6 +36,7 @@ object ConfigPrefsSync {
 
     /** Wall-clock time of the last publish. Read by the UI only; the hook ignores it. */
     const val KEY_PUBLISHED_AT = "published_at"
+    const val KEY_PUBLISH_FAILED = "publish_failed"
 
     /**
      * Transport payload version. Bumped from SpoofConfig's v1 typed schema to the flat field map.
@@ -42,6 +44,9 @@ object ConfigPrefsSync {
      * its last-known-good config instead of reverting to real device data mid-test.
      */
     const val SCHEMA_VERSION = 3
+    /** Losslessly readable predecessor: it has the same flat `fields` map and no unavailable set. */
+    const val LEGACY_SCHEMA_VERSION = 2
+
 
     private val APP_URI: Uri = Uri.parse("content://name.caiyao.fakegps.data.AppInfoProvider/app")
     private val SETTINGS_URI: Uri = Uri.parse("content://name.caiyao.fakegps.data.AppInfoProvider/settings")
@@ -104,7 +109,11 @@ object ConfigPrefsSync {
             // the write leaves the timestamp from the LAST successful publish on disk — and this
             // new, cross-process-unreadable payload would borrow that still-open window and be
             // reported as "刚保存，尚未生效" instead of the permanent failure it is.
-            if (stamp != null) editor.putLong(KEY_PUBLISHED_AT, stamp) else editor.remove(KEY_PUBLISHED_AT)
+            if (stamp != null) {
+                editor.putLong(KEY_PUBLISHED_AT, stamp).remove(KEY_PUBLISH_FAILED)
+            } else {
+                editor.remove(KEY_PUBLISHED_AT).putBoolean(KEY_PUBLISH_FAILED, true)
+            }
             val committed = editor.commit()
             val published = ConfigPublicationContract.isCrossProcessPublishSuccessful(
                 worldReadable,
@@ -115,9 +124,11 @@ object ConfigPrefsSync {
                 "published crossProcess=$published worldReadable=$worldReadable commit=$committed " +
                     "fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}",
             )
+            if (!published) markPublicationFailure(context)
             published
         } catch (e: Throwable) {
             Log.e(TAG, "sync failed", e)
+            markPublicationFailure(context)
             false
         }
     }
@@ -130,6 +141,10 @@ object ConfigPrefsSync {
      * their SQLite type so the hook side reads them back with matching types.
      */
     private fun buildFieldMapJson(context: Context): String {
+        // Force Room to open and run pending migrations before the provider creates its second,
+        // read-only connection. Without this, the first publish after an upgrade can observe the
+        // previous schema and silently omit newly migrated metadata.
+        AppDatabase.getInstance(context).openHelper.readableDatabase
         val cr = context.contentResolver
         val root = JSONObject()
         root.put("schemaVersion", SCHEMA_VERSION)
@@ -151,7 +166,9 @@ object ConfigPrefsSync {
         // profile row -> flat field map plus an orthogonal explicit-unavailable set.
         val fields = JSONObject()
         var storedUnavailable: String? = null
-        cr.query(APP_URI, null, null, null, "id ASC")?.use { c ->
+        val profileCursor = cr.query(APP_URI, null, null, null, "id ASC")
+            ?: throw IllegalStateException("profile query failed")
+        profileCursor.use { c ->
             if (c.moveToFirst()) {
                 for (i in 0 until c.columnCount) {
                     val name = c.getColumnName(i)
@@ -214,6 +231,22 @@ object ConfigPrefsSync {
             .getLong(KEY_PUBLISHED_AT, 0L)
             .takeIf { it > 0L }
     }.getOrNull()
+
+    @JvmStatic
+    fun hasPublicationFailure(context: Context): Boolean = runCatching {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_PUBLISH_FAILED, false)
+    }.getOrDefault(true)
+
+    private fun markPublicationFailure(context: Context) {
+        runCatching {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .remove(KEY_PUBLISHED_AT)
+                .putBoolean(KEY_PUBLISH_FAILED, true)
+                .commit()
+        }.onFailure { Log.e(TAG, "could not persist publication failure", it) }
+    }
 
     /** SHA-256 of the published payload — config provenance, comparable across UI / log / probe. */
     private fun fingerprint(json: String): String = PublishedConfig.fingerprint(json)

@@ -70,15 +70,24 @@ public class UnavailableValueResolverTest {
         assertEquals("",
                 UnavailableValueResolver.resolve("operator_name",
                         UnavailableValueResolver.Surface.TELEPHONY_TEXT).value());
+        UnavailableValueResolver.Resolution objectName =
+                UnavailableValueResolver.resolve("operator_name",
+                        UnavailableValueResolver.Surface.CARRIER_OBJECT_TEXT);
+        assertTrue(objectName.handled());
+        assertNull(objectName.value());
+        UnavailableValueResolver.Resolution objectNumeric =
+                UnavailableValueResolver.resolve("operator_numeric",
+                        UnavailableValueResolver.Surface.CARRIER_OBJECT_TEXT);
+        assertTrue(objectNumeric.handled());
+        assertNull(objectNumeric.value());
         assertEquals(0,
                 UnavailableValueResolver.resolve("network_type",
                         UnavailableValueResolver.Surface.NETWORK_TYPE).value());
         assertEquals(0,
                 UnavailableValueResolver.resolve("phone_type",
                         UnavailableValueResolver.Surface.PHONE_TYPE).value());
-        assertEquals(0,
-                UnavailableValueResolver.resolve("data_state",
-                        UnavailableValueResolver.Surface.DATA_STATE).value());
+        assertEquals(0, UnavailableValueResolver.dataStateUnavailableValueForApi(28));
+        assertEquals(-1, UnavailableValueResolver.dataStateUnavailableValueForApi(29));
         assertEquals(0,
                 UnavailableValueResolver.resolve("data_activity",
                         UnavailableValueResolver.Surface.DATA_ACTIVITY).value());
@@ -98,9 +107,8 @@ public class UnavailableValueResolverTest {
         assertEquals(-1,
                 UnavailableValueResolver.resolve("physical_cell_id",
                         UnavailableValueResolver.Surface.PHYSICAL_CELL_ID).value());
-        assertEquals(Collections.emptyList(),
-                UnavailableValueResolver.resolve("neighbor_cells_json",
-                        UnavailableValueResolver.Surface.NEIGHBOR_CELL_LIST).value());
+        assertFalse(UnavailableValueResolver.resolve("neighbor_cells_json",
+                UnavailableValueResolver.Surface.NEIGHBOR_CELL_LIST).handled());
     }
 
     @Test

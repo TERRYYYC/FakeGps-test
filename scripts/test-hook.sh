@@ -36,8 +36,10 @@ TEMP_ROOT=""
 TRANSACTION_ACTIVE=0
 DB_BEFORE=""
 PREFS_BEFORE=""
+PREFS_BEFORE_FINGERPRINT=""
 RESTORE_FAILED=0
 DEVICE_API=""
+FULL_RSCP_CONTROL_REPORT=""
 
 device_count() {
     adb devices | awk 'NR > 1 && $2 == "device" { count++ } END { print count + 0 }'
@@ -58,6 +60,22 @@ snapshot_prefs() {
         2>/dev/null |
         sed -n '/<string name="json">/p' |
         LC_ALL=C sort
+}
+
+prefs_payload_fingerprint() {
+    PREFS_XML=$1 "$PY" -c '
+import hashlib, html, os, re, sys
+values = {
+    html.unescape(match.group(1))
+    for line in os.environ["PREFS_XML"].splitlines()
+    for match in [re.search(r"<string name=\"json\">(.*)</string>", line)]
+    if match
+}
+if len(values) != 1:
+    sys.exit(1)
+payload = next(iter(values)).encode()
+print("sha256:" + hashlib.sha256(payload).hexdigest()[:16])
+'
 }
 
 wait_for_profile_schema() {
@@ -149,6 +167,9 @@ cleanup_transaction() {
     if [ "$RESTORE_FAILED" -ne 0 ] && [ "$rc" -eq 0 ]; then
         rc=1
     fi
+    if [ "$rc" -eq 0 ] && [ "$RESTORE_FAILED" -eq 0 ] && [ "$TRANSACTION_ACTIVE" -eq 1 ]; then
+        echo "ACCEPTANCE_PASS exact, fluctuation, and unavailable cellular scenarios verified; database and transport restored"
+    fi
     exit "$rc"
 }
 
@@ -195,6 +216,34 @@ preflight_device() {
     echo "VERIFIED preflight.device api=$DEVICE_API awake unlocked rooted"
 }
 
+install_debug_apk_if_changed() {
+    local_sha=$(shasum -a 256 "$APK" 2>/dev/null | awk '{print $1}')
+    [ -n "$local_sha" ] ||
+        { echo "HARNESS_ERROR could not fingerprint debug APK" >&2; return 2; }
+    installed_path=$(adb shell pm path "$PKG" 2>/dev/null |
+        sed -n 's/^package://p' | tr -d '\r' | head -1)
+    installed_sha=""
+    if [ -n "$installed_path" ]; then
+        installed_sha=$(root_shell "sha256sum $installed_path" 2>/dev/null |
+            awk '{print $1}' | tr -d '\r')
+    fi
+    if [ "$installed_sha" = "$local_sha" ]; then
+        echo "[install] identical debug APK already installed"
+        return 0
+    fi
+
+    echo "[install] $APK"
+    adb install -r -t "$APK" >/dev/null ||
+        { echo "HARNESS_ERROR debug APK install failed" >&2; return 2; }
+
+    # LSPosed may disable a module or clear its scope when PackageManager changes the APK path.
+    # Rebooting cannot restore that user-owned policy, and writing LSPosed's private DB would fake
+    # the test precondition. Stop here: the next run is byte-idempotent after the operator restores
+    # the intended scope in LSPosed.
+    echo "HARNESS_ACTION debug module updated; enable FakeGPS and restore its intended LSPosed scope, then rerun" >&2
+    return 3
+}
+
 preflight_matrix() {
     [ "$DEVICE_API" -ge 33 ] ||
         {
@@ -206,9 +255,7 @@ preflight_matrix() {
     [ -f "$MATRIX_TOOL" ] && [ -f "$VERDICT_TOOL" ] ||
         { echo "HARNESS_ERROR acceptance tools missing" >&2; return 2; }
 
-    echo "[install] $APK"
-    adb install -r -t "$APK" >/dev/null ||
-        { echo "HARNESS_ERROR debug APK install failed" >&2; return 2; }
+    install_debug_apk_if_changed || return $?
 
     root_shell "pm grant $PKG android.permission.ACCESS_FINE_LOCATION" >/dev/null 2>&1 ||
         { echo "HARNESS_ERROR could not grant ACCESS_FINE_LOCATION" >&2; return 2; }
@@ -336,11 +383,35 @@ run_scenario() {
         return 2
     }
 
+    control_args=()
+    if [ "$scenario" = "unavailable" ]; then
+        [ -n "$FULL_RSCP_CONTROL_REPORT" ] && [ -f "$FULL_RSCP_CONTROL_REPORT" ] || {
+            echo "HARNESS_ERROR unavailable scenario has no full-rscp negative control" >&2
+            return 2
+        }
+        control_args+=(--control-report-file "$FULL_RSCP_CONTROL_REPORT")
+        while IFS= read -r path; do
+            control_args+=(--control-path "$path")
+        done < <(PYTHONPATH="$REPO_ROOT" "$PY" -c \
+            'from scripts.cellular_acceptance_matrix import unavailable_negative_control_paths; print("\n".join(unavailable_negative_control_paths()))' \
+            2>/dev/null)
+    fi
+
+    restored_args=()
+    if has_state "$session" "restored"; then
+        restored_args+=(--restored)
+    fi
+
     "$PY" "$VERDICT_TOOL" \
         --expected-json "$expected" \
         --report-file "$local_report" \
         --session-id "$session" \
-        --restored
+        "${restored_args[@]}" \
+        "${control_args[@]}" || return $?
+
+    if [ "$scenario" = "full-rscp" ]; then
+        FULL_RSCP_CONTROL_REPORT="$local_report"
+    fi
 }
 
 verify_durable_recovery() {
@@ -407,7 +478,7 @@ verify_durable_recovery() {
             ! has_pending_recovery &&
             adb logcat -d -v brief -s FakeGPSAcceptanceRecovery:W '*:S' \
                 2>/dev/null |
-                grep -F "recovered_pending" >/dev/null
+                grep -F "recovered_pending fp=$PREFS_BEFORE_FINGERPRINT" >/dev/null
         then
             echo "VERIFIED recovery.sigkill durable record restored pre-test payload"
             return 0
@@ -431,6 +502,8 @@ run_cellular_matrix() {
     PREFS_BEFORE=$(snapshot_prefs)
     [ -n "$PREFS_BEFORE" ] ||
         { echo "HARNESS_ERROR schema-v3 safe-zone prefs not found" >&2; return 2; }
+    PREFS_BEFORE_FINGERPRINT=$(prefs_payload_fingerprint "$PREFS_BEFORE") ||
+        { echo "HARNESS_ERROR could not fingerprint protected transport payload" >&2; return 2; }
 
     TEMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fakegps-acceptance.XXXXXX") ||
         { echo "HARNESS_ERROR could not create temporary directory" >&2; return 2; }
@@ -444,7 +517,6 @@ run_cellular_matrix() {
     run_scenario full-rssi || return $?
     run_scenario fluctuation-enabled || return $?
     run_scenario unavailable || return $?
-    echo "ACCEPTANCE_PASS exact, fluctuation, and unavailable cellular scenarios verified"
 }
 
 echo "════════════════════════════════════════════════════════════════"

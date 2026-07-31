@@ -13,6 +13,9 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import name.caiyao.fakegps.config.ConfigCodec;
 import name.caiyao.fakegps.config.SpoofConfig;
+import name.caiyao.fakegps.config.ConfigPrefsSync;
+import name.caiyao.fakegps.config.PublishedConfig;
+import name.caiyao.fakegps.config.TransportSchemaContract;
 
 /**
  * Xposed module entry point.
@@ -34,10 +37,10 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "FakeGPS";
 
-    /** Must match ConfigPrefsSync.PREFS_NAME / KEY_JSON / SCHEMA_VERSION on the app write side. */
-    private static final String PREFS_NAME = "spoof_config";
-    private static final String PREFS_KEY_JSON = "json";
-    private static final int TRANSPORT_SCHEMA_VERSION = 3;
+    private static final String PREFS_NAME = ConfigPrefsSync.PREFS_NAME;
+    private static final String PREFS_KEY_JSON = ConfigPrefsSync.KEY_JSON;
+    private static final int TRANSPORT_SCHEMA_VERSION = ConfigPrefsSync.SCHEMA_VERSION;
+    private static final int LEGACY_TRANSPORT_SCHEMA_VERSION = ConfigPrefsSync.LEGACY_SCHEMA_VERSION;
 
     /**
      * Verbose diagnostics, debug builds only. These run inside the TARGET app's process, so in a
@@ -127,11 +130,15 @@ public class MainHook implements IXposedHookLoadPackage {
             // rather than silently mis-reading it. Keep last-known-good (never revert to real data
             // mid-test) instead of falling back to passthrough.
             int version = root.optInt("schemaVersion", -1);
-            if (version != TRANSPORT_SCHEMA_VERSION) {
-                debug("incompatible schemaVersion=" + version
-                        + " (expected " + TRANSPORT_SCHEMA_VERSION + ") -> keep last-known-good");
+            String fingerprint = PublishedConfig.Companion.fingerprint(jsonStr);
+            boolean legacyV2 = version == LEGACY_TRANSPORT_SCHEMA_VERSION;
+            if (!TransportSchemaContract.supports(version)) {
+                XposedBridge.log(TAG + ": transport rejected schema=" + version
+                        + " expected=" + TRANSPORT_SCHEMA_VERSION + " fp=" + fingerprint);
                 return CURRENT.get();
             }
+            XposedBridge.log(TAG + ": transport accepted schema=" + version
+                    + " fp=" + fingerprint);
 
             String mode = root.optString("mode", "always_on");
             if ("off".equals(mode)) {
@@ -167,18 +174,20 @@ public class MainHook implements IXposedHookLoadPackage {
                 return resolved;
             }
             org.json.JSONArray unavailableJson = root.optJSONArray("unavailable");
-            if (unavailableJson == null) {
+            if (unavailableJson == null && !legacyV2) {
                 Snapshot resolved = Snapshot.keepLastKnownGoodOr(CURRENT.get());
                 debug("payload has no 'unavailable' array -> keep last-known-good");
                 return resolved;
             }
             java.util.List<String> requestedUnavailable = new java.util.ArrayList<>();
-            for (int i = 0; i < unavailableJson.length(); i++) {
-                Object value = unavailableJson.get(i);
-                if (!(value instanceof String)) {
-                    throw new IllegalArgumentException("unavailable entry is not a string");
+            if (unavailableJson != null) {
+                for (int i = 0; i < unavailableJson.length(); i++) {
+                    Object value = unavailableJson.get(i);
+                    if (!(value instanceof String)) {
+                        throw new IllegalArgumentException("unavailable entry is not a string");
+                    }
+                    requestedUnavailable.add((String) value);
                 }
-                requestedUnavailable.add((String) value);
             }
             java.util.Set<String> configuredFields = new java.util.HashSet<>();
             java.util.Iterator<String> keys = fields.keys();
@@ -198,4 +207,5 @@ public class MainHook implements IXposedHookLoadPackage {
             return CURRENT.get();
         }
     }
+
 }

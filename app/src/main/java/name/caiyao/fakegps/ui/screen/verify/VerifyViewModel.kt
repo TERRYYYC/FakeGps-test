@@ -12,11 +12,13 @@ import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.config.PayloadRead
 import name.caiyao.fakegps.config.PublishPropagation
 import name.caiyao.fakegps.config.PublishedConfig
+import name.caiyao.fakegps.config.TransportSchemaContract
 import name.caiyao.fakegps.verify.DeviceObserver
 import name.caiyao.fakegps.verify.HookApplicability
 import name.caiyao.fakegps.verify.ObservationScope
 import name.caiyao.fakegps.verify.VerificationEngine
 import name.caiyao.fakegps.verify.VerificationReport
+import name.caiyao.fakegps.hook.BaselineExtractionGuard
 import java.util.Calendar
 
 sealed interface PayloadStatus {
@@ -31,7 +33,7 @@ sealed interface PayloadStatus {
 
     data class Ok(val schemaVersion: Int, val fieldCount: Int) : PayloadStatus {
         /** The hook rejects a version it does not recognise rather than mis-reading the payload. */
-        val compatible: Boolean get() = schemaVersion == ConfigPrefsSync.SCHEMA_VERSION
+        val compatible: Boolean get() = TransportSchemaContract.supports(schemaVersion)
     }
 }
 
@@ -112,6 +114,7 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 publishedAtMs = ConfigPrefsSync.readPublishedAt(ctx),
                 nowMs = System.currentTimeMillis(),
             )
+            val publicationFailed = ConfigPrefsSync.hasPublicationFailure(ctx)
 
             // The same readings feed different columns depending on what they can prove. Under
             // SELF_HOOKED they are observations that confirm or refute the config; under
@@ -119,11 +122,20 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
             // reported as "no evidence" instead of as a failure.
             val scope = ObservationScope.current()
             val selfHooked = scope == ObservationScope.SELF_HOOKED
+            val baseline = if (selfHooked) {
+                BaselineExtractionGuard.call {
+                    DeviceObserver(
+                        ctx,
+                        configuredColumns = configuredColumns,
+                        unavailableColumns = unavailable,
+                    ).observe().values
+                }
+            } else observation.values
             val report = VerificationEngine.buildReport(
                 configured = parsed?.fields.orEmpty(),
                 unavailable = unavailable,
                 observed = if (selfHooked) observation.values else emptyMap(),
-                baseline = if (selfHooked) emptyMap() else observation.values,
+                baseline = baseline,
                 propagationPending = pending,
             )
 
@@ -135,14 +147,21 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 // Derived from what was actually read back. Substituting defaults for an unparseable
                 // payload (a compatible schemaVersion, fieldsPresent=true) silently yielded APPLYING
                 // and made the verdict card contradict the payload card on the same screen.
-                applicability = HookApplicability.forPayload(
-                    read = read,
-                    parsed = parsed,
-                    currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
-                ),
+                applicability = if (publicationFailed) {
+                    HookApplicability.PUBLICATION_FAILED
+                } else {
+                    HookApplicability.forPayload(
+                        read = read,
+                        parsed = parsed,
+                        currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
+                    )
+                },
                 fingerprint = read.textOrNull?.let { PublishedConfig.fingerprint(it) },
                 report = report,
-                notes = observation.notes,
+                notes = if (publicationFailed) {
+                    listOf("数据库中的档案未能发布给 Hook；下方旧 payload 不能证明当前档案已生效") +
+                        observation.notes
+                } else observation.notes,
                 cellCount = observation.cellCount,
             )
     }

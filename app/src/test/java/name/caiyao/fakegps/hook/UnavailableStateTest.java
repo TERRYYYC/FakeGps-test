@@ -2,10 +2,12 @@ package name.caiyao.fakegps.hook;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Random;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import name.caiyao.fakegps.config.UnavailableSpec;
@@ -111,7 +113,7 @@ public class UnavailableStateTest {
     @Test
     public void snapshotMaterializesCanonicalHookValuesAndRetainsDecisionSet() {
         Set<String> selected = new LinkedHashSet<>(Arrays.asList(
-                "lac", "operator_name", "network_type", "data_state",
+                "lac", "mcc", "mnc", "operator_name", "network_type", "data_state",
                 "band", "physical_cell_id", "lte_rsrp"));
 
         Snapshot s = Snapshot.from(new EmptySource(), selected);
@@ -130,6 +132,37 @@ public class UnavailableStateTest {
         assertTrue("snapshot must defensively copy the decision set", s.isUnavailable("lac"));
     }
 
+    @Test
+    public void unavailableOnly_doesNotActivateCellReconstruction() {
+        Snapshot s = Snapshot.from(new EmptySource(), new LinkedHashSet<>(Arrays.asList(
+                "lac", "tac", "nci", "band")));
+
+        assertFalse("unavailable is a getter decision, not a request to fabricate GSM",
+                s.hasGsmCell());
+        assertFalse("unavailable is a getter decision, not a request to fabricate LTE",
+                s.hasLteCell());
+        assertFalse("unavailable is a getter decision, not a request to fabricate NR",
+                s.hasNrCell());
+        assertFalse("unavailable must not synthesize a PhysicalChannelConfig",
+                s.hasPhysicalChannelConfig());
+    }
+
+    @Test
+    public void emptyCellConstruction_failsSafeToPassthrough() {
+        assertNull(Snapshot.acceptBuiltCellListOrPassthrough(new ArrayList<>()));
+        ArrayList<Object> built = new ArrayList<>();
+        built.add(new Object());
+        assertEquals(built, Snapshot.acceptBuiltCellListOrPassthrough(built));
+    }
+
+    @Test
+    public void blankNeighborConfigPreservesRealNeighborsAndUntouchedRats() {
+        assertTrue(Snapshot.shouldPreserveRealCell(false, true, false));
+        assertTrue(Snapshot.shouldPreserveRealCell(true, false, false));
+        assertFalse(Snapshot.shouldPreserveRealCell(true, true, false));
+        assertFalse(Snapshot.shouldPreserveRealCell(false, false, true));
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void snapshotRejectsUnsupportedUnavailableField() {
         Snapshot.from(new EmptySource(), java.util.Collections.singleton("is_roaming"));
@@ -138,13 +171,16 @@ public class UnavailableStateTest {
     @Test
     public void exceptionalSurfacesDoNotReuseSnapshotSentinel() {
         assertEquals(Integer.valueOf(-1),
-                Snapshot.resolveGsmCellLocationField(Integer.MAX_VALUE, 42, true));
+                Snapshot.resolveGsmCellLocationField("lac", Integer.MAX_VALUE, 42, true));
         assertEquals(Integer.valueOf(42),
-                Snapshot.resolveGsmCellLocationField(null, 42, false));
+                Snapshot.resolveGsmCellLocationField("cid", null, 42, false));
+        assertEquals(Integer.valueOf(-1),
+                Snapshot.resolveGsmCellLocationField("psc", Integer.MAX_VALUE, 42, true));
         org.junit.Assert.assertNull(
-                Snapshot.resolvePlmnString(Integer.MAX_VALUE, "460", true));
-        assertEquals("460", Snapshot.resolvePlmnString(null, "460", false));
-        assertEquals("310", Snapshot.resolvePlmnString(310, "460", false));
+                Snapshot.resolvePlmnString("mcc", Integer.MAX_VALUE, "460", true));
+        assertEquals("460", Snapshot.resolvePlmnString("mcc", null, "460", false));
+        assertEquals("310", Snapshot.resolvePlmnString("mcc", 310, "460", false));
+        assertEquals("00", Snapshot.resolvePlmnString("mnc", 0, "00", false));
     }
 
     private static final class EmptySource implements Snapshot.FieldSource {

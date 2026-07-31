@@ -169,9 +169,23 @@ _SCENARIOS = {
     ),
 }
 
+_UNAVAILABLE_NEGATIVE_CONTROL_PATHS = (
+    "cellInfo.sync.lte.tac",
+    "cellInfo.sync.nr.nci",
+    "cellInfo.sync.lte.rsrp",
+    "telephony.networkOperator",
+    "telephony.networkType",
+    "callback.physicalChannel.band",
+    "callback.physicalChannel.physicalCellId",
+)
+
 
 def scenario_names() -> Tuple[str, ...]:
     return tuple(_SCENARIOS)
+
+
+def unavailable_negative_control_paths() -> Tuple[str, ...]:
+    return _UNAVAILABLE_NEGATIVE_CONTROL_PATHS
 
 
 def get_scenario(name: str) -> Scenario:
@@ -273,10 +287,15 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
         expected[path] = value
         covered.update(sources)
 
+    def carrier_object(field: str) -> Any:
+        return None if field in scenario.unavailable else fields[field]
+
     radio_values = {
         "gsm": {
             "mccString": ("310", ("mcc",)),
             "mncString": ("260", ("mnc",)),
+            "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
+            "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "lac": (fields["lac"], ("lac",)),
             "cid": (fields["cid"], ("cid",)),
             "arfcn": (fields["arfcn"], ("arfcn",)),
@@ -288,6 +307,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
         "wcdma": {
             "mccString": ("310", ("mcc",)),
             "mncString": ("260", ("mnc",)),
+            "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
+            "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "lac": (fields["lac"], ("lac",)),
             "cid": (fields["cid"], ("cid",)),
             "psc": (fields["psc"], ("psc",)),
@@ -305,6 +326,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
         "lte": {
             "mccString": ("310", ("mcc",)),
             "mncString": ("260", ("mnc",)),
+            "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
+            "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "tac": (fields["tac"], ("tac",)),
             "ci": (fields["ci"], ("ci",)),
             "pci": (fields["pci"], ("pci",)),
@@ -321,6 +344,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
         "nr": {
             "mccString": ("310", ("mcc",)),
             "mncString": ("260", ("mnc",)),
+            "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
+            "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "nci": (fields["nci"], ("nci",)),
             "nrarfcn": (fields["nrarfcn"], ("nrarfcn",)),
             "pci": (fields["nr_pci"], ("nr_pci",)),
@@ -350,6 +375,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
             "registered": False,
             "mccString": "311",
             "mncString": "480",
+            "operatorAlphaLong": fields["operator_name"],
+            "operatorAlphaShort": fields["operator_name"],
             "lac": 1_111,
             "cid": 2_222,
             "arfcn": 700,
@@ -362,6 +389,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
             "registered": False,
             "mccString": "312",
             "mncString": "530",
+            "operatorAlphaLong": fields["operator_name"],
+            "operatorAlphaShort": fields["operator_name"],
             "tac": 5_000,
             "ci": 87_654_321,
             "pci": 411,
@@ -379,6 +408,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
             "registered": False,
             "mccString": "313",
             "mncString": "610",
+            "operatorAlphaLong": fields["operator_name"],
+            "operatorAlphaShort": fields["operator_name"],
             "lac": 3_333,
             "cid": 4_444,
             "psc": 222,
@@ -431,11 +462,26 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
     for public_name, (source, value) in telephony.items():
         add("telephony.{}".format(public_name), value, (source,))
 
-    add(
-        "callback.serviceState.state",
-        fields["service_state"],
-        ("service_state",),
-    )
+    service_state = {
+        "state": ("service_state", fields["service_state"]),
+        "operatorAlphaLong": ("operator_name", carrier_object("operator_name")),
+        "operatorAlphaShort": ("operator_name", carrier_object("operator_name")),
+        "operatorNumeric": ("operator_numeric", carrier_object("operator_numeric")),
+        "roaming": ("is_roaming", True),
+        "registrationPlmn": ("operator_numeric", carrier_object("operator_numeric")),
+        "registrationRoaming": ("is_roaming", True),
+        "registrationOperatorAlphaLong": (
+            "operator_name",
+            carrier_object("operator_name"),
+        ),
+        "registrationOperatorAlphaShort": (
+            "operator_name",
+            carrier_object("operator_name"),
+        ),
+    }
+    for prefix in ("telephony.serviceStateDetails", "callback.serviceState"):
+        for public_name, (source, value) in service_state.items():
+            add("{}.{}".format(prefix, public_name), value, (source,))
     add(
         "callback.displayInfo.networkType",
         fields["network_type"],

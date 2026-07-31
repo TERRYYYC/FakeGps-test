@@ -3,7 +3,9 @@ package name.caiyao.fakegps.hook;
 import android.database.Cursor;
 
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Random;
 import java.util.Set;
 
@@ -21,6 +23,16 @@ class Snapshot {
 
     /** Default: everything null = passthrough all real values. */
     static final Snapshot PASSTHROUGH = new Snapshot();
+
+    /** One choke point for every hook invocation during an in-process real-baseline read. */
+    static Snapshot forHookInvocation(Snapshot configured, boolean extractingBaseline) {
+        return extractingBaseline ? PASSTHROUGH : configured;
+    }
+
+    static boolean shouldCensusRealNeighborsForCarrier(
+            String operatorName, boolean rebuildingCellList) {
+        return operatorName != null && !rebuildingCellList;
+    }
 
     private Set<String> unavailableFields = Collections.emptySet();
 
@@ -41,6 +53,16 @@ class Snapshot {
     static Snapshot keepLastKnownGoodOr(Snapshot lastGood) {
         boolean everPublished = lastGood != null && lastGood != PASSTHROUGH;
         return everPublished ? lastGood : PASSTHROUGH;
+    }
+
+    static ArrayList acceptBuiltCellListOrPassthrough(ArrayList built) {
+        return built == null || built.isEmpty() ? null : built;
+    }
+
+    /** Keep real cells unless the user supplied neighbors or this registered RAT is replaced. */
+    static boolean shouldPreserveRealCell(
+            boolean registered, boolean replacingRat, boolean configuredNeighborList) {
+        return !configuredNeighborList && (!registered || !replacingRat);
     }
 
     /**
@@ -75,17 +97,31 @@ class Snapshot {
     }
 
     static Integer resolveGsmCellLocationField(
-            Integer configured, Integer real, boolean unavailable) {
+            String field, Integer configured, Integer real, boolean unavailable) {
         if (unavailable) {
-            return (Integer) UnavailableValueResolver.resolve(
-                    "lac", UnavailableValueResolver.Surface.GSM_CELL_LOCATION).value();
+            UnavailableValueResolver.Resolution resolution = UnavailableValueResolver.resolve(
+                    field, UnavailableValueResolver.Surface.GSM_CELL_LOCATION);
+            if (!resolution.handled()) {
+                throw new IllegalArgumentException(
+                        "no GsmCellLocation unavailable resolver for " + field);
+            }
+            return (Integer) resolution.value();
         }
         return resolveCellField(configured, real);
     }
 
-    static String resolvePlmnString(Integer configured, String real, boolean unavailable) {
+    static String resolvePlmnString(
+            String field, Integer configured, String real, boolean unavailable) {
         if (unavailable) return null;
-        return configured != null ? String.valueOf(configured) : real;
+        if (configured == null) return real;
+        if ("mcc".equals(field)) {
+            return String.format(Locale.US, "%03d", configured);
+        }
+        if ("mnc".equals(field)) {
+            int width = configured >= 100 ? 3 : 2;
+            return String.format(Locale.US, "%0" + width + "d", configured);
+        }
+        throw new IllegalArgumentException("not a PLMN field: " + field);
     }
 
     /**
@@ -274,14 +310,23 @@ class Snapshot {
     // "Configured" = ANY field in the group is set, matching the NULL = passthrough contract.
     // Previously these demanded a specific key (hasLteCell required `ci`), so a profile that set
     // only `tac` was treated as "no LTE config" and every LTE hook silently no-op'd.
-    boolean hasGsmCell() { return lac != null || cid != null || mcc != null || mnc != null
-            || arfcn != null || bsic != null; }
-    boolean hasLteCell() { return ci != null || tac != null || pci != null || earfcn != null
-            || lteBandwidth != null; }
-    boolean hasNrCell() { return nci != null || nrTac != null || nrPci != null || nrarfcn != null; }
+    private boolean hasSpoofValue(String field, Object value) {
+        return value != null && !isUnavailable(field);
+    }
+    boolean hasGsmCell() { return hasSpoofValue("lac", lac) || hasSpoofValue("cid", cid)
+            || hasSpoofValue("mcc", mcc) || hasSpoofValue("mnc", mnc)
+            || hasSpoofValue("arfcn", arfcn) || hasSpoofValue("bsic", bsic); }
+    boolean hasLteCell() { return hasSpoofValue("ci", ci) || hasSpoofValue("tac", tac)
+            || hasSpoofValue("pci", pci) || hasSpoofValue("earfcn", earfcn)
+            || hasSpoofValue("lte_bandwidth", lteBandwidth); }
+    boolean hasNrCell() { return hasSpoofValue("nci", nci) || hasSpoofValue("nr_tac", nrTac)
+            || hasSpoofValue("nr_pci", nrPci) || hasSpoofValue("nrarfcn", nrarfcn); }
     boolean hasWifi() { return wifiSsid != null || wifiBssid != null; }
     boolean hasPhysicalChannelConfig() {
-        return band != null || channelBandwidth != null || cellBandwidthDownlink != null || physicalCellId != null;
+        return hasSpoofValue("band", band)
+                || hasSpoofValue("channel_bandwidth", channelBandwidth)
+                || hasSpoofValue("cell_bandwidth_downlink", cellBandwidthDownlink)
+                || hasSpoofValue("physical_cell_id", physicalCellId);
     }
 
     /**
@@ -481,7 +526,16 @@ class Snapshot {
     }
 
     static Snapshot fromJson(org.json.JSONObject fields, Set<String> unavailable) {
-        return from(new JsonSource(fields), unavailable);
+        Set<String> configured = new LinkedHashSet<>();
+        java.util.Iterator<String> keys = fields.keys();
+        while (keys.hasNext()) configured.add(keys.next());
+        name.caiyao.fakegps.config.UnavailablePayloadContract.Validated validated =
+                name.caiyao.fakegps.config.UnavailablePayloadContract.validate(
+                        configured,
+                        unavailable == null
+                                ? Collections.emptyList()
+                                : new java.util.ArrayList<>(unavailable));
+        return from(new JsonSource(fields), validated.asSet());
     }
 
     /**

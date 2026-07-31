@@ -86,9 +86,7 @@ public final class UnavailableSpec {
             "network_type", "data_network_type", "voice_network_type", "phone_type",
             "data_state", "data_activity", "override_network_type",
             // physical channel
-            "band", "channel_bandwidth", "cell_bandwidth_downlink", "physical_cell_id",
-            // structured cellular neighbors
-            "neighbor_cells_json");
+            "band", "channel_bandwidth", "cell_bandwidth_downlink", "physical_cell_id");
 
     /**
      * Fields explicitly decided NOT to support "--", with the reason. Keeping these enumerated
@@ -112,6 +110,10 @@ public final class UnavailableSpec {
             // IP / DNS / routing text: each needs its own empty behaviour
             "local_ipv4", "local_ipv6", "dns_primary", "dns_secondary", "gateway",
             "subnet_mask", "connection_type", "interface_name",
+            // The public API is a mixed serving+neighbor List<CellInfo>.  An empty JSON string
+            // cannot express "remove neighbors but retain serving cells" without filtering the
+            // real list, which is not implemented yet.  Offering -- would silently leak them.
+            "neighbor_cells_json",
             // module-internal knob, not a device field
             "signal_fluctuation_range_db");
 

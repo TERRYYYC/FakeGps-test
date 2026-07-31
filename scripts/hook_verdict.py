@@ -23,7 +23,7 @@ class Verdict:
     passed: bool
 
 
-def evaluate(expected, report, session_id, restored):
+def evaluate(expected, report, session_id, restored, control_report=None, control_paths=()):
     fields = []
     for path in sorted(expected):
         expected_value = expected[path]
@@ -62,6 +62,8 @@ def evaluate(expected, report, session_id, restored):
                 FieldVerdict(path, expected_value, observed, "VERIFIED", "exact")
             )
 
+    primary_fields = tuple(fields)
+
     if report.get("sessionId") != session_id:
         fields.append(
             FieldVerdict(
@@ -84,8 +86,24 @@ def evaluate(expected, report, session_id, restored):
             FieldVerdict("$restore", True, False, "FAILED", "restore_missing")
         )
 
-    verified = sum(1 for item in fields if item.status == "VERIFIED")
-    failed = sum(1 for item in fields if item.status == "FAILED")
+    for path in control_paths:
+        observed = _read_path(report, path)
+        control = _read_path(control_report, path) if control_report is not None else _MISSING
+        if observed is _MISSING or control is _MISSING:
+            fields.append(
+                FieldVerdict(path + "$negativeControl", control, observed, "FAILED", "missing_control")
+            )
+        elif observed == control:
+            fields.append(
+                FieldVerdict(path + "$negativeControl", control, observed, "FAILED", "same_as_control")
+            )
+        else:
+            fields.append(
+                FieldVerdict(path + "$negativeControl", control, observed, "VERIFIED", "different_from_control")
+            )
+
+    verified = sum(1 for item in primary_fields if item.status == "VERIFIED")
+    failed = sum(1 for item in primary_fields if item.status == "FAILED")
     summary = {
         "configured": len(expected),
         "verified": verified,
@@ -95,7 +113,7 @@ def evaluate(expected, report, session_id, restored):
     return Verdict(
         fields=fields,
         summary=summary,
-        passed=failed == 0,
+        passed=not any(item.status == "FAILED" for item in fields),
     )
 
 
@@ -107,6 +125,8 @@ def main(argv=None, emit=print):
     parser.add_argument("--report-file", required=True)
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--restored", action="store_true")
+    parser.add_argument("--control-report-file")
+    parser.add_argument("--control-path", action="append", default=[])
     try:
         args = parser.parse_args(argv)
         expected = json.loads(args.expected_json)
@@ -116,11 +136,21 @@ def main(argv=None, emit=print):
             report = json.load(report_file)
         if not isinstance(report, dict):
             raise ValueError("report JSON must be an object")
+        control_report = None
+        if args.control_report_file:
+            with open(args.control_report_file, encoding="utf-8") as control_file:
+                control_report = json.load(control_file)
+            if not isinstance(control_report, dict):
+                raise ValueError("control report JSON must be an object")
+        if args.control_path and control_report is None:
+            raise ValueError("--control-path requires --control-report-file")
         verdict = evaluate(
             expected=expected,
             report=report,
             session_id=args.session_id,
             restored=args.restored,
+            control_report=control_report,
+            control_paths=args.control_path,
         )
     except (OSError, ValueError, json.JSONDecodeError) as failure:
         emit("HARNESS_ERROR {}".format(failure))

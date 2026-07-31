@@ -10,6 +10,15 @@ SESSION_ID = "acceptance-123"
 
 class CellularAcceptanceMatrixTest(unittest.TestCase):
 
+    def test_python_payload_version_is_pinned_to_writer_contract(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "app/src/main/java/name/caiyao/fakegps/config/ConfigPrefsSync.kt"
+        ).read_text(encoding="utf-8")
+        match = re.search(r"const val SCHEMA_VERSION\s*=\s*(\d+)", source)
+        self.assertIsNotNone(match)
+        self.assertEqual(int(match.group(1)), matrix.payload_for("full-rscp", SESSION_ID)["schemaVersion"])
+
     def test_two_scenarios_cover_wcdma_power_aliases_without_ambiguity(self):
         self.assertEqual(
             ("full-rscp", "full-rssi", "fluctuation-enabled", "unavailable"),
@@ -97,6 +106,32 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
             100_000,
             expected["callback.physicalChannel.cellBandwidthDownlinkKhz"],
         )
+        marker = "HOOK-SESSION:acceptance-123"
+        for prefix in ("cellInfo.sync", "cellInfo.request", "callback.cellInfo"):
+            for radio in ("gsm", "wcdma", "lte", "nr"):
+                self.assertEqual(
+                    marker,
+                    expected["{}.{}.operatorAlphaLong".format(prefix, radio)],
+                )
+                self.assertEqual(
+                    marker,
+                    expected["{}.{}.operatorAlphaShort".format(prefix, radio)],
+                )
+        for prefix in ("telephony.serviceStateDetails", "callback.serviceState"):
+            self.assertEqual(marker, expected[prefix + ".operatorAlphaLong"])
+            self.assertEqual(marker, expected[prefix + ".operatorAlphaShort"])
+            self.assertEqual("310260", expected[prefix + ".operatorNumeric"])
+            self.assertIs(expected[prefix + ".roaming"], True)
+            self.assertEqual("310260", expected[prefix + ".registrationPlmn"])
+            self.assertIs(expected[prefix + ".registrationRoaming"], True)
+            self.assertEqual(
+                marker,
+                expected[prefix + ".registrationOperatorAlphaLong"],
+            )
+            self.assertEqual(
+                marker,
+                expected[prefix + ".registrationOperatorAlphaShort"],
+            )
 
     def test_every_configured_field_has_an_expected_public_observation(self):
         for name in matrix.scenario_names():
@@ -132,9 +167,24 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
         self.assertEqual(9_223_372_036_854_775_807, expected["cellInfo.sync.nr.nci"])
         self.assertEqual(2_147_483_647, expected["cellInfo.sync.lte.rsrp"])
         self.assertEqual("", expected["telephony.networkOperator"])
+        self.assertIsNone(
+            expected["telephony.serviceStateDetails.operatorNumeric"]
+        )
+        self.assertIsNone(
+            expected["telephony.serviceStateDetails.registrationPlmn"]
+        )
+        self.assertIsNone(expected["callback.serviceState.operatorNumeric"])
+        self.assertIsNone(expected["callback.serviceState.registrationPlmn"])
         self.assertEqual(0, expected["telephony.networkType"])
         self.assertEqual(0, expected["callback.physicalChannel.band"])
         self.assertEqual(-1, expected["callback.physicalChannel.physicalCellId"])
+        for path in matrix.unavailable_negative_control_paths():
+            self.assertIn(path, expected)
+            self.assertNotEqual(
+                expected[path],
+                matrix.expected_for("full-rscp", SESSION_ID)[path],
+                path,
+            )
         fluctuation = matrix.get_scenario("fluctuation-enabled")
         self.assertEqual(1, fluctuation.fields["signal_fluctuation_enabled"])
         self.assertEqual(6, fluctuation.fields["signal_fluctuation_range_db"])
@@ -174,6 +224,17 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
             matrix_preflight,
         )
 
+    def test_debug_apk_install_is_digest_idempotent_and_never_mutates_lsposed_policy(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        install = self._shell_function(script, "install_debug_apk_if_changed")
+
+        self.assertIn('if [ "$installed_sha" = "$local_sha" ]', install)
+        self.assertIn("identical debug APK already installed", install)
+        self.assertIn("adb install -r -t", install)
+        self.assertIn("HARNESS_ACTION", install)
+        self.assertNotIn("adb reboot", install)
+        self.assertNotIn("modules_config.db", install)
+
     def test_transport_snapshot_compares_payload_not_publish_metadata(self):
         script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
         snapshot = self._shell_function(script, "snapshot_prefs")
@@ -189,6 +250,30 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
 
         self.assertIn("wait_for_profile_schema", matrix_preflight)
         self.assertIn("unavailable_fields=", schema_wait)
+
+    def test_final_pass_is_emitted_only_after_transaction_restore(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        cleanup = self._shell_function(script, "cleanup_transaction")
+        matrix = self._shell_function(script, "run_cellular_matrix")
+
+        self.assertIn("ACCEPTANCE_PASS", cleanup)
+        self.assertNotIn("ACCEPTANCE_PASS", matrix)
+        self.assertIn('[ "$RESTORE_FAILED" -eq 0 ]', cleanup)
+
+    def test_sigkill_recovery_is_bound_to_the_durable_payload_fingerprint(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        recovery = self._shell_function(script, "verify_durable_recovery")
+
+        self.assertIn('fp=$PREFS_BEFORE_FINGERPRINT', recovery)
+        self.assertIn('grep -F', recovery)
+
+    def test_scenario_restore_flag_is_derived_from_observed_state(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        scenario = self._shell_function(script, "run_scenario")
+
+        self.assertIn('if has_state "$session" "restored"', scenario)
+        self.assertIn('restored_args+=(--restored)', scenario)
+        self.assertNotRegex(scenario, r"\n\s*--restored\s*\\")
 
     def test_current_profile_waits_for_the_asynchronous_probe_result(self):
         script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")

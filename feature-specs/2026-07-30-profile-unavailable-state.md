@@ -80,13 +80,14 @@ acceptance matrix. Every supported field must have a resolution on every public 
 | `GsmCellLocation` | `lac`, `cid` | `-1` |
 | `CellSignalStrength*` | cellular signal ints | `Integer.MAX_VALUE`, never fluctuated |
 | `TelephonyManager` carrier/SIM text getters | six operator/SIM text fields | `""` |
+| `CellIdentity` / `ServiceState` / `NetworkRegistrationInfo` carrier text getters | `operator_name`, `operator_numeric` | `null` |
 | `TelephonyManager` network/phone type getters | type fields | platform `UNKNOWN`/`NONE` constant `0` |
 | `ServiceState` state | `service_state` | unsupported: no UNKNOWN/empty constant |
-| data state/activity | `data_state`, `data_activity` | disconnected/none (`0`) |
+| data state/activity | `data_state`, `data_activity` | API 29+: unknown (`-1`); API 24–28: disconnected (`0`) / activity none (`0`) |
 | `TelephonyDisplayInfo` | `override_network_type` | `OVERRIDE_NETWORK_TYPE_NONE` (`0`) |
 | `PhysicalChannelConfig` | band/bandwidth fields | `0` |
 | `PhysicalChannelConfig` | physical cell id | `-1` |
-| neighbor-cell structured list | `neighbor_cells_json` | empty list |
+| neighbor-cell structured list | `neighbor_cells_json` | unsupported until the mixed serving/neighbor public list can be filtered without leaking real neighbors |
 
 Wi-Fi, IP/routing, location and booleans remain explicitly unsupported in this cellular change.
 The UI must not offer `--` for them. Adding support later requires adding all of their surfaces and
@@ -109,7 +110,7 @@ Required transitions:
 4. concrete value → `--`: typed column null, add to unavailable set;
 5. malformed intersection: reject publication and preserve last-known-good;
 6. unknown/unsupported unavailable key: reject publication and preserve last-known-good;
-7. schema v2 payload at a v3 reader: reject and preserve last-known-good;
+7. schema v2 payload at a v3 reader: accept its legacy `fields` contract with no unavailable set;
 8. Room migration: existing rows receive null metadata and preserve current behavior.
 
 ## Invariants
@@ -131,7 +132,7 @@ Required transitions:
 - an explicitly unsupported key such as `is_roaming`;
 - a key present in both `fields` and `unavailable`;
 - corrupt/non-array Room metadata;
-- stale schema-v2 payload after the APK upgrade;
+- unsupported schema version outside the v2/v3 compatibility window;
 - `lac`/`cid` observed through both `CellIdentityGsm` and `GsmCellLocation`;
 - `mcc`/`mnc` observed through both integer and nullable-string APIs;
 - unavailable signal value with fluctuation enabled;

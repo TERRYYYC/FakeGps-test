@@ -59,6 +59,13 @@ class PublishedConfigTest {
     }
 
     @Test
+    fun `legacy schema v2 does not require the v3 unavailable array`() {
+        val p = PublishedConfig.parse("""{"schemaVersion":2,"fields":{"tac":7}}""")!!
+        assertEquals(false, p.unavailablePresent)
+        assertEquals("7", p.fields["tac"])
+    }
+
+    @Test
     fun `integer column does not acquire a decimal point`() {
         // SQLite INTEGER -> JSON long. Rendering 26999 as "26999.0" would make every integer field
         // read as a MISMATCH against the radio's "26999".

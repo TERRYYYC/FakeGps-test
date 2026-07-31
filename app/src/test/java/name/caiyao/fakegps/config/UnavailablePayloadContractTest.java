@@ -13,6 +13,15 @@ import org.junit.Test;
 public class UnavailablePayloadContractTest {
 
     @Test
+    public void plmnUnavailableDecisionMustBePaired() {
+        assertInvalid(Collections.emptySet(), Collections.singletonList("mcc"), "PLMN");
+        assertInvalid(Collections.emptySet(), Collections.singletonList("mnc"), "PLMN");
+        UnavailablePayloadContract.Validated paired = UnavailablePayloadContract.validate(
+                Collections.emptySet(), Arrays.asList("mcc", "mnc"));
+        assertEquals(new LinkedHashSet<>(Arrays.asList("mcc", "mnc")), paired.asSet());
+    }
+
+    @Test
     public void validFieldsAreCanonicalSortedAndImmutable() {
         UnavailablePayloadContract.Validated v = UnavailablePayloadContract.validate(
                 Collections.singleton("operator_name"),

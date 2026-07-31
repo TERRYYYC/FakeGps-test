@@ -11,6 +11,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import name.caiyao.fakegps.data.model.FieldSpec;
+import name.caiyao.fakegps.data.model.FieldType;
+import name.caiyao.fakegps.hook.UnavailableValueResolver;
 import org.junit.Test;
 
 /**
@@ -72,6 +74,28 @@ public class UnavailableSpecCoverageTest {
         Set<String> editable = new HashSet<>(allEditableColumns());
         for (String col : UnavailableSpec.supportedColumns()) {
             assertTrue("supported column is not an editable field: " + col, editable.contains(col));
+        }
+    }
+
+    @Test
+    public void everySupportedColumnHasATypeCompatibleSnapshotResolver() {
+        Map<String, FieldSpec> specs = new java.util.HashMap<>();
+        for (Map.Entry<String, List<FieldSpec>> category
+                : FieldSpec.Companion.allCategories().entrySet()) {
+            for (FieldSpec spec : category.getValue()) specs.put(spec.getDbColumn(), spec);
+        }
+        for (String column : UnavailableSpec.supportedColumns()) {
+            UnavailableValueResolver.Resolution resolution =
+                    UnavailableValueResolver.resolveSnapshotField(column);
+            assertTrue("missing resolver for " + column, resolution.handled());
+            Object value = resolution.value();
+            if ("nci".equals(column)) {
+                assertTrue("nci must keep 64-bit width", value instanceof Long);
+            } else if (specs.get(column).getType() == FieldType.INTEGER) {
+                assertTrue(column + " must resolve to Integer", value instanceof Integer);
+            } else if (specs.get(column).getType() == FieldType.TEXT) {
+                assertTrue(column + " must resolve to String", value instanceof String);
+            }
         }
     }
 
@@ -144,6 +168,12 @@ public class UnavailableSpecCoverageTest {
     public void wifiIdentityText_isNotCleared() {
         assertFalse(UnavailableSpec.supportsUnavailable("wifi_ssid"));
         assertFalse(UnavailableSpec.supportsUnavailable("wifi_bssid"));
+    }
+
+    @Test
+    public void structuredNeighborListFailsClosedUntilItsPublicListSurfaceIsImplemented() {
+        assertFalse(UnavailableSpec.supportsUnavailable("neighbor_cells_json"));
+        assertFalse(UnavailableSpec.reasonFor("neighbor_cells_json").isEmpty());
     }
 
     @Test

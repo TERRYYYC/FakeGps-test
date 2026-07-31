@@ -550,6 +550,8 @@ class VerificationEngineTest {
             specs = lteSpecs,
         )
         assertTrue(r.field("tac").ambiguous)
+        assertEquals(FieldVerdict.AMBIGUOUS, r.field("tac").verdict)
+        assertEquals(VerificationStatus.INCONCLUSIVE, r.summary.status)
     }
 
     @Test

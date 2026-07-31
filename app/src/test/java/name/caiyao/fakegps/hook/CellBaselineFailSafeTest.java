@@ -77,4 +77,12 @@ public class CellBaselineFailSafeTest {
         assertFalse(s.hasGsmCell());
         assertFalse(s.hasNrCell());
     }
+
+    @Test
+    public void carrierOnlyProfileStillCensusesRealNeighborsForGetterBypass() {
+        assertTrue(Snapshot.shouldCensusRealNeighborsForCarrier("Carrier", false));
+        assertTrue(Snapshot.shouldCensusRealNeighborsForCarrier("", false));
+        assertFalse(Snapshot.shouldCensusRealNeighborsForCarrier(null, false));
+        assertFalse(Snapshot.shouldCensusRealNeighborsForCarrier("Carrier", true));
+    }
 }

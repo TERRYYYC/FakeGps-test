@@ -35,7 +35,8 @@ For a target app process that has loaded a profile snapshot:
 - `operator_numeric` is returned by `TelephonyManager.getNetworkOperator()`,
   `ServiceState.getOperatorNumeric()` and `NetworkRegistrationInfo.getRegisteredPlmn()`;
 - `is_roaming` is returned by `TelephonyManager.isNetworkRoaming()`,
-  `ServiceState.getRoaming()` and `NetworkRegistrationInfo.isRoaming()`;
+  `ServiceState.getRoaming()` and both NetworkRegistrationInfo roaming getters
+  (`isRoaming()` plus API 34+ `isNetworkRoaming()`);
 - `PhoneStateListener` and `TelephonyCallback` need no carrier-specific state mutation: their
   delivered `ServiceState` and `CellInfo` objects expose the same hooked getters;
 - a rebuilt GSM/WCDMA/LTE identity stores the configured alpha name in its constructor metadata.

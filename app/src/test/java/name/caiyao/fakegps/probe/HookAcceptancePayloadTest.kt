@@ -10,6 +10,14 @@ import org.junit.Test
 class HookAcceptancePayloadTest {
 
     @Test
+    fun `acceptance schema is linked to the production writer`() {
+        assertEquals(
+            name.caiyao.fakegps.config.ConfigPrefsSync.SCHEMA_VERSION,
+            HookAcceptancePayload.schemaVersion,
+        )
+    }
+
+    @Test
     fun acceptsCanonicalSchemaV3EnvelopeWithoutLosingLongValues() {
         val raw = """
             {

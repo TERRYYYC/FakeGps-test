@@ -14,6 +14,9 @@ enum class FieldVerdict {
     /** Configured, and the app reads back exactly that value. The hook works for this field. */
     SPOOFED,
 
+    /** Observed equals configured, but the real baseline is identical, so this proves nothing. */
+    AMBIGUOUS,
+
     /** Configured, but the app reads back something else — the chain is broken for this field. */
     MISMATCH,
 
@@ -82,9 +85,9 @@ data class FieldReport(
      * True when the configured value equals the device's real value, so the field can never prove
      * anything: "observed == configured" is indistinguishable from the hook doing nothing.
      *
-     * Only computable where a real baseline is knowable, i.e. when this process is NOT self-hooked.
-     * A self-hooked process cannot see past its own hook, so ambiguity is undetectable there — the
-     * scope banner states that limitation rather than pretending the check ran.
+     * Computed only when the caller supplies a genuine baseline. Debug verification obtains one by
+     * entering [name.caiyao.fakegps.hook.BaselineExtractionGuard], which makes this module's getter
+     * hooks yield to the underlying framework values for that narrow synchronous read.
      */
     val ambiguous: Boolean = false,
 )
@@ -106,11 +109,13 @@ data class VerificationSummary(
      * does apply them.
      */
     val notVerifiable: Int = 0,
+    /** Matching rows whose real baseline is identical to the configured value. */
+    val ambiguous: Int = 0,
     /** True while the hook may still be serving the previous config. See [VerificationStatus.PENDING_PROPAGATION]. */
     val propagationPending: Boolean = false,
 ) {
     /** Everything the user actually configured, verifiable or not. */
-    val configuredCount: Int get() = spoofed + mismatch + unobservable + notVerifiable
+    val configuredCount: Int get() = spoofed + mismatch + unobservable + notVerifiable + ambiguous
 
     val status: VerificationStatus
         get() = when {
@@ -121,11 +126,11 @@ data class VerificationSummary(
             mismatch > 0 -> VerificationStatus.FAILING
             // Only module knobs configured: nothing was checkable, but saying "没有配置任何字段"
             // would contradict both the payload and the hook.
-            spoofed == 0 && unobservable == 0 -> VerificationStatus.CONFIGURED_UNVERIFIABLE
+            spoofed == 0 && unobservable == 0 && ambiguous == 0 -> VerificationStatus.CONFIGURED_UNVERIFIABLE
             spoofed == 0 -> VerificationStatus.INCONCLUSIVE
             // Confirming one field out of eleven is not "伪装生效". Announcing full success while
             // part of the config is unverified is the same overclaim this screen exists to remove.
-            unobservable > 0 || notVerifiable > 0 -> VerificationStatus.PARTIALLY_EFFECTIVE
+            unobservable > 0 || notVerifiable > 0 || ambiguous > 0 -> VerificationStatus.PARTIALLY_EFFECTIVE
             else -> VerificationStatus.EFFECTIVE
         }
 }
@@ -220,6 +225,7 @@ object VerificationEngine {
         var mismatch = 0
         var unobservable = 0
         var notVerifiable = 0
+        var ambiguousCount = 0
         val window = fluctuationWindow(configured)
         var passthrough = 0
         val mappedColumns = mutableSetOf<String>()
@@ -246,16 +252,19 @@ object VerificationEngine {
                 val moduleKnob = spec.dbColumn in NOT_DEVICE_OBSERVABLE
                 if (moduleKnob && cfg == null) continue   // nothing configured, nothing to say
 
+                val ambiguous = cfg != null && real != null && valuesMatch(cfg, real)
                 val verdict = when {
                     moduleKnob -> FieldVerdict.NOT_VERIFIABLE
                     cfg == null -> FieldVerdict.PASSTHROUGH
                     obs == null -> FieldVerdict.UNOBSERVABLE
+                    ambiguous && fieldMatches(spec, cfg, obs, window) -> FieldVerdict.AMBIGUOUS
                     fieldMatches(spec, cfg, obs, window) -> FieldVerdict.SPOOFED
                     else -> FieldVerdict.MISMATCH
                 }
 
                 when (verdict) {
                     FieldVerdict.SPOOFED -> spoofed++
+                    FieldVerdict.AMBIGUOUS -> ambiguousCount++
                     FieldVerdict.MISMATCH -> mismatch++
                     FieldVerdict.UNOBSERVABLE -> unobservable++
                     FieldVerdict.PASSTHROUGH -> passthrough++
@@ -268,7 +277,7 @@ object VerificationEngine {
                     observed = obs,
                     baseline = real,
                     verdict = verdict,
-                    ambiguous = cfg != null && real != null && valuesMatch(cfg, real),
+                    ambiguous = ambiguous,
                 )
             }
             if (rows.isNotEmpty()) groups += CategoryReport(category, rows)
@@ -277,7 +286,8 @@ object VerificationEngine {
         return VerificationReport(
             groups = groups,
             summary = VerificationSummary(
-                spoofed, mismatch, unobservable, passthrough, notVerifiable, propagationPending,
+                spoofed, mismatch, unobservable, passthrough, notVerifiable,
+                ambiguousCount, propagationPending,
             ),
             payloadFieldCount = configured.size + unavailable.size,
             unmappedPayloadColumns = (configured.keys + unavailable)

@@ -2,6 +2,7 @@ package name.caiyao.fakegps.hook;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -58,5 +59,14 @@ public class BaselineExtractionGuardTest {
             // expected
         }
         assertFalse(BaselineExtractionGuard.isActive());
+    }
+
+    @Test
+    public void hookSnapshotSelectionBecomesPassthroughForTheEntireExtractionScope() {
+        Snapshot configured = new Snapshot();
+        configured.operatorName = "Configured Carrier";
+
+        assertSame(configured, Snapshot.forHookInvocation(configured, false));
+        assertSame(Snapshot.PASSTHROUGH, Snapshot.forHookInvocation(configured, true));
     }
 }

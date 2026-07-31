@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.Flow
 
 class ProfileRepository(private val db: AppDatabase, private val context: Context? = null) {
 
+    data class SaveResult(val id: Long, val published: Boolean)
+
     private val dao get() = db.profileDao()
 
     fun observeAll(): Flow<List<ProfileSummary>> = dao.observeAll()
@@ -18,15 +20,14 @@ class ProfileRepository(private val db: AppDatabase, private val context: Contex
 
     suspend fun getById(id: Long): ProfileEntity? = dao.getById(id)
 
-    suspend fun save(profile: ProfileEntity): Long {
+    suspend fun save(profile: ProfileEntity): SaveResult {
         val id = if (profile.id == 0L) {
             dao.insert(profile)
         } else {
             dao.update(profile)
             profile.id
         }
-        republish()
-        return id
+        return SaveResult(id, republish())
     }
 
     suspend fun deleteById(id: Long) {
@@ -48,9 +49,14 @@ class ProfileRepository(private val db: AppDatabase, private val context: Contex
      * (DB said 50.615936,26.278774 while the hook still read 50.257091,28.688807). Every
      * create/update/delete funnels through here, so the transport can no longer go stale.
      */
-    private fun republish() {
-        val ctx = context ?: return
-        runCatching { ConfigPrefsSync.sync(ctx) }
+    private fun republish(): Boolean {
+        val ctx = context ?: return true
+        val published = runCatching { ConfigPrefsSync.sync(ctx) }
             .onFailure { Log.e("ProfileRepository", "config republish failed", it) }
+            .getOrDefault(false)
+        if (!published) {
+            Log.e("ProfileRepository", "config republish returned false")
+        }
+        return published
     }
 }

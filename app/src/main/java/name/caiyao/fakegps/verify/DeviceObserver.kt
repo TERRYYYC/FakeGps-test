@@ -18,6 +18,7 @@ import android.telephony.CellSignalStrengthNr
 import android.telephony.TelephonyManager
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
+import name.caiyao.fakegps.hook.BaselineExtractionGuard
 import name.caiyao.fakegps.hook.UnavailableValueResolver
 import java.net.NetworkInterface
 import java.util.concurrent.CountDownLatch
@@ -59,6 +60,43 @@ class DeviceObserver(
         @JvmStatic
         fun wcdmaDbmColumn(configuredColumns: Set<String>): String =
             if ("wcdma_rscp" in configuredColumns) "wcdma_rscp" else "wcdma_rssi"
+
+        @JvmStatic
+        fun shouldRequestFreshCellInfo(
+            cellsEmpty: Boolean,
+            apiSupportsRequest: Boolean,
+            extractingBaseline: Boolean,
+        ): Boolean = cellsEmpty && apiSupportsRequest && !extractingBaseline
+
+        @JvmStatic
+        fun observedScalar(
+            key: String,
+            observed: Any?,
+            configuredColumns: Set<String>,
+            unavailableColumns: Set<String>,
+        ): String? {
+            if (key in unavailableColumns && unavailableMatchesValue(key, observed)) return "--"
+            if (observed == null) return null
+            if (observed is Number) {
+                val sentinel = observed.toLong() == Int.MAX_VALUE.toLong() ||
+                    observed.toLong() == Long.MAX_VALUE
+                if (sentinel && key !in configuredColumns) return null
+            }
+            if (observed is String && observed.isBlank()) {
+                return if (key in configuredColumns) observed else null
+            }
+            return observed.toString()
+        }
+
+        private fun unavailableMatchesValue(key: String, observed: Any?): Boolean {
+            val expected = UnavailableValueResolver.resolveObservedField(key)
+            if (!expected.handled()) return false
+            val wanted = expected.value()
+            if (wanted is Number && observed is Number) {
+                return wanted.toLong() == observed.toLong()
+            }
+            return wanted == observed
+        }
     }
 
     data class Observation(
@@ -109,7 +147,7 @@ class DeviceObserver(
     // -- cellular -------------------------------------------------------------------------------
 
     /** @return number of cells the radio reported. */
-    @SuppressLint("MissingPermission")
+    @SuppressLint("MissingPermission", "NewApi")
     private fun readCellular(out: MutableMap<String, String>, notes: MutableList<String>): Int {
         if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) {
             notes += "蜂窝：缺少 ACCESS_FINE_LOCATION 权限，无法读回"
@@ -122,7 +160,12 @@ class DeviceObserver(
         // getAllCellInfo() serves a throttled cache that is routinely empty right after process
         // start, which is indistinguishable from a broken hook. Force one fresh radio read before
         // concluding anything.
-        if (cells.isEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (shouldRequestFreshCellInfo(
+                cells.isEmpty(),
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
+                BaselineExtractionGuard.isActive(),
+            )
+        ) {
             cells = requestFreshCellInfo(tm)
         }
 
@@ -360,11 +403,8 @@ class DeviceObserver(
     private val redacted = setOf("<unknown ssid>", "02:00:00:00:00:00", "00:00:00:00:00:00")
 
     private fun MutableMap<String, String>.putStr(key: String, value: String?) {
-        if (key in unavailableColumns && unavailableMatches(key, value)) {
-            this[key] = "--"
-            return
-        }
-        if (!value.isNullOrBlank() && value.lowercase() !in redacted) this[key] = value
+        val normalized = observedScalar(key, value, configuredColumns, unavailableColumns)
+        if (normalized != null && normalized.lowercase() !in redacted) this[key] = normalized
     }
 
     /**
@@ -373,28 +413,10 @@ class DeviceObserver(
      * user configured — a fake failure. Absent is the honest representation.
      */
     private fun MutableMap<String, String>.putInt(key: String, value: Int) {
-        if (key in unavailableColumns && unavailableMatches(key, value)) {
-            this[key] = "--"
-            return
-        }
-        if (value != Int.MAX_VALUE && value != CellInfo.UNAVAILABLE) this[key] = value.toString()
+        observedScalar(key, value, configuredColumns, unavailableColumns)?.let { this[key] = it }
     }
 
     private fun MutableMap<String, String>.putLong(key: String, value: Long) {
-        if (key in unavailableColumns && unavailableMatches(key, value)) {
-            this[key] = "--"
-            return
-        }
-        if (value != Long.MAX_VALUE && value != CellInfo.UNAVAILABLE.toLong()) this[key] = value.toString()
-    }
-
-    private fun unavailableMatches(key: String, observed: Any?): Boolean {
-        val expected = UnavailableValueResolver.resolveObservedField(key)
-        if (!expected.handled()) return false
-        val wanted = expected.value()
-        if (wanted is Number && observed is Number) {
-            return wanted.toLong() == observed.toLong()
-        }
-        return wanted == observed
+        observedScalar(key, value, configuredColumns, unavailableColumns)?.let { this[key] = it }
     }
 }

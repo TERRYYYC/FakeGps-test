@@ -1,5 +1,7 @@
 package name.caiyao.fakegps.hook;
 
+import android.os.Build;
+
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -24,6 +26,7 @@ public final class UnavailableValueResolver {
         GSM_CELL_LOCATION,
         CELL_SIGNAL_INT,
         TELEPHONY_TEXT,
+        CARRIER_OBJECT_TEXT,
         NETWORK_TYPE,
         PHONE_TYPE,
         DATA_STATE,
@@ -123,7 +126,7 @@ public final class UnavailableValueResolver {
                 return ("mcc".equals(field) || "mnc".equals(field))
                         ? Resolution.handled(null) : Resolution.unhandled();
             case GSM_CELL_LOCATION:
-                return ("lac".equals(field) || "cid".equals(field))
+                return ("lac".equals(field) || "cid".equals(field) || "psc".equals(field))
                         ? Resolution.handled(-1) : Resolution.unhandled();
             case CELL_SIGNAL_INT:
                 return CELL_SIGNAL_INT.contains(field)
@@ -131,6 +134,9 @@ public final class UnavailableValueResolver {
             case TELEPHONY_TEXT:
                 return TELEPHONY_TEXT.contains(field)
                         ? Resolution.handled("") : Resolution.unhandled();
+            case CARRIER_OBJECT_TEXT:
+                return ("operator_name".equals(field) || "operator_numeric".equals(field))
+                        ? Resolution.handled(null) : Resolution.unhandled();
             case NETWORK_TYPE:
                 return NETWORK_TYPE.contains(field)
                         ? Resolution.handled(0) : Resolution.unhandled();
@@ -139,7 +145,8 @@ public final class UnavailableValueResolver {
                         ? Resolution.handled(0) : Resolution.unhandled();
             case DATA_STATE:
                 return "data_state".equals(field)
-                        ? Resolution.handled(0) : Resolution.unhandled();
+                        ? Resolution.handled(dataStateUnavailableValueForApi(Build.VERSION.SDK_INT))
+                        : Resolution.unhandled();
             case DATA_ACTIVITY:
                 return "data_activity".equals(field)
                         ? Resolution.handled(0) : Resolution.unhandled();
@@ -153,11 +160,15 @@ public final class UnavailableValueResolver {
                 return "physical_cell_id".equals(field)
                         ? Resolution.handled(-1) : Resolution.unhandled();
             case NEIGHBOR_CELL_LIST:
-                return "neighbor_cells_json".equals(field)
-                        ? Resolution.handled(Collections.emptyList()) : Resolution.unhandled();
+                return Resolution.unhandled();
             default:
                 return Resolution.unhandled();
         }
+    }
+
+    /** DATA_UNKNOWN was added in API 29; older public contracts use DISCONNECTED as the empty state. */
+    static int dataStateUnavailableValueForApi(int apiLevel) {
+        return apiLevel >= 29 ? -1 : 0;
     }
 
     /**
@@ -165,10 +176,7 @@ public final class UnavailableValueResolver {
      * Exceptional projections (PLMN strings and {@code GsmCellLocation}) still resolve explicitly
      * at their call sites.
      */
-    static Resolution resolveSnapshotField(String field) {
-        if ("neighbor_cells_json".equals(field)) {
-            return Resolution.handled("[]");
-        }
+    public static Resolution resolveSnapshotField(String field) {
         Surface surface = SNAPSHOT_SURFACES.get(field);
         return surface == null ? Resolution.unhandled() : resolve(field, surface);
     }

@@ -63,6 +63,10 @@ public final class UnavailablePayloadContract {
             }
             canonical.add(field);
         }
+        if (canonical.contains("mcc") != canonical.contains("mnc")) {
+            throw new IllegalArgumentException(
+                    "PLMN unavailable must include both mcc and mnc");
+        }
         return new Validated(canonical);
     }
 }

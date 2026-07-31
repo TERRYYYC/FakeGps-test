@@ -101,6 +101,12 @@ class HookUtils {
         }
     }
 
+    /** All hook groups share one bypass decision while this process reads a real baseline. */
+    private static Snapshot currentSnapshot() {
+        return Snapshot.forHookInvocation(
+                MainHook.CURRENT.get(), BaselineExtractionGuard.isActive());
+    }
+
     // ==========================================================================
     // A. LOCATION HOOKS
     // ==========================================================================
@@ -112,7 +118,7 @@ class HookUtils {
                 LocationManager.class, "getLastLocation", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         param.setResult(createFakeLocation(s));
                     }
@@ -123,7 +129,7 @@ class HookUtils {
                 LocationManager.class, "getLastKnownLocation", String.class, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         param.setResult(createFakeLocation(s));
                     }
@@ -134,7 +140,7 @@ class HookUtils {
                 LocationManager.class, "getProviders", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         ArrayList<String> providers = new ArrayList<>();
                         providers.add(LocationManager.GPS_PROVIDER);
@@ -149,7 +155,7 @@ class HookUtils {
                 Criteria.class, Boolean.TYPE, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         param.setResult(LocationManager.GPS_PROVIDER);
                     }
@@ -164,7 +170,7 @@ class HookUtils {
             tryHook(() -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
-                    Snapshot s = MainHook.CURRENT.get();
+                    Snapshot s = currentSnapshot();
                     if (!s.hasLocation()) return;
 
                     LocationListener ll = findLocationListener(param.args);
@@ -192,7 +198,7 @@ class HookUtils {
             tryHook(() -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
-                    Snapshot s = MainHook.CURRENT.get();
+                    Snapshot s = currentSnapshot();
                     if (!s.hasLocation()) return;
 
                     LocationListener ll = findLocationListener(param.args);
@@ -214,7 +220,7 @@ class HookUtils {
                 GpsStatus.NmeaListener.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         param.setResult(false);
                     }
@@ -228,7 +234,7 @@ class HookUtils {
                     LocationManager.class, "getCurrentLocation", new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (!s.hasLocation()) return;
 
                             // Find the Consumer<Location> arg by interface type
@@ -264,7 +270,7 @@ class HookUtils {
                 "getCellLocation", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasGsmCell()) return;
                         GsmCellLocation loc = spoofedGsmLocationOrPassthrough(s, param.getResult());
                         if (loc == null) return;
@@ -279,7 +285,7 @@ class HookUtils {
                     "getPhoneCount", new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (s.hasGsmCell() || s.hasLteCell() || s.hasNrCell()) {
                                 param.setResult(1);
                             }
@@ -294,7 +300,7 @@ class HookUtils {
                 "getNeighboringCellInfo", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasGsmCell()) return;
                         param.setResult(new ArrayList<>());
                     }
@@ -306,8 +312,11 @@ class HookUtils {
                 "getAllCellInfo", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
-                        if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
+                        Snapshot s = currentSnapshot();
+                        if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) {
+                            registerRealNeighborBypassesForCarrier(s, param.getResult());
+                            return;
+                        }
                         // The real result is the passthrough baseline for fields the user left unset.
                         ArrayList spoofed = spoofedCellsOrPassthrough(s, param.getResult());
                         if (spoofed == null) return;
@@ -345,7 +354,7 @@ class HookUtils {
                             param.setResult(false);
                             return;
                         }
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.hasGsmCell() || s.hasLteCell() || s.hasNrCell()) {
                             param.setResult(true);
                         }
@@ -358,6 +367,13 @@ class HookUtils {
     // ==========================================================================
 
     private static void hookCellIdentityGetters(ClassLoader cl) {
+        // Common carrier names. Hook the base class so every radio identity — including NR —
+        // exposes the same configured network operator through its inherited public getters.
+        hookNullableCarrierGetter(cl, "android.telephony.CellIdentity", "getOperatorAlphaLong",
+                "operator_name", s -> s.operatorName);
+        hookNullableCarrierGetter(cl, "android.telephony.CellIdentity", "getOperatorAlphaShort",
+                "operator_name", s -> s.operatorName);
+
         // GSM
         hookGetter(cl, "android.telephony.CellIdentityGsm", "getMcc", s -> s.mcc);
         hookGetter(cl, "android.telephony.CellIdentityGsm", "getMnc", s -> s.mnc);
@@ -385,7 +401,7 @@ class HookUtils {
 
         // CDMA — map lac→networkId, cid→baseStationId
         hookGetter(cl, "android.telephony.CellIdentityCdma", "getNetworkId", s -> s.lac);
-        hookGetter(cl, "android.telephony.CellIdentityCdma", "getBaseStationId", s -> s.cid);
+        hookGetter(cl, "android.telephony.CellIdentityCdma", "getBasestationId", s -> s.cid);
 
         // NR/5G (API 29+)
         if (Build.VERSION.SDK_INT >= 29) {
@@ -510,6 +526,23 @@ class HookUtils {
         // ServiceState.getState()
         hookGetter(cl, "android.telephony.ServiceState", "getState",
                 s -> s.serviceState);
+        hookNullableCarrierGetter(cl, "android.telephony.ServiceState", "getOperatorAlphaLong",
+                "operator_name", s -> s.operatorName);
+        hookNullableCarrierGetter(cl, "android.telephony.ServiceState", "getOperatorAlphaShort",
+                "operator_name", s -> s.operatorName);
+        hookNullableCarrierGetter(cl, "android.telephony.ServiceState", "getOperatorNumeric",
+                "operator_numeric", s -> s.operatorNumeric);
+        hookGetter(cl, "android.telephony.ServiceState", "getRoaming",
+                s -> s.isRoaming);
+
+        // NetworkRegistrationInfo is absent on old Android releases. hookGetter is fail-closed:
+        // registration is skipped when either the class or method does not exist.
+        hookNullableCarrierGetter(cl, "android.telephony.NetworkRegistrationInfo",
+                "getRegisteredPlmn", "operator_numeric", s -> s.operatorNumeric);
+        hookGetter(cl, "android.telephony.NetworkRegistrationInfo", "isRoaming",
+                s -> s.isRoaming);
+        hookGetter(cl, "android.telephony.NetworkRegistrationInfo", "isNetworkRoaming",
+                s -> s.isRoaming);
 
         // TelephonyDisplayInfo.getOverrideNetworkType() (API 30+)
         if (Build.VERSION.SDK_INT >= 30) {
@@ -534,7 +567,7 @@ class HookUtils {
                 "getScanResults", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.wifiHidden != null && s.wifiHidden) {
                             param.setResult(new ArrayList<>());
                         }
@@ -547,7 +580,7 @@ class HookUtils {
                 "getWifiState", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.wifiEnabled != null) {
                             // WIFI_STATE_ENABLED=3, WIFI_STATE_DISABLED=1
                             param.setResult(s.wifiEnabled ? 3 : 1);
@@ -561,7 +594,7 @@ class HookUtils {
                 "isWifiEnabled", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.wifiEnabled != null) {
                             param.setResult(s.wifiEnabled);
                         }
@@ -597,7 +630,7 @@ class HookUtils {
                 "getIpAddress", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.wifiIp != null) {
                             param.setResult(ipToInt(s.wifiIp));
                         }
@@ -619,7 +652,7 @@ class HookUtils {
                 "isConnected", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.connectionType != null) {
                             param.setResult(true);
                         }
@@ -631,7 +664,7 @@ class HookUtils {
                 "isConnectedOrConnecting", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.connectionType != null) {
                             param.setResult(true);
                         }
@@ -643,7 +676,7 @@ class HookUtils {
                 "isAvailable", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.connectionType != null) {
                             param.setResult(true);
                         }
@@ -659,7 +692,7 @@ class HookUtils {
                 "getActiveNetworkInfo", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.connectionType == null) return;
                         // Let existing NetworkInfo hooks handle field overrides on the result
                     }
@@ -671,7 +704,7 @@ class HookUtils {
                 "getDnsServers", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.dnsPrimary == null) return;
                         try {
                             List<java.net.InetAddress> dns = new ArrayList<>();
@@ -724,7 +757,7 @@ class HookUtils {
                     "onCellLocationChanged", CellLocation.class, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (!s.hasGsmCell()) return;
                             GsmCellLocation loc = spoofedGsmLocationOrPassthrough(s, param.args[0]);
                             if (loc == null) return;
@@ -740,8 +773,11 @@ class HookUtils {
                     "onCellInfoChanged", List.class, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
-                            if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
+                            Snapshot s = currentSnapshot();
+                            if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) {
+                                registerRealNeighborBypassesForCarrier(s, param.args[0]);
+                                return;
+                            }
                             ArrayList spoofed = spoofedCellsOrPassthrough(s, param.args[0]);
                             if (spoofed == null) return;
                             param.args[0] = spoofed;
@@ -773,7 +809,7 @@ class HookUtils {
                         "onServiceStateChanged", stateClass, new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam param) {
-                                Snapshot s = MainHook.CURRENT.get();
+                                Snapshot s = currentSnapshot();
                                 if (s.serviceState != null && param.args[0] != null) {
                                     try {
                                         XposedHelpers.setIntField(param.args[0], "mVoiceRegState", s.serviceState);
@@ -802,7 +838,7 @@ class HookUtils {
                 GpsStatus.Listener.class, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         if (param.args[0] != null) {
                             GpsStatus.Listener listener = (GpsStatus.Listener) param.args[0];
@@ -818,7 +854,7 @@ class HookUtils {
                 "getGpsStatus", GpsStatus.class, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
 
                         GpsStatus gss = (GpsStatus) param.getResult();
@@ -882,7 +918,7 @@ class HookUtils {
                         tryHook(() -> XposedBridge.hookMethod(m, new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam p) {
-                                Snapshot s = MainHook.CURRENT.get();
+                                Snapshot s = currentSnapshot();
                                 if (!s.hasLocation()) return;
                                 if (p.args[0] instanceof Location) {
                                     Location loc = (Location) p.args[0];
@@ -898,7 +934,7 @@ class HookUtils {
                         tryHook(() -> XposedBridge.hookMethod(m, new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(MethodHookParam p) {
-                                Snapshot s = MainHook.CURRENT.get();
+                                Snapshot s = currentSnapshot();
                                 if (!s.hasLocation()) return;
                                 if (p.getResult() instanceof Location) {
                                     Location loc = (Location) p.getResult();
@@ -957,8 +993,11 @@ class HookUtils {
                 "onCellInfoChanged", List.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
-                        if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
+                        Snapshot s = currentSnapshot();
+                        if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) {
+                            registerRealNeighborBypassesForCarrier(s, param.args[0]);
+                            return;
+                        }
                         ArrayList spoofed = spoofedCellsOrPassthrough(s, param.args[0]);
                         if (spoofed == null) return;
                         param.args[0] = spoofed;
@@ -971,7 +1010,7 @@ class HookUtils {
                 "onCellLocationChanged", CellLocation.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasGsmCell()) return;
                         GsmCellLocation loc = spoofedGsmLocationOrPassthrough(s, param.args[0]);
                         if (loc == null) return;
@@ -1000,7 +1039,7 @@ class HookUtils {
                     "onServiceStateChanged", stateClass, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (s.serviceState != null && param.args[0] != null) {
                                 try {
                                     XposedHelpers.setIntField(param.args[0], "mVoiceRegState", s.serviceState);
@@ -1032,7 +1071,7 @@ class HookUtils {
                 "onPhysicalChannelConfigChanged", List.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasPhysicalChannelConfig()) return;
                         // Replace list with single fake PCC — getter hooks override fields
                         try {
@@ -1074,8 +1113,11 @@ class HookUtils {
                 new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
-                        if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
+                        Snapshot s = currentSnapshot();
+                        if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) {
+                            registerRealNeighborBypassesForCarrier(s, param.args[0]);
+                            return;
+                        }
                         ArrayList spoofed = spoofedCellsOrPassthrough(s, param.args[0]);
                         if (spoofed == null) return;
                         param.args[0] = spoofed;
@@ -1094,7 +1136,7 @@ class HookUtils {
                 "getLinkAddresses", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.localIpv4 == null && s.localIpv6 == null) return;
                         // Replace addresses with fake ones
                         try {
@@ -1135,7 +1177,7 @@ class HookUtils {
                 java.net.NetworkInterface.class, "getInetAddresses", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.localIpv4 == null && s.localIpv6 == null) return;
                         @SuppressWarnings("unchecked")
                         java.util.Enumeration<java.net.InetAddress> original =
@@ -1170,7 +1212,7 @@ class HookUtils {
                 "getRoutes", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.gateway == null) return;
                         try {
                             @SuppressWarnings("unchecked")
@@ -1209,7 +1251,7 @@ class HookUtils {
                 "getDhcpInfo", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.gateway == null && s.subnetMask == null
                                 && s.localIpv4 == null && s.dnsPrimary == null
                                 && s.dnsSecondary == null) return;
@@ -1331,7 +1373,7 @@ class HookUtils {
                         // listen()/registerTelephonyCallback() on the sub-TM also gets intercepted.
                         // Those are already hooked via class-level hooks, so nothing extra needed.
                         // However, log for debugging that a sub-TM was created.
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.hasGsmCell() || s.hasLteCell() || s.hasNrCell()) {
                             XposedBridge.log(TAG + ": createForSubscriptionId(" + param.args[0]
                                     + ") intercepted — class-level hooks will apply");
@@ -1347,7 +1389,7 @@ class HookUtils {
                     "getActiveSubscriptionInfoList", new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
 
                             // Trim to first subscription only to prevent dual-SIM detection
@@ -1371,7 +1413,7 @@ class HookUtils {
                     "getActiveSubscriptionInfoCount", new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
                             int count = (int) param.getResult();
                             if (count > 1) {
@@ -1388,7 +1430,7 @@ class HookUtils {
                     "getCompleteActiveSubscriptionInfoList", new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
                             Object result = param.getResult();
                             if (result instanceof List) {
@@ -1412,7 +1454,7 @@ class HookUtils {
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
                             int slotIndex = (int) param.args[0];
                             if (slotIndex > 0) {
@@ -1434,7 +1476,7 @@ class HookUtils {
                     "getActiveSubscriptionInfoCountMax", new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
                             int max = (int) param.getResult();
                             if (max > 1) {
@@ -1452,7 +1494,7 @@ class HookUtils {
                     "getSubscriptionIds", int.class, new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
                             int slotIndex = (int) param.args[0];
                             if (slotIndex > 0) {
@@ -1515,7 +1557,7 @@ class HookUtils {
                 "getLastLocation", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         replaceFusedTask(param, s, cl);
                     }
@@ -1527,7 +1569,7 @@ class HookUtils {
                 "getCurrentLocation", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         replaceFusedTask(param, s, cl);
                     }
@@ -1573,7 +1615,7 @@ class HookUtils {
             XposedBridge.hookAllMethods(apiClass, "getLastLocation", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
-                    Snapshot s = MainHook.CURRENT.get();
+                    Snapshot s = currentSnapshot();
                     if (!s.hasLocation()) return;
                     param.setResult(createFakeLocation(s));
                 }
@@ -1587,7 +1629,7 @@ class HookUtils {
             XposedBridge.hookAllMethods(lrClass, "getLastLocation", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
-                    Snapshot s = MainHook.CURRENT.get();
+                    Snapshot s = currentSnapshot();
                     if (!s.hasLocation()) return;
                     param.setResult(createFakeLocation(s));
                 }
@@ -1596,7 +1638,7 @@ class HookUtils {
             XposedBridge.hookAllMethods(lrClass, "getLocations", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
-                    Snapshot s = MainHook.CURRENT.get();
+                    Snapshot s = currentSnapshot();
                     if (!s.hasLocation()) return;
                     ArrayList<Location> fakeList = new ArrayList<>();
                     fakeList.add(createFakeLocation(s));
@@ -1619,7 +1661,7 @@ class HookUtils {
                     new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
-                            Snapshot s = MainHook.CURRENT.get();
+                            Snapshot s = currentSnapshot();
                             if (!s.hasLocation()) return;
                             // Replace LocationResult's internal location list
                             try {
@@ -1644,7 +1686,7 @@ class HookUtils {
                         new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam param) {
-                                Snapshot s = MainHook.CURRENT.get();
+                                Snapshot s = currentSnapshot();
                                 if (!s.hasLocation()) return;
                                 // Force location available = true
                                 try {
@@ -1709,7 +1751,7 @@ class HookUtils {
                 "onLocationChanged", Location.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         param.args[0] = createFakeLocation(s);
                     }
@@ -1721,7 +1763,7 @@ class HookUtils {
                     @Override
                     @SuppressWarnings("unchecked")
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         ArrayList<Location> fake = new ArrayList<>();
                         fake.add(createFakeLocation(s));
@@ -1740,7 +1782,7 @@ class HookUtils {
                 "onLocationChanged", Location.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         param.args[0] = createFakeLocation(s);
                     }
@@ -1818,6 +1860,17 @@ class HookUtils {
         CellIdentityMetadata gsmMetadata = CellIdentityMetadata.EMPTY;
         CellIdentityMetadata wcdmaMetadata = CellIdentityMetadata.EMPTY;
         boolean present;
+        final java.util.List<RealCell> realCells = new java.util.ArrayList<>();
+
+        private static final class RealCell {
+            final Object value;
+            final boolean registered;
+
+            RealCell(Object value, boolean registered) {
+                this.value = value;
+                this.registered = registered;
+            }
+        }
 
         /**
          * Most recent NON-EMPTY real baseline.
@@ -1853,6 +1906,7 @@ class HookUtils {
                 boolean registered = false;
                 try { registered = (Boolean) XposedHelpers.callMethod(info, "isRegistered"); }
                 catch (Throwable ignored) { /* pre-API-17 or unsupported: treat as neighbour */ }
+                b.realCells.add(new RealCell(info, registered));
                 if (info instanceof CellInfoLte) {
                     if (anyLte == null) anyLte = info;
                     if (registered && servingLte == null) servingLte = info;
@@ -2006,7 +2060,55 @@ class HookUtils {
             debug("no cell baseline -> passthrough (not fabricating)");
             return null;
         }
-        return buildCellInfoList(s, base);
+        ArrayList built = buildCellInfoList(s, base);
+        preserveUnconfiguredRealCells(s, base, built);
+        if (built.isEmpty()) {
+            debug("cell construction produced no entries -> passthrough");
+        }
+        return Snapshot.acceptBuiltCellListOrPassthrough(built);
+    }
+
+    /** NULL neighbor JSON means passthrough, so retain real neighbours and untouched RATs. */
+    private static void preserveUnconfiguredRealCells(
+            Snapshot s, CellBaseline base, ArrayList built) {
+        boolean configuredNeighbors = s.neighborCellsJson != null;
+        for (CellBaseline.RealCell real : base.realCells) {
+            boolean replacingRat =
+                    (real.value instanceof CellInfoLte && s.hasLteCell())
+                    || (real.value instanceof CellInfoGsm && s.hasGsmCell())
+                    || (real.value instanceof CellInfoWcdma
+                        && s.hasGsmCell() && (s.psc != null || s.uarfcn != null))
+                    || (Build.VERSION.SDK_INT >= 29
+                        && real.value instanceof android.telephony.CellInfoNr && s.hasNrCell());
+            if (!Snapshot.shouldPreserveRealCell(
+                    real.registered, replacingRat, configuredNeighbors)) {
+                continue;
+            }
+            registerNeighborBypassTree(real.value);
+            built.add(real.value);
+        }
+    }
+
+    private static void registerNeighborBypassTree(Object info) {
+        NEIGHBOR_BYPASS.add(info);
+        try { NEIGHBOR_BYPASS.add(XposedHelpers.callMethod(info, "getCellIdentity")); }
+        catch (Throwable ignored) {}
+        try { NEIGHBOR_BYPASS.add(XposedHelpers.callMethod(info, "getCellSignalStrength")); }
+        catch (Throwable ignored) {}
+    }
+
+    /** Carrier-only profiles do not rebuild the list, but real neighbors must remain untouched. */
+    private static void registerRealNeighborBypassesForCarrier(Snapshot s, Object cellInfos) {
+        if (!Snapshot.shouldCensusRealNeighborsForCarrier(s.operatorName, false)
+                || !(cellInfos instanceof List)) {
+            return;
+        }
+        for (Object info : (List<?>) cellInfos) {
+            boolean registered = false;
+            try { registered = (Boolean) XposedHelpers.callMethod(info, "isRegistered"); }
+            catch (Throwable ignored) {}
+            if (!registered) registerNeighborBypassTree(info);
+        }
     }
 
     /**
@@ -2031,9 +2133,9 @@ class HookUtils {
         if (realCid == null && last != null) realCid = last.cid;
 
         Integer lac = Snapshot.resolveGsmCellLocationField(
-                s.lac, realLac, s.isUnavailable("lac"));
+                "lac", s.lac, realLac, s.isUnavailable("lac"));
         Integer cid = Snapshot.resolveGsmCellLocationField(
-                s.cid, realCid, s.isUnavailable("cid"));
+                "cid", s.cid, realCid, s.isUnavailable("cid"));
         if (lac == null || cid == null) {
             debug("no GSM cell-location baseline -> passthrough");
             return null;
@@ -2043,7 +2145,9 @@ class HookUtils {
         // setPsc is @hide on some API levels — apply reflectively and skip if unavailable rather
         // than failing the whole spoof for one optional UMTS field.
         if (s.psc != null) {
-            try { XposedHelpers.callMethod(loc, "setPsc", s.psc); }
+            Integer psc = Snapshot.resolveGsmCellLocationField(
+                    "psc", s.psc, null, s.isUnavailable("psc"));
+            try { XposedHelpers.callMethod(loc, "setPsc", psc); }
             catch (Throwable t) { debug("setPsc unavailable: " + t); }
         }
         return loc;
@@ -2054,12 +2158,10 @@ class HookUtils {
         // when the app drops references. No manual clear() needed.
         ArrayList list = new ArrayList();
         // Per-field passthrough: configured value > device's real value > last-resort default.
-        int mcc = pick(s.mcc, base.mcc, 460);
-        int mnc = pick(s.mnc, base.mnc, 0);
         String mccString = Snapshot.resolvePlmnString(
-                s.mcc, base.mccString, s.isUnavailable("mcc"));
+                "mcc", s.mcc, base.mccString, s.isUnavailable("mcc"));
         String mncString = Snapshot.resolvePlmnString(
-                s.mnc, base.mncString, s.isUnavailable("mnc"));
+                "mnc", s.mnc, base.mncString, s.isUnavailable("mnc"));
 
         // GSM cell
         if (s.hasGsmCell()) {
@@ -2071,7 +2173,7 @@ class HookUtils {
                 Integer bsic = s.bsic != null ? s.bsic : base.gsmBsic;
                 Object identity = CellConstructorCompat.newGsmIdentity(
                         CellIdentityGsm.class, mccString, mncString, lac, cid, arfcn, bsic,
-                        base.gsmMetadata);
+                        base.gsmMetadata.withOperatorName(s.operatorName));
                 XposedHelpers.callMethod(gsm, "setCellIdentity", identity);
                 // Set signal strength — getter hooks will override individual fields
                 try {
@@ -2110,7 +2212,8 @@ class HookUtils {
                 Integer bandwidth = s.lteBandwidth != null ? s.lteBandwidth : base.lteBandwidth;
                 Object identity = CellConstructorCompat.newLteIdentity(
                         CellIdentityLte.class, mccString, mncString,
-                        ci, pci, tac, earfcn, bandwidth, base.lteMetadata);
+                        ci, pci, tac, earfcn, bandwidth,
+                        base.lteMetadata.withOperatorName(s.operatorName));
                 XposedHelpers.callMethod(lte, "setCellIdentity", identity);
                 // Set signal strength
                 try {
@@ -2147,7 +2250,8 @@ class HookUtils {
                 Integer uarfcn = s.uarfcn != null ? s.uarfcn : base.wcdmaUarfcn;
                 Object identity = CellConstructorCompat.newWcdmaIdentity(
                         CellIdentityWcdma.class, mccString, mncString,
-                        lac, cid, psc, uarfcn, base.wcdmaMetadata);
+                        lac, cid, psc, uarfcn,
+                        base.wcdmaMetadata.withOperatorName(s.operatorName));
                 XposedHelpers.callMethod(wcdma, "setCellIdentity", identity);
                 // Set signal strength
                 try {
@@ -2208,7 +2312,7 @@ class HookUtils {
                                     obj.optInt("tac", 0),
                                     obj.has("earfcn") ? obj.optInt("earfcn") : null,
                                     obj.has("bandwidth") ? obj.optInt("bandwidth") : null,
-                                    CellIdentityMetadata.EMPTY);
+                                    CellIdentityMetadata.EMPTY.withOperatorName(s.operatorName));
                             NEIGHBOR_BYPASS.add(id);
                             XposedHelpers.callMethod(lte, "setCellIdentity", id);
                             try {
@@ -2233,7 +2337,7 @@ class HookUtils {
                                     obj.optInt("cid", 0),
                                     obj.optInt("psc", 0),
                                     obj.has("uarfcn") ? obj.optInt("uarfcn") : null,
-                                    CellIdentityMetadata.EMPTY);
+                                    CellIdentityMetadata.EMPTY.withOperatorName(s.operatorName));
                             NEIGHBOR_BYPASS.add(id);
                             XposedHelpers.callMethod(w, "setCellIdentity", id);
                             try {
@@ -2257,7 +2361,7 @@ class HookUtils {
                                     obj.optInt("cid", 0),
                                     obj.has("arfcn") ? obj.optInt("arfcn") : null,
                                     obj.has("bsic") ? obj.optInt("bsic") : null,
-                                    CellIdentityMetadata.EMPTY);
+                                    CellIdentityMetadata.EMPTY.withOperatorName(s.operatorName));
                             NEIGHBOR_BYPASS.add(id);
                             XposedHelpers.callMethod(gsm, "setCellIdentity", id);
                             try {
@@ -2297,7 +2401,7 @@ class HookUtils {
                         if (BaselineExtractionGuard.isActive()) return;
                         // Skip neighbor cell objects — their constructor values are correct
                         if (NEIGHBOR_BYPASS.contains(param.thisObject)) return;
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         Object val = getter.get(s);
                         if (val != null) {
                             param.setResult(val);
@@ -2318,7 +2422,7 @@ class HookUtils {
                     protected void afterHookedMethod(MethodHookParam param) {
                         if (BaselineExtractionGuard.isActive()) return;
                         if (NEIGHBOR_BYPASS.contains(param.thisObject)) return;
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         if (s.isUnavailable(field)) {
                             UnavailableValueResolver.Resolution r =
                                     UnavailableValueResolver.resolve(
@@ -2335,6 +2439,34 @@ class HookUtils {
     }
 
     /**
+     * Object carrier surfaces use null for unknown, unlike TelephonyManager's empty string.
+     * The unavailable decision must therefore override even though its resolved value is null.
+     */
+    private static void hookNullableCarrierGetter(
+            ClassLoader cl, String className, String methodName, String field,
+            FieldGetter getter) {
+        tryHook(() -> XposedHelpers.findAndHookMethod(className, cl, methodName,
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        if (BaselineExtractionGuard.isActive()) return;
+                        if (NEIGHBOR_BYPASS.contains(param.thisObject)) return;
+                        Snapshot s = currentSnapshot();
+                        if (s.isUnavailable(field)) {
+                            UnavailableValueResolver.Resolution resolution =
+                                    UnavailableValueResolver.resolve(
+                                            field,
+                                            UnavailableValueResolver.Surface.CARRIER_OBJECT_TEXT);
+                            if (resolution.handled()) param.setResult(resolution.value());
+                            return;
+                        }
+                        Object value = getter.get(s);
+                        if (value != null) param.setResult(value);
+                    }
+                }));
+    }
+
+    /**
      * Hook a signal strength getter. Same as hookGetter but applies fluctuation.
      * Skips neighbor cell objects (NEIGHBOR_BYPASS).
      */
@@ -2346,7 +2478,7 @@ class HookUtils {
                     protected void afterHookedMethod(MethodHookParam param) {
                         if (BaselineExtractionGuard.isActive()) return;
                         if (NEIGHBOR_BYPASS.contains(param.thisObject)) return;
-                        Snapshot s = MainHook.CURRENT.get();
+                        Snapshot s = currentSnapshot();
                         Object val = getter.get(s);
                         if (val instanceof Integer) {
                             param.setResult(s.fluctuate((Integer) val, RND));

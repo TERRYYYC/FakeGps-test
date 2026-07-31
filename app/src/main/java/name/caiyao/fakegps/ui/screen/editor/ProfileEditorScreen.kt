@@ -65,6 +65,8 @@ fun ProfileEditorScreen(
     val fieldValues by vm.fieldValues.collectAsState()
     val reference by vm.reference.collectAsState()
     val saved by vm.saved.collectAsState()
+    val fieldErrors by vm.fieldErrors.collectAsState()
+    val notice by vm.notice.collectAsState()
 
     LaunchedEffect(profileId) {
         vm.load(if (isNew) -1L else profileId, lat, lon)
@@ -102,6 +104,13 @@ fun ProfileEditorScreen(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            notice?.let {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
             for ((category, fields) in categories) {
                 val expanded = expandedState[category] ?: (category == "定位")
                 val activeCount = fields.count { fieldValues.containsKey(it.dbColumn) }
@@ -127,6 +136,7 @@ fun ProfileEditorScreen(
                                 spec = spec,
                                 value = value,
                                 reference = reference[spec.dbColumn],
+                                validationError = fieldErrors[spec.dbColumn],
                                 scope = vm.scope,
                                 onValueChange = { vm.updateField(spec.dbColumn, it) },
                             )
@@ -196,6 +206,7 @@ private fun TextField(
     spec: FieldSpec,
     value: String,
     reference: String?,
+    validationError: String?,
     scope: ObservationScope,
     onValueChange: (String) -> Unit,
 ) {
@@ -234,12 +245,12 @@ private fun TextField(
             // Empty means passthrough — the project's core invariant, previously stated only on the
             // boolean dropdown, so text fields gave no hint that blank was a meaningful choice.
             placeholder = { Text(if (spec.hint.isBlank()) "留空 = 透传真实值" else "${spec.hint}（留空 = 透传）") },
-            isError = collides,
+            isError = collides || validationError != null,
             supportingText = {
                 when {
+                    validationError != null -> Text(validationError)
                     unavailable -> Text("不上报：目标 App 将看到该 API 的“无数据”值")
                     collides -> Text("与$referenceLabel 相同 — 即使生效也无法区分，建议换一个明显不同的值")
-                    reference != null -> Text("$referenceLabel：$reference")
                     supportsUnavailable -> Text("留空 = 透传真实值；不上报 = 该 API 返回无数据")
                     else -> Text("留空 = 透传真实值；此字段不支持不上报")
                 }
@@ -261,6 +272,14 @@ private fun TextField(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+        if (reference != null) {
+            Text(
+                text = "$referenceLabel：$reference",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp, top = 2.dp),
+            )
+        }
     }
 }
 

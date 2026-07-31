@@ -7,6 +7,50 @@ from scripts import hook_verdict
 
 
 class HookVerdictTest(unittest.TestCase):
+    def test_unavailable_negative_control_rejects_platform_default_coincidence(self):
+        control = {
+            "cellInfo": {"sync": {"lte": {"tac": 4095}}},
+        }
+        no_op = {
+            "sessionId": "acceptance-123",
+            "cellInfo": {"sync": {"lte": {"tac": 4095}}},
+            "errors": [],
+        }
+        failed = hook_verdict.evaluate(
+            {"cellInfo.sync.lte.tac": 4095},
+            no_op,
+            "acceptance-123",
+            restored=True,
+            control_report=control,
+            control_paths=("cellInfo.sync.lte.tac",),
+        )
+        self.assertFalse(failed.passed)
+        self.assertEqual("same_as_control", failed.fields[-1].reason)
+
+        unavailable = {
+            "sessionId": "acceptance-123",
+            "cellInfo": {"sync": {"lte": {"tac": 2_147_483_647}}},
+            "errors": [],
+        }
+        passed = hook_verdict.evaluate(
+            {"cellInfo.sync.lte.tac": 2_147_483_647},
+            unavailable,
+            "acceptance-123",
+            restored=True,
+            control_report=control,
+            control_paths=("cellInfo.sync.lte.tac",),
+        )
+        self.assertTrue(passed.passed)
+        self.assertEqual("different_from_control", passed.fields[-1].reason)
+        self.assertEqual(
+            {
+                "configured": 1,
+                "verified": 1,
+                "failed": 0,
+                "restored": True,
+            },
+            passed.summary,
+        )
     def test_exact_values_include_zero_false_and_empty_string(self):
         report = {
             "sessionId": "acceptance-123",

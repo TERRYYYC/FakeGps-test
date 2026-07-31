@@ -47,6 +47,7 @@ import name.caiyao.fakegps.verify.FieldReport
 import name.caiyao.fakegps.verify.FieldVerdict
 import name.caiyao.fakegps.verify.HookApplicability
 import name.caiyao.fakegps.verify.ObservationScope
+import name.caiyao.fakegps.verify.VerificationSummary
 import name.caiyao.fakegps.verify.VerificationStatus
 
 private enum class RowFilter(val label: String) {
@@ -218,6 +219,10 @@ private fun VerdictCard(state: VerifyUiState) {
                     headline = "尚未发布过配置"
                     detail = "还没有任何配置送达 hook，所有字段都会透传真实值。到档案编辑页保存一次即可。"
                 }
+                HookApplicability.PUBLICATION_FAILED -> {
+                    headline = "档案尚未发布"
+                    detail = "数据库保存后发布失败；目标 App 仍可能使用上一份配置，不能据此判定生效。"
+                }
                 HookApplicability.APPLYING -> { headline = ""; detail = "" }
             }
         }
@@ -234,12 +239,7 @@ private fun VerdictCard(state: VerifyUiState) {
             }
             VerificationStatus.PARTIALLY_EFFECTIVE -> {
                 headline = "部分验证通过"
-                val unchecked = buildList {
-                    if (summary.unobservable > 0) add("${summary.unobservable} 个本进程读不到")
-                    if (summary.notVerifiable > 0) add("${summary.notVerifiable} 个没有系统读取接口")
-                }.joinToString("、")
-                detail = "${summary.spoofed} 个字段确认生效，另有 $unchecked，无法验证。" +
-                    "没有发现矛盾，但也不能说全部生效。"
+                detail = partialVerificationDetail(summary)
                 tone = MaterialTheme.colorScheme.primary
             }
             VerificationStatus.CONFIGURED_UNVERIFIABLE -> {
@@ -302,6 +302,9 @@ private fun VerdictCard(state: VerifyUiState) {
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     CountPill("已生效", summary.spoofed, verdictColor(FieldVerdict.SPOOFED))
+                    if (summary.ambiguous > 0) {
+                        CountPill("巧合", summary.ambiguous, verdictColor(FieldVerdict.AMBIGUOUS))
+                    }
                     CountPill("未生效", summary.mismatch, verdictColor(FieldVerdict.MISMATCH))
                     CountPill("读不到", summary.unobservable, verdictColor(FieldVerdict.UNOBSERVABLE))
                     // Must be shown, or rows chipped 不可验证 have no counterpart in the summary —
@@ -316,16 +319,25 @@ private fun VerdictCard(state: VerifyUiState) {
     }
 }
 
+internal fun partialVerificationDetail(summary: VerificationSummary): String {
+    val unchecked = buildList {
+        if (summary.ambiguous > 0) {
+            add("${summary.ambiguous} 个值与真实值相同，需改成明显不同的值")
+        }
+        if (summary.unobservable > 0) add("${summary.unobservable} 个本进程读不到")
+        if (summary.notVerifiable > 0) add("${summary.notVerifiable} 个没有系统读取接口")
+    }.joinToString("、")
+    return "${summary.spoofed} 个字段确认生效，另有 $unchecked，无法验证。" +
+        "没有发现矛盾，但也不能说全部生效。"
+}
+
 @Composable
 private fun ScopeCard(state: VerifyUiState) {
     val text = when (state.scope) {
         ObservationScope.SELF_HOOKED ->
             "调试构建：本应用已 hook 自身进程，所以这里的读回值可以直接证明 hook 是否生效（受控探针模式）。" +
-                // Being behind its own hook, this process cannot see the real value, so it cannot
-                // tell "spoof succeeded" from "spoof equals reality". Saying so beats silently
-                // skipping the check.
-                "注意：本进程看不到自己 hook 之前的真实值，因此无法判断某个字段配的值是否恰好与真实值相同；" +
-                "若相同，「已生效」并不能证明什么 —— 请在编辑页对照真实值挑一个明显不同的值。"
+                "同时会在一次受保护的基线读取中绕过自身 getter hook；若配置值恰好等于真值，" +
+                "该字段会标为「巧合」而不是「已生效」，避免把未运行误判成成功。"
         ObservationScope.REAL_BASELINE ->
             "正式构建不会 hook 自己的进程 —— 否则配置界面会把伪造值当成真值显示回来。" +
                 "因此本页读到的是本机真实值，不能用来判断目标 App 内的 hook 是否生效；" +
@@ -479,6 +491,7 @@ private fun ValueSlot(label: String, value: String?, modifier: Modifier = Modifi
 private fun VerdictChip(verdict: FieldVerdict) {
     val label = when (verdict) {
         FieldVerdict.SPOOFED -> "已生效"
+        FieldVerdict.AMBIGUOUS -> "无法区分"
         FieldVerdict.MISMATCH -> "未生效"
         FieldVerdict.UNOBSERVABLE -> "读不到"
         FieldVerdict.PASSTHROUGH -> "透传"
@@ -508,6 +521,7 @@ private fun CountPill(label: String, count: Int, color: Color) {
 @Composable
 private fun verdictColor(v: FieldVerdict): Color = when (v) {
     FieldVerdict.SPOOFED -> MaterialTheme.colorScheme.primary
+    FieldVerdict.AMBIGUOUS -> MaterialTheme.colorScheme.tertiary
     FieldVerdict.MISMATCH -> MaterialTheme.colorScheme.error
     FieldVerdict.UNOBSERVABLE -> MaterialTheme.colorScheme.tertiary
     FieldVerdict.PASSTHROUGH -> MaterialTheme.colorScheme.outline
