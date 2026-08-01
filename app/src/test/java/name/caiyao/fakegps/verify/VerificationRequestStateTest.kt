@@ -35,6 +35,21 @@ class VerificationRequestStateTest {
     }
 
     @Test
+    fun `client correlation accepts only the active request while coordinator keeps stale active`() {
+        val starting = VerificationRequestCoordinator.start(second)
+
+        assertTrue(ProbeResultCorrelation.matches(second, envelope(second)))
+        assertTrue(!ProbeResultCorrelation.matches(second, envelope(first)))
+        assertTrue(
+            !ProbeResultCorrelation.matches(
+                second,
+                envelope(second).copy(fingerprint = first.fingerprint),
+            ),
+        )
+        assertEquals(starting, VerificationRequestCoordinator.accept(starting, envelope(first)))
+    }
+
+    @Test
     fun `timeout drops any old green and retry starts a fresh correlation key`() {
         val delivered: VerificationRequestState =
             VerificationRequestState.Delivered(first, envelope(first))

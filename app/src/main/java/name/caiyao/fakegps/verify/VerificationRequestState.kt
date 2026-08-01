@@ -15,6 +15,12 @@ enum class ProbeFailure {
     INTERNAL_ERROR,
 }
 
+object ProbeResultCorrelation {
+    fun matches(request: ProbeRequest, observation: ProbeObservationEnvelope): Boolean =
+        request.requestId == observation.requestId &&
+            request.fingerprint == observation.fingerprint
+}
+
 sealed interface VerificationRequestState {
     data object Idle : VerificationRequestState
     data class Starting(val request: ProbeRequest) : VerificationRequestState

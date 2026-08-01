@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ResultReceiver
+import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -23,13 +24,30 @@ object HookVerificationClient {
     suspend fun request(context: Context, request: ProbeRequest): ProbeClientResult {
         val app = context.applicationContext
         val intent = HookVerificationService.intent(app, request)
+        Log.i(RuntimeEvidence.PROBE_TAG, RuntimeEvidence.probeRequested(request))
         val result = withTimeoutOrNull(TIMEOUT_MS) {
             suspendCancellableCoroutine { continuation ->
                 val completed = AtomicBoolean(false)
                 val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
                     override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                        if (completed.get() || !continuation.isActive) return
+                        val decoded = decodeResult(resultCode, resultData)
+                        if (decoded is ProbeClientResult.Delivered &&
+                            !ProbeResultCorrelation.matches(request, decoded.observation)
+                        ) {
+                            Log.i(
+                                RuntimeEvidence.PROBE_TAG,
+                                RuntimeEvidence.probeIgnored(
+                                    ProbeRequest(
+                                        decoded.observation.requestId,
+                                        decoded.observation.fingerprint,
+                                    ),
+                                ),
+                            )
+                            return
+                        }
                         if (!completed.compareAndSet(false, true) || !continuation.isActive) return
-                        continuation.resume(decodeResult(resultCode, resultData))
+                        continuation.resume(decoded)
                     }
                 }
                 intent.putExtra(HookVerificationService.EXTRA_RECEIVER, receiver)

@@ -63,6 +63,8 @@ public class MainHookRefreshContractTest {
         assertTrue(hook.contains("refreshIntervalSec"));
         assertTrue(hook.contains("claimScheduler"));
         assertTrue(hook.contains("claimHooks"));
+        assertTrue(hook.contains("schedulerOwned"));
+        assertTrue(timerCallback.contains("intervalChanged"));
         assertTrue(timerCallback.contains("currentDelayMs"));
     }
 

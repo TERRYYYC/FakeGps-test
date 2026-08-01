@@ -20,6 +20,7 @@ import name.caiyao.fakegps.config.PublishedConfig;
 import name.caiyao.fakegps.config.TransportSchemaContract;
 import name.caiyao.fakegps.verify.RuntimeSelfHookPolicy;
 import name.caiyao.fakegps.verify.RuntimeHookSentinel;
+import name.caiyao.fakegps.verify.RuntimeEvidence;
 
 /**
  * Xposed module entry point.
@@ -103,12 +104,20 @@ public class MainHook implements IXposedHookLoadPackage {
             debug("duplicate load-package callback; refresh scheduler already owned");
             return;
         }
+        XposedBridge.log(RuntimeEvidence.schedulerOwned(
+                lpparam.processName, REFRESH_SCHEDULER.currentDelayMs()));
         final Handler handler = new Handler(Looper.getMainLooper()) {
             @Override
             public void handleMessage(Message msg) {
                 if (msg.what == 1) {
+                    long previousDelayMs = REFRESH_SCHEDULER.currentDelayMs();
                     Snapshot refreshed = loadSnapshot();
                     CURRENT.set(refreshed);
+                    long nextDelayMs = REFRESH_SCHEDULER.currentDelayMs();
+                    if (previousDelayMs != nextDelayMs) {
+                        XposedBridge.log(RuntimeEvidence.intervalChanged(
+                                lpparam.processName, previousDelayMs, nextDelayMs));
+                    }
                     debug("timer refresh -> hasLocation=" + refreshed.hasLocation());
                 }
                 sendEmptyMessageDelayed(1, REFRESH_SCHEDULER.currentDelayMs());

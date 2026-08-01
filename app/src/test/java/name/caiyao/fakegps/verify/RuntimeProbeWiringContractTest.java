@@ -1,6 +1,7 @@
 package name.caiyao.fakegps.verify;
 
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -23,10 +24,14 @@ public class RuntimeProbeWiringContractTest {
     public void clientUsesCrossProcessResultReceiverAndPrivateService() throws Exception {
         String client = classBytecode("name.caiyao.fakegps.verify.HookVerificationClient")
                 + classBytecode(
-                        "name.caiyao.fakegps.verify.HookVerificationClient$request$result$1");
+                        "name.caiyao.fakegps.verify.HookVerificationClient$request$result$1")
+                + classBytecode(
+                        "name.caiyao.fakegps.verify.HookVerificationClient$request$result$1$1$receiver$1");
         assertTrue(client.contains("HookVerificationService"));
         assertTrue(client.contains("probe.receiver"));
         assertTrue(client.contains("startService"));
+        assertTrue(client.contains("probeRequested"));
+        assertTrue(client.contains("ProbeResultCorrelation"));
     }
 
     @Test
@@ -39,6 +44,7 @@ public class RuntimeProbeWiringContractTest {
         assertTrue(service.contains("ProbeObservationCodec"));
         assertTrue(service.contains("killProcess"));
         assertTrue(service.contains("compareAndSet"));
+        assertFalse(service.contains("probeDelivered"));
     }
 
     @Test
@@ -49,6 +55,8 @@ public class RuntimeProbeWiringContractTest {
         assertTrue(viewModel.contains("VerificationRequestCoordinator"));
         assertTrue(viewModel.contains("ProbeVerificationDecision"));
         assertTrue(viewModel.contains("HOOK_PROBE"));
+        assertTrue(viewModel.contains("probeDelivered"));
+        assertTrue(viewModel.contains("probeFailed"));
     }
 
     private static String classBytecode(String className) throws Exception {

@@ -1,6 +1,7 @@
 package name.caiyao.fakegps.ui.screen.verify
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -22,6 +23,7 @@ import name.caiyao.fakegps.verify.ProbeFailure
 import name.caiyao.fakegps.verify.ProbeRequest
 import name.caiyao.fakegps.verify.ProbeUiStatus
 import name.caiyao.fakegps.verify.ProbeVerificationDecision
+import name.caiyao.fakegps.verify.RuntimeEvidence
 import name.caiyao.fakegps.verify.VerificationRequestCoordinator
 import name.caiyao.fakegps.verify.VerificationRequestState
 import name.caiyao.fakegps.verify.VerificationEngine
@@ -219,16 +221,21 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 request,
                 result.failure,
             )
-            is ProbeClientResult.Delivered -> {
-                val accepted = VerificationRequestCoordinator.accept(requestState, result.observation)
-                if (accepted is VerificationRequestState.Starting) {
-                    VerificationRequestCoordinator.fail(
-                        accepted,
-                        request,
-                        ProbeFailure.PAYLOAD_MISMATCH,
-                    )
-                } else accepted
-            }
+            is ProbeClientResult.Delivered -> VerificationRequestCoordinator.accept(
+                requestState,
+                result.observation,
+            )
+        }
+        when (val terminal = requestState) {
+            is VerificationRequestState.Delivered -> Log.i(
+                RuntimeEvidence.PROBE_TAG,
+                RuntimeEvidence.probeDelivered(terminal.request, terminal.observation.values.size),
+            )
+            is VerificationRequestState.Failed -> Log.i(
+                RuntimeEvidence.PROBE_TAG,
+                RuntimeEvidence.probeFailed(terminal.request, terminal.failure),
+            )
+            else -> Unit
         }
         return ProbeVerificationDecision.resolve(requestState)
     }
