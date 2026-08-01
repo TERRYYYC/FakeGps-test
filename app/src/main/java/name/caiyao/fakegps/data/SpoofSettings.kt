@@ -2,6 +2,7 @@ package name.caiyao.fakegps.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import name.caiyao.fakegps.config.PublishPropagation
@@ -80,7 +81,7 @@ class SpoofSettings private constructor(private val prefs: SharedPreferences) {
      */
     fun setRefreshIntervalSec(seconds: Int) {
         val sanitized = PublishPropagation.sanitizeInterval(seconds)
-        prefs.edit().putInt(KEY_REFRESH_INTERVAL_SEC, sanitized).apply()
+        prefs.edit { putInt(KEY_REFRESH_INTERVAL_SEC, sanitized) }
         _refreshIntervalSec.value = sanitized
     }
 

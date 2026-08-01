@@ -13,8 +13,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Badge
@@ -105,7 +105,7 @@ fun ProfileEditorScreen(
                 // wrong and blame the spoof for a publish failure.
                 ExtendedFloatingActionButton(
                     onClick = { vm.saveAndVerify() },
-                    icon = { Icon(Icons.Default.FactCheck, contentDescription = null) },
+                    icon = { Icon(Icons.AutoMirrored.Filled.FactCheck, contentDescription = null) },
                     text = { Text("保存并验证") },
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                     modifier = Modifier.padding(bottom = 12.dp),
