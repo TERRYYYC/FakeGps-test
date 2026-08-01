@@ -45,6 +45,12 @@ fun AppNavGraph(navController: NavHostController) {
                 lat = route.lat,
                 lon = route.lon,
                 onBack = { navController.popBackStack() },
+                onVerify = {
+                    // Replace the editor in the back stack: after verifying, "back" should return
+                    // to the profile list, not to a stale editor holding an already-saved draft.
+                    navController.popBackStack()
+                    navController.navigate(Screen.Verify)
+                },
             )
         }
         composable<Screen.Settings> {

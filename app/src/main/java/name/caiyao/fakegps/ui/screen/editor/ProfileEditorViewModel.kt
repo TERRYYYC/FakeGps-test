@@ -86,7 +86,17 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
         if (previousRouting != nextRouting) refreshReference(_fieldValues.value)
     }
 
-    fun save() {
+    /**
+     * Emitted only when a save both succeeded AND was requested with "保存并验证".
+     * Kept separate from [saved] so a failed publish cannot navigate anywhere — see
+     * [postSaveAction].
+     */
+    private val _verifyRequested = MutableStateFlow(false)
+    val verifyRequested: StateFlow<Boolean> = _verifyRequested
+
+    fun saveAndVerify() = save(thenVerify = true)
+
+    fun save(thenVerify: Boolean = false) {
         viewModelScope.launch {
             val values = _fieldValues.value
             val errors = ProfileFieldDraft.validationErrors(values)
@@ -99,10 +109,12 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
                 val entity = mapToEntity(values, editingId)
                 val result = repo.save(entity)
                 editingId = result.id
-                if (result.published) {
-                    _saved.value = true
-                } else {
-                    _notice.value = "档案已写入数据库，但未发布给 Hook；当前目标 App 仍使用上一份配置"
+                when (postSaveAction(result.published, thenVerify)) {
+                    PostSaveAction.VERIFY -> _verifyRequested.value = true
+                    PostSaveAction.BACK -> _saved.value = true
+                    PostSaveAction.STAY ->
+                        _notice.value =
+                            "档案已写入数据库，但未发布给 Hook；当前目标 App 仍使用上一份配置"
                 }
             }.onFailure { failure ->
                 _notice.value = "保存失败：${failure.message ?: failure.javaClass.simpleName}"

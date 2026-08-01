@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Badge
@@ -23,6 +24,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,6 +61,7 @@ fun ProfileEditorScreen(
     lat: Double,
     lon: Double,
     onBack: () -> Unit,
+    onVerify: () -> Unit = {},
     vm: ProfileEditorViewModel = viewModel(),
 ) {
     val isNew = profileId == -1L || profileId == 0L
@@ -72,8 +75,16 @@ fun ProfileEditorScreen(
         vm.load(if (isNew) -1L else profileId, lat, lon)
     }
 
+    val verifyRequested by vm.verifyRequested.collectAsState()
+
     LaunchedEffect(saved) {
         if (saved) onBack()
+    }
+
+    // Only ever set after a SUCCESSFUL publish (see postSaveAction) — a failed publish keeps the
+    // user here with the notice instead of sending them to verify a payload the hook never got.
+    LaunchedEffect(verifyRequested) {
+        if (verifyRequested) onVerify()
     }
 
     Scaffold(
@@ -88,8 +99,20 @@ fun ProfileEditorScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { vm.save() }) {
-                Icon(Icons.Default.Save, contentDescription = "保存")
+            Column(horizontalAlignment = Alignment.End) {
+                // Saves first and only then navigates, and only if the payload actually reached
+                // the hook — verifying an unpublished draft would report every changed field as
+                // wrong and blame the spoof for a publish failure.
+                ExtendedFloatingActionButton(
+                    onClick = { vm.saveAndVerify() },
+                    icon = { Icon(Icons.Default.FactCheck, contentDescription = null) },
+                    text = { Text("保存并验证") },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+                FloatingActionButton(onClick = { vm.save() }) {
+                    Icon(Icons.Default.Save, contentDescription = "保存")
+                }
             }
         },
     ) { innerPadding ->
