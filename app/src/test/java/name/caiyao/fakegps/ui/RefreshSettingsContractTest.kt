@@ -62,7 +62,7 @@ class RefreshSettingsContractTest {
         }
         assertFalse("zero would busy-loop the hook", PublishPropagation.isValidInterval(0))
         assertFalse("negative is meaningless", PublishPropagation.isValidInterval(-5))
-        assertFalse("a value off the policy list must not be honoured", PublishPropagation.isValidInterval(7))
+        assertFalse("a value off the policy list must not be honoured", PublishPropagation.isValidInterval(15))
     }
 
     // --- 3. A stored value is sanitised through the policy before anyone acts on it ---
@@ -89,27 +89,16 @@ class RefreshSettingsContractTest {
         assertEquals(chosen, PublishPropagation.sanitizeInterval(chosen))
     }
 
-    // --- 4. The pending window follows the CONFIGURED interval, not a frozen constant ---
+    // --- 4. The pending window stays on the default cadence (see the NOTE in PublishPropagation) ---
 
+    /** The plan fixes the offered set; an extra option must not creep in unreviewed. */
     @Test
-    fun pendingWindowTracksTheConfiguredInterval() {
-        val longest = PublishPropagation.REFRESH_INTERVAL_CHOICES_SEC.last()
-        val publishedAt = 1_000_000L
-        val justInsideLongest = publishedAt + longest * 1000L - 1
-
-        assertTrue(
-            "with a longer configured interval the hook may still be serving the old snapshot",
-            PublishPropagation.isPending(publishedAt, justInsideLongest, longest),
-        )
-        assertFalse(
-            "past the configured interval the hook must have re-read",
-            PublishPropagation.isPending(publishedAt, publishedAt + longest * 1000L, longest),
-        )
+    fun choicesMatchThePlan() {
+        assertEquals(listOf(5, 10, 30, 60), PublishPropagation.REFRESH_INTERVAL_CHOICES_SEC)
     }
 
-    /** The existing single-argument form must keep behaving exactly as before. */
     @Test
-    fun legacyPendingOverloadStillUsesTheDefaultInterval() {
+    fun pendingWindowUsesTheDefaultInterval() {
         val publishedAt = 1_000_000L
         assertTrue(PublishPropagation.isPending(publishedAt, publishedAt + 29_999))
         assertFalse(PublishPropagation.isPending(publishedAt, publishedAt + 30_000))

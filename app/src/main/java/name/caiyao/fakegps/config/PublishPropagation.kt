@@ -13,8 +13,14 @@ package name.caiyao.fakegps.config
  */
 object PublishPropagation {
 
-    /** Mirrors MainHook's refresh cadence: `handler.sendEmptyMessageDelayed(1, 30 * 1000)`. */
-    const val HOOK_REFRESH_INTERVAL_MS = 30_000L
+    /** Seconds; the cadence used when nothing has been configured. */
+    const val DEFAULT_REFRESH_INTERVAL_SEC = 30
+
+    /**
+     * Mirrors MainHook's default refresh cadence, DERIVED from
+     * [DEFAULT_REFRESH_INTERVAL_SEC] so the number exists exactly once.
+     */
+    const val HOOK_REFRESH_INTERVAL_MS = DEFAULT_REFRESH_INTERVAL_SEC * 1000L
 
     // ---------------------------------------------------------------------------------------
     // Refresh interval policy
@@ -30,11 +36,8 @@ object PublishPropagation {
     // Android types, so the hook side can share it verbatim.
     // ---------------------------------------------------------------------------------------
 
-    /** Seconds; the cadence used when nothing has been configured. Equals the hook's own default. */
-    const val DEFAULT_REFRESH_INTERVAL_SEC = 30
-
     /**
-     * The intervals a user may pick, ascending.
+     * The intervals a user may pick, ascending. Fixed by the plan: `5 / 10 / 30 / 60`.
      *
      * Bounded on both ends on purpose: below ~5 s the periodic prefs re-read stops being free
      * (the runtime currently re-reads more than once per cycle per process — see the duplicate
@@ -42,7 +45,7 @@ object PublishPropagation {
      * indistinguishable from a broken hook, which is exactly the confusion this setting exists
      * to remove.
      */
-    val REFRESH_INTERVAL_CHOICES_SEC: List<Int> = listOf(5, 10, 15, 30, 60)
+    val REFRESH_INTERVAL_CHOICES_SEC: List<Int> = listOf(5, 10, 30, 60)
 
     /** Whether [seconds] is a cadence the hook is allowed to run at. */
     fun isValidInterval(seconds: Int): Boolean = seconds in REFRESH_INTERVAL_CHOICES_SEC
@@ -78,21 +81,23 @@ object PublishPropagation {
      * outcome than showing one spurious red, so this only ever softens a verdict inside a bounded,
      * provable window.
      */
-    fun isPending(publishedAtMs: Long?, nowMs: Long): Boolean =
-        isPending(publishedAtMs, nowMs, DEFAULT_REFRESH_INTERVAL_SEC)
-
-    /**
-     * [isPending] against the CONFIGURED cadence.
-     *
-     * Once the interval is user-selectable the window must track it: computing "may still be
-     * pending" from a frozen 30 s while the hook actually re-reads every 60 s would resurrect the
-     * false-red this whole mechanism exists to suppress — and at 5 s it would keep excusing a
-     * genuinely failed publish for 25 s longer than warranted.
-     */
-    fun isPending(publishedAtMs: Long?, nowMs: Long, refreshIntervalSec: Int): Boolean {
+    fun isPending(publishedAtMs: Long?, nowMs: Long): Boolean {
         if (publishedAtMs == null) return false
         val elapsed = nowMs - publishedAtMs
         if (elapsed < 0) return false
-        return elapsed < sanitizeInterval(refreshIntervalSec) * 1000L
+        return elapsed < HOOK_REFRESH_INTERVAL_MS
     }
+
+    // NOTE — deliberately NOT parameterised by the configured interval yet.
+    //
+    // A "use the newly chosen interval" overload looks like the obvious completion of this policy,
+    // and it is wrong on the transition: a hook process that is mid-sleep on the OLD 60 s timer
+    // does not learn about a new 5 s cadence until that timer fires. Ending the pending window
+    // after 5 s would report a false red for the following 55 s — inventing exactly the failure
+    // mode this window exists to suppress.
+    //
+    // Correctly bounding it needs BOTH the old and the new cadence (and the scheduler's own
+    // handoff semantics), which live in the refresh-scheduler task, not here. Until then the
+    // window stays on the default and the Settings copy warns that the first cycle after a change
+    // may still take the previous interval.
 }

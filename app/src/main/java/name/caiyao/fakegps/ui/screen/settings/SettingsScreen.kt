@@ -49,6 +49,7 @@ fun SettingsScreen(
     val hourEnd by vm.activeHourEnd.collectAsState()
 
     val refreshIntervalSec by vm.refreshIntervalSec.collectAsState()
+    val publishFailure by vm.publishFailure.collectAsState()
 
     var showModeDialog by remember { mutableStateOf(false) }
     var showRefreshDialog by remember { mutableStateOf(false) }
@@ -73,6 +74,25 @@ fun SettingsScreen(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState()),
         ) {
+            // A setting that was persisted but never reached the hook must say so: the preference
+            // is kept, but presenting it as in effect would reproduce the exact "changed it and
+            // nothing happened" confusion this screen is meant to remove.
+            publishFailure?.let { message ->
+                ListItem(
+                    headlineContent = {
+                        Text(
+                            text = message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    },
+                    supportingContent = {
+                        TextButton(onClick = { vm.dismissPublishFailure() }) { Text("知道了") }
+                    },
+                )
+                HorizontalDivider()
+            }
+
             // --- Hook 配置 ---
             SectionHeader("Hook 配置")
             ListItem(
@@ -179,7 +199,8 @@ fun SettingsScreen(
                     Text(
                         text = "Hook 按这个周期重新读取配置。\n" +
                                 "改完档案后，最长要等一个周期才会在目标 App 上生效——" +
-                                "间隔越短生效越快，代价是更频繁的读取。",
+                                "间隔越短生效越快，代价是更频繁的读取。\n" +
+                                "注意：刚改完周期时，第一次刷新可能仍按上一个周期等待。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 12.dp),
