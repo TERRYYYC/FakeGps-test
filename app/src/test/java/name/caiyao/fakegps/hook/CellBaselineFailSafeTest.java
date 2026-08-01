@@ -63,26 +63,20 @@ public class CellBaselineFailSafeTest {
 
     @Test
     public void lteGroupIsConfiguredWhenOnlyTacIsSet() {
-        // Regression: hasLteCell() used to demand `ci`, so a tac-only profile was silently treated
+        // Regression: LTE construction used to demand `ci`, so a tac-only profile was silently treated
         // as "no LTE configured" and every LTE hook no-op'd.
         Snapshot s = new Snapshot();
         s.tac = 26999;
-        assertTrue(s.hasLteCell());
+        assertTrue(s.hasLteRatConstruction());
     }
 
     @Test
     public void emptySnapshotConfiguresNoCellGroup() {
         Snapshot s = new Snapshot();
-        assertFalse(s.hasLteCell());
-        assertFalse(s.hasGsmCell());
-        assertFalse(s.hasNrCell());
-    }
-
-    @Test
-    public void carrierOnlyProfileStillCensusesRealNeighborsForGetterBypass() {
-        assertTrue(Snapshot.shouldCensusRealNeighborsForCarrier("Carrier", false));
-        assertTrue(Snapshot.shouldCensusRealNeighborsForCarrier("", false));
-        assertFalse(Snapshot.shouldCensusRealNeighborsForCarrier(null, false));
-        assertFalse(Snapshot.shouldCensusRealNeighborsForCarrier("Carrier", true));
+        assertFalse(s.hasLteRatConstruction());
+        assertFalse(s.hasGsmRatConstruction());
+        assertFalse(s.hasWcdmaRatConstruction());
+        assertFalse(s.hasNrRatConstruction());
+        assertFalse(s.hasCellReconstructionDecision());
     }
 }

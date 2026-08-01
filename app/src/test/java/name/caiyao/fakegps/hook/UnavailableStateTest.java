@@ -138,11 +138,14 @@ public class UnavailableStateTest {
                 "lac", "tac", "nci", "band")));
 
         assertFalse("unavailable is a getter decision, not a request to fabricate GSM",
-                s.hasGsmCell());
+                s.hasGsmRatConstruction());
+        assertFalse("unavailable is a getter decision, not a request to fabricate WCDMA",
+                s.hasWcdmaRatConstruction());
         assertFalse("unavailable is a getter decision, not a request to fabricate LTE",
-                s.hasLteCell());
+                s.hasLteRatConstruction());
         assertFalse("unavailable is a getter decision, not a request to fabricate NR",
-                s.hasNrCell());
+                s.hasNrRatConstruction());
+        assertFalse(s.hasCellReconstructionDecision());
         assertFalse("unavailable must not synthesize a PhysicalChannelConfig",
                 s.hasPhysicalChannelConfig());
     }
@@ -155,7 +158,7 @@ public class UnavailableStateTest {
         assertTrue("existing CellLocation must receive the unavailable projection",
                 s.hasGsmCellLocationDecision());
         assertFalse("unavailable-only must still not fabricate a CellInfo RAT",
-                s.hasGsmCell());
+                s.hasCellReconstructionDecision());
     }
 
     @Test
@@ -165,7 +168,9 @@ public class UnavailableStateTest {
 
         assertTrue("PSC is exposed by GsmCellLocation even without GSM reconstruction fields",
                 s.hasGsmCellLocationDecision());
-        assertFalse(s.hasGsmCell());
+        assertFalse("PSC must not select GSM", s.hasGsmRatConstruction());
+        assertTrue("PSC is WCDMA-specific and may select WCDMA construction",
+                s.hasWcdmaRatConstruction());
     }
 
     @Test
@@ -187,6 +192,18 @@ public class UnavailableStateTest {
         assertTrue(Snapshot.shouldPreserveRealCell(true, false, false));
         assertFalse(Snapshot.shouldPreserveRealCell(true, true, false));
         assertFalse(Snapshot.shouldPreserveRealCell(false, false, true));
+        assertTrue("configured neighbors must not delete the real serving cell",
+                Snapshot.shouldPreserveRealCell(true, false, true));
+    }
+
+    @Test
+    public void preservedCellBypass_dependsOnRegistrationAndServingReconstruction() {
+        assertTrue("real neighbor always bypasses serving getter hooks",
+                Snapshot.shouldBypassPreservedRealCell(false, false));
+        assertFalse("neighbor-only mutation keeps the framework serving object registered",
+                Snapshot.shouldBypassPreservedRealCell(true, false));
+        assertTrue("an old serving RAT becomes a bypassed neighbor when a new RAT is built",
+                Snapshot.shouldBypassPreservedRealCell(true, true));
     }
 
     @Test(expected = IllegalArgumentException.class)

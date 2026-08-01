@@ -45,6 +45,16 @@ public class CarrierSurfaceCoverageTest {
     }
 
     @Test
+    public void cellListHooksUseCanonicalRatConstructionDecision() throws Exception {
+        String bytecode = classBytecode(HookUtils.class);
+        assertTrue(bytecode.contains("hasCellReconstructionDecision"));
+        assertTrue(bytecode.contains("hasCellListMutationDecision"));
+        assertTrue(bytecode.contains("hasGsmRatConstruction"));
+        assertTrue(bytecode.contains("hasWcdmaRatConstruction"));
+        assertTrue(bytecode.contains("registerRealNeighborBypasses"));
+    }
+
+    @Test
     public void physicalUnavailableGetterRegistryIsApiGatedAndComplete() {
         assertEquals(
                 new LinkedHashSet<>(Arrays.asList(

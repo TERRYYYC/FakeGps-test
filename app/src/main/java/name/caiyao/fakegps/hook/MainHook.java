@@ -74,8 +74,7 @@ public class MainHook implements IXposedHookLoadPackage {
         CURRENT.set(initial);
         XposedBridge.log(TAG + ": Loaded config for " + lpparam.packageName
                 + " | location=" + initial.hasLocation()
-                + " | cell=" + initial.hasGsmCell()
-                + " | lte=" + initial.hasLteCell());
+                + " | cellRebuild=" + initial.hasCellReconstructionDecision());
 
         // 2. Register hooks ONCE — they read CURRENT.get() at invocation time
         HookUtils.registerAllHooks(lpparam.classLoader);
@@ -199,7 +198,7 @@ public class MainHook implements IXposedHookLoadPackage {
             debug("prefs loaded fields=" + (fields == null ? 0 : fields.length())
                     + " unavailable=" + unavailable.asList().size()
                     + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude
-                    + " hasLte=" + s.hasLteCell() + " hasGsm=" + s.hasGsmCell());
+                    + " rebuildCells=" + s.hasCellReconstructionDecision());
             return s;
         } catch (Throwable t) {
             // Read/parse failure: keep last-known-good (do NOT revert to real device data mid-test).

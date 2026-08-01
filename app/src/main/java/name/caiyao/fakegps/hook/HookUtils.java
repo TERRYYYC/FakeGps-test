@@ -286,7 +286,7 @@ class HookUtils {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             Snapshot s = currentSnapshot();
-                            if (s.hasGsmCell() || s.hasLteCell() || s.hasNrCell()) {
+                            if (shouldRebuildServingCells(s)) {
                                 param.setResult(1);
                             }
                             // else: passthrough real phone count (preserves dual-SIM)
@@ -301,7 +301,7 @@ class HookUtils {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         Snapshot s = currentSnapshot();
-                        if (!s.hasGsmCell()) return;
+                        if (!s.hasGsmRatConstruction()) return;
                         param.setResult(new ArrayList<>());
                     }
                 }));
@@ -313,8 +313,8 @@ class HookUtils {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         Snapshot s = currentSnapshot();
-                        if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) {
-                            registerRealNeighborBypassesForCarrier(s, param.getResult());
+                        if (!shouldMutateCellList(s)) {
+                            registerRealNeighborBypasses(param.getResult());
                             return;
                         }
                         // The real result is the passthrough baseline for fields the user left unset.
@@ -355,7 +355,7 @@ class HookUtils {
                             return;
                         }
                         Snapshot s = currentSnapshot();
-                        if (s.hasGsmCell() || s.hasLteCell() || s.hasNrCell()) {
+                        if (shouldRebuildServingCells(s)) {
                             param.setResult(true);
                         }
                     }
@@ -786,8 +786,8 @@ class HookUtils {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Snapshot s = currentSnapshot();
-                            if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) {
-                                registerRealNeighborBypassesForCarrier(s, param.args[0]);
+                            if (!shouldMutateCellList(s)) {
+                                registerRealNeighborBypasses(param.args[0]);
                                 return;
                             }
                             ArrayList spoofed = spoofedCellsOrPassthrough(s, param.args[0]);
@@ -1006,8 +1006,8 @@ class HookUtils {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = currentSnapshot();
-                        if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) {
-                            registerRealNeighborBypassesForCarrier(s, param.args[0]);
+                        if (!shouldMutateCellList(s)) {
+                            registerRealNeighborBypasses(param.args[0]);
                             return;
                         }
                         ArrayList spoofed = spoofedCellsOrPassthrough(s, param.args[0]);
@@ -1126,8 +1126,8 @@ class HookUtils {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = currentSnapshot();
-                        if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) {
-                            registerRealNeighborBypassesForCarrier(s, param.args[0]);
+                        if (!shouldMutateCellList(s)) {
+                            registerRealNeighborBypasses(param.args[0]);
                             return;
                         }
                         ArrayList spoofed = spoofedCellsOrPassthrough(s, param.args[0]);
@@ -1390,7 +1390,7 @@ class HookUtils {
                         // Those are already hooked via class-level hooks, so nothing extra needed.
                         // However, log for debugging that a sub-TM was created.
                         Snapshot s = currentSnapshot();
-                        if (s.hasGsmCell() || s.hasLteCell() || s.hasNrCell()) {
+                        if (shouldRebuildServingCells(s)) {
                             XposedBridge.log(TAG + ": createForSubscriptionId(" + param.args[0]
                                     + ") intercepted — class-level hooks will apply");
                         }
@@ -1406,7 +1406,7 @@ class HookUtils {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             Snapshot s = currentSnapshot();
-                            if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
+                            if (!shouldRebuildServingCells(s)) return;
 
                             // Trim to first subscription only to prevent dual-SIM detection
                             Object result = param.getResult();
@@ -1430,7 +1430,7 @@ class HookUtils {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             Snapshot s = currentSnapshot();
-                            if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
+                            if (!shouldRebuildServingCells(s)) return;
                             int count = (int) param.getResult();
                             if (count > 1) {
                                 param.setResult(1);
@@ -1447,7 +1447,7 @@ class HookUtils {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             Snapshot s = currentSnapshot();
-                            if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
+                            if (!shouldRebuildServingCells(s)) return;
                             Object result = param.getResult();
                             if (result instanceof List) {
                                 List<?> subs = (List<?>) result;
@@ -1471,7 +1471,7 @@ class HookUtils {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             Snapshot s = currentSnapshot();
-                            if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
+                            if (!shouldRebuildServingCells(s)) return;
                             int slotIndex = (int) param.args[0];
                             if (slotIndex > 0) {
                                 param.setResult(null);
@@ -1493,7 +1493,7 @@ class HookUtils {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             Snapshot s = currentSnapshot();
-                            if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
+                            if (!shouldRebuildServingCells(s)) return;
                             int max = (int) param.getResult();
                             if (max > 1) {
                                 param.setResult(1);
@@ -1511,7 +1511,7 @@ class HookUtils {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             Snapshot s = currentSnapshot();
-                            if (!s.hasGsmCell() && !s.hasLteCell() && !s.hasNrCell()) return;
+                            if (!shouldRebuildServingCells(s)) return;
                             int slotIndex = (int) param.args[0];
                             if (slotIndex > 0) {
                                 param.setResult(new int[0]);
@@ -2090,17 +2090,21 @@ class HookUtils {
         boolean configuredNeighbors = s.neighborCellsJson != null;
         for (CellBaseline.RealCell real : base.realCells) {
             boolean replacingRat =
-                    (real.value instanceof CellInfoLte && s.hasLteCell())
-                    || (real.value instanceof CellInfoGsm && s.hasGsmCell())
+                    (real.value instanceof CellInfoLte && s.hasLteRatConstruction())
+                    || (real.value instanceof CellInfoGsm && s.hasGsmRatConstruction())
                     || (real.value instanceof CellInfoWcdma
-                        && s.hasGsmCell() && (s.psc != null || s.uarfcn != null))
+                        && s.hasWcdmaRatConstruction())
                     || (Build.VERSION.SDK_INT >= 29
-                        && real.value instanceof android.telephony.CellInfoNr && s.hasNrCell());
+                        && real.value instanceof android.telephony.CellInfoNr
+                        && s.hasNrRatConstruction());
             if (!Snapshot.shouldPreserveRealCell(
                     real.registered, replacingRat, configuredNeighbors)) {
                 continue;
             }
-            registerNeighborBypassTree(real.value);
+            if (Snapshot.shouldBypassPreservedRealCell(
+                    real.registered, s.hasCellReconstructionDecision())) {
+                registerNeighborBypassTree(real.value);
+            }
             built.add(real.value);
         }
     }
@@ -2113,12 +2117,9 @@ class HookUtils {
         catch (Throwable ignored) {}
     }
 
-    /** Carrier-only profiles do not rebuild the list, but real neighbors must remain untouched. */
-    private static void registerRealNeighborBypassesForCarrier(Snapshot s, Object cellInfos) {
-        if (!Snapshot.shouldCensusRealNeighborsForCarrier(s.operatorName, false)
-                || !(cellInfos instanceof List)) {
-            return;
-        }
+    /** A passthrough list still needs a neighbor census before global serving getter hooks run. */
+    private static void registerRealNeighborBypasses(Object cellInfos) {
+        if (!(cellInfos instanceof List)) return;
         for (Object info : (List<?>) cellInfos) {
             boolean registered = false;
             try { registered = (Boolean) XposedHelpers.callMethod(info, "isRegistered"); }
@@ -2131,8 +2132,9 @@ class HookUtils {
      * Spoofed {@link GsmCellLocation}, or {@code null} to pass the real one through.
      *
      * Fixes an unboxing NPE: {@code setLacAndCid(s.lac, s.cid)} dereferenced null whenever the
-     * profile configured any GSM-group field other than lac/cid. Because {@code tryHook} only
-     * guards hook REGISTRATION, that NPE surfaced inside the target app's own listener callback.
+     * profile configured a CellLocation field without both lac/cid values. Because
+     * {@code tryHook} only guards hook REGISTRATION, that NPE surfaced inside the target app's
+     * own listener callback.
      * Unset fields now fall back to the device's real values, and if neither side supplies lac/cid
      * we pass through rather than inventing a cell. Activation is governed separately by
      * {@link Snapshot#hasGsmCellLocationDecision()} so unavailable-only decisions reach this
@@ -2175,6 +2177,16 @@ class HookUtils {
         return s.hasGsmCellLocationDecision();
     }
 
+    /** One topology guard shared by getters, callbacks and subscription surfaces. */
+    private static boolean shouldRebuildServingCells(Snapshot s) {
+        return s.hasCellReconstructionDecision();
+    }
+
+    /** Neighbor replacement mutates the list without selecting or rebuilding a serving RAT. */
+    private static boolean shouldMutateCellList(Snapshot s) {
+        return s.hasCellListMutationDecision();
+    }
+
     private static ArrayList buildCellInfoList(Snapshot s, CellBaseline base) {
         // Weak identity registry: old neighbor objects are GC'd naturally
         // when the app drops references. No manual clear() needed.
@@ -2186,7 +2198,7 @@ class HookUtils {
                 "mnc", s.mnc, base.mncString, s.isUnavailable("mnc"));
 
         // GSM cell
-        if (s.hasGsmCell()) {
+        if (s.hasGsmRatConstruction()) {
             try {
                 CellInfoGsm gsm = (CellInfoGsm) XposedHelpers.newInstance(CellInfoGsm.class);
                 int lac = pick(s.lac, base.lac, 0);
@@ -2221,7 +2233,7 @@ class HookUtils {
         }
 
         // LTE cell
-        if (s.hasLteCell()) {
+        if (s.hasLteRatConstruction()) {
             try {
                 CellInfoLte lte = (CellInfoLte) XposedHelpers.newInstance(CellInfoLte.class);
                 // NB: `int ci = s.ci` used to unbox a null whenever the profile configured any LTE
@@ -2262,8 +2274,8 @@ class HookUtils {
             }
         }
 
-        // WCDMA cell — if we have PSC or basic cell identity
-        if (s.hasGsmCell() && (s.psc != null || s.uarfcn != null)) {
+        // WCDMA is selected only by WCDMA-specific identity, never shared LAC/CID/PLMN.
+        if (s.hasWcdmaRatConstruction()) {
             try {
                 CellInfoWcdma wcdma = (CellInfoWcdma) XposedHelpers.newInstance(CellInfoWcdma.class);
                 int lac = pick(s.lac, base.lac, 0);
@@ -2288,7 +2300,7 @@ class HookUtils {
         }
 
         // NR/5G cell (API 29+)
-        if (s.hasNrCell() && Build.VERSION.SDK_INT >= 29) {
+        if (s.hasNrRatConstruction() && Build.VERSION.SDK_INT >= 29) {
             try {
                 Class<?> cellInfoNrClass = XposedHelpers.findClass("android.telephony.CellInfoNr", null);
                 Class<?> cellIdNrClass = XposedHelpers.findClass("android.telephony.CellIdentityNr", null);

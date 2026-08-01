@@ -51,4 +51,18 @@ serving RAT。
 纯 JVM predicate/bytecode coverage、Debug/Release/R8 构建验证；不安装 APK、不改 LSPosed、不跑
 instrumentation，也不宣称新的 runtime feature-complete 证据。
 
+## 修复与验证结果
+
+- `Snapshot` 现在分别暴露 GSM、WCDMA、LTE、NR 的 RAT-specific construction predicate，
+  `hasCellReconstructionDecision()` 是唯一 serving topology 汇总入口；shared identity、signal-only
+  与 unavailable-only 均不会构造 `CellInfo`。
+- `neighbor_cells_json` 只通过 `hasCellListMutationDecision()` 激活列表变换：它移除真实邻区并追加
+  配置邻区，但保留框架 serving 对象及其注册态，不选择 RAT。
+- explicit serving reconstruction 时，未被同 RAT 替换的真实 serving 会作为 bypass 对象保留，
+  `CellInfo.isRegistered()` 返回 false；新构造的目标 RAT 才是 registered serving。
+- Red 阶段新增状态机测试先因 production predicate 缺失而编译失败；Green 后完整强制重跑通过：
+  JVM **252 tests / 0 failures / 0 errors / 0 skipped**，Python **24 tests OK**，
+  `compileDebugAndroidTestKotlin`、Debug APK、Release/R8、`lintVitalRelease`、shell syntax 与
+  `git diff --check` 全绿。`lintDebug` 保持存量 **20 errors / 158 warnings**，本轮改动文件 0 error。
+
 [砚砚/gpt-5.6-sol🐾]

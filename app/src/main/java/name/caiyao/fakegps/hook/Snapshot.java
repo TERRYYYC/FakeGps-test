@@ -29,11 +29,6 @@ class Snapshot {
         return extractingBaseline ? PASSTHROUGH : configured;
     }
 
-    static boolean shouldCensusRealNeighborsForCarrier(
-            String operatorName, boolean rebuildingCellList) {
-        return operatorName != null && !rebuildingCellList;
-    }
-
     private Set<String> unavailableFields = Collections.emptySet();
 
     /**
@@ -62,7 +57,13 @@ class Snapshot {
     /** Keep real cells unless the user supplied neighbors or this registered RAT is replaced. */
     static boolean shouldPreserveRealCell(
             boolean registered, boolean replacingRat, boolean configuredNeighborList) {
-        return !configuredNeighborList && (!registered || !replacingRat);
+        return registered ? !replacingRat : !configuredNeighborList;
+    }
+
+    /** A preserved serving cell stays serving only when no explicit serving RAT is rebuilt. */
+    static boolean shouldBypassPreservedRealCell(
+            boolean registered, boolean rebuildingServingRat) {
+        return !registered || rebuildingServingRat;
     }
 
     /**
@@ -89,8 +90,8 @@ class Snapshot {
      *
      * Returns null when neither side has one, which callers MUST treat as "pass the real
      * CellLocation through". Previously the caller unboxed {@code s.lac}/{@code s.cid} directly, so
-     * a profile configuring any other GSM-group field (mcc alone now satisfies hasGsmCell) threw an
-     * NPE inside the target app's own listener callback (FC-4).
+     * a profile configuring a CellLocation field without both LAC/CID values threw an NPE inside
+     * the target app's own listener callback (FC-4).
      */
     static Integer resolveCellField(Integer configured, Integer real) {
         return configured != null ? configured : real;
@@ -327,32 +328,40 @@ class Snapshot {
     // ==========================================================
 
     boolean hasLocation() { return latitude != null && longitude != null; }
-    // "Configured" = ANY field in the group is set, matching the NULL = passthrough contract.
-    // Previously these demanded a specific key (hasLteCell required `ci`), so a profile that set
-    // only `tac` was treated as "no LTE config" and every LTE hook silently no-op'd.
+    // A serving RAT may only be constructed from identity fields unique to that RAT. Shared
+    // MCC/MNC/LAC/CID values are projected onto framework-owned identities by getter hooks.
     private boolean hasSpoofValue(String field, Object value) {
         return value != null && !isUnavailable(field);
     }
-    boolean hasGsmCell() { return hasSpoofValue("lac", lac) || hasSpoofValue("cid", cid)
-            || hasSpoofValue("mcc", mcc) || hasSpoofValue("mnc", mnc)
-            || hasSpoofValue("arfcn", arfcn) || hasSpoofValue("bsic", bsic); }
+    boolean hasGsmRatConstruction() {
+        return hasSpoofValue("arfcn", arfcn) || hasSpoofValue("bsic", bsic);
+    }
+    boolean hasWcdmaRatConstruction() {
+        return hasSpoofValue("psc", psc) || hasSpoofValue("uarfcn", uarfcn);
+    }
     /**
      * Whether an existing {@code GsmCellLocation} must be transformed.
      *
-     * <p>This is deliberately broader than {@link #hasGsmCell()}: an unavailable-only decision
-     * must not fabricate a new {@code CellInfo} RAT, but it must still project {@code -1} onto an
-     * object already returned by Android. PSC belongs here because it is exposed by
-     * {@code GsmCellLocation} even though it is a WCDMA identity field.
+     * <p>An unavailable-only decision must not fabricate a new {@code CellInfo} RAT, but it must
+     * still project {@code -1} onto an object already returned by Android. PSC belongs here because
+     * it is exposed by {@code GsmCellLocation} even though it is a WCDMA identity field.
      */
     boolean hasGsmCellLocationDecision() {
         return lac != null || cid != null || psc != null
                 || isUnavailable("lac") || isUnavailable("cid") || isUnavailable("psc");
     }
-    boolean hasLteCell() { return hasSpoofValue("ci", ci) || hasSpoofValue("tac", tac)
+    boolean hasLteRatConstruction() { return hasSpoofValue("ci", ci) || hasSpoofValue("tac", tac)
             || hasSpoofValue("pci", pci) || hasSpoofValue("earfcn", earfcn)
             || hasSpoofValue("lte_bandwidth", lteBandwidth); }
-    boolean hasNrCell() { return hasSpoofValue("nci", nci) || hasSpoofValue("nr_tac", nrTac)
+    boolean hasNrRatConstruction() { return hasSpoofValue("nci", nci) || hasSpoofValue("nr_tac", nrTac)
             || hasSpoofValue("nr_pci", nrPci) || hasSpoofValue("nrarfcn", nrarfcn); }
+    boolean hasCellReconstructionDecision() {
+        return hasGsmRatConstruction() || hasWcdmaRatConstruction()
+                || hasLteRatConstruction() || hasNrRatConstruction();
+    }
+    boolean hasCellListMutationDecision() {
+        return hasCellReconstructionDecision() || neighborCellsJson != null;
+    }
     boolean hasWifi() { return wifiSsid != null || wifiBssid != null; }
     boolean hasPhysicalChannelConfig() {
         return hasSpoofValue("band", band)
