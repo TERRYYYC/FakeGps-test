@@ -122,6 +122,33 @@ def verify_trace(
         if not any(index < terminal_index for index in request_indexes):
             errors.append("unmatched failed")
 
+    terminal_counts = {}
+    for event in events:
+        if event.event in {"delivered", "failed"}:
+            key = (event.request_id, event.fingerprint)
+            terminal_counts[key] = terminal_counts.get(key, 0) + 1
+    if any(count > 1 for count in terminal_counts.values()):
+        errors.append("multiple terminal events for request")
+
+    for ignored_index, ignored in enumerate(events):
+        if ignored.event != "ignored":
+            continue
+        if ignored.reason != "STALE_RESULT":
+            errors.append("invalid ignored reason")
+        key = (ignored.request_id, ignored.fingerprint)
+        if not any(index < ignored_index for index in requested.get(key, ())):
+            errors.append("unmatched ignored")
+        prior_requests = [
+            event
+            for index, event in enumerate(events)
+            if index < ignored_index and event.event == "requested"
+        ]
+        if prior_requests and (
+            prior_requests[-1].request_id,
+            prior_requests[-1].fingerprint,
+        ) == key:
+            errors.append("ignored active result")
+
     owner_counts = {}
     for event in events:
         if event.event == "scheduler_owned":
@@ -171,6 +198,13 @@ def verify_trace(
             errors.append("probe process survived timeout")
         if timeouts:
             timeout_index, timeout = timeouts[-1]
+            if any(
+                index > timeout_index
+                and event.event == "delivered"
+                and event.request_id == timeout.request_id
+                for index, event in enumerate(events)
+            ):
+                errors.append("timed-out request delivered")
             retries = [
                 (index, event)
                 for index, event in enumerate(events)

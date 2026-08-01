@@ -51,10 +51,28 @@ class RuntimeVerifyFlowContractTest(unittest.TestCase):
         self.assertIn("unmatched delivered", verdict.errors)
 
     def test_ignored_stale_callback_is_evidence_but_not_a_terminal_delivery(self):
-        event = runtime_flow.parse_line(
-            f"FakeGPS-Probe: event=ignored requestId=old fp={FP2} reason=STALE_RESULT"
-        )
-        self.assertEqual(("ignored", "STALE_RESULT"), (event.event, event.reason))
+        valid = [
+            f"FakeGPS-Probe: event=requested requestId=old fp={FP2}",
+            f"FakeGPS-Probe: event=requested requestId=current fp={FP1}",
+            f"FakeGPS-Probe: event=ignored requestId=old fp={FP2} reason=STALE_RESULT",
+        ]
+        self.assertTrue(runtime_flow.verify_trace(valid).passed)
+
+        active = [
+            f"FakeGPS-Probe: event=requested requestId=current fp={FP1}",
+            f"FakeGPS-Probe: event=ignored requestId=current fp={FP1} reason=STALE_RESULT",
+        ]
+        verdict = runtime_flow.verify_trace(active)
+        self.assertFalse(verdict.passed)
+        self.assertIn("ignored active result", verdict.errors)
+
+        unknown = [
+            f"FakeGPS-Probe: event=requested requestId=current fp={FP1}",
+            f"FakeGPS-Probe: event=ignored requestId=old fp={FP2} reason=STALE_RESULT",
+        ]
+        verdict = runtime_flow.verify_trace(unknown)
+        self.assertFalse(verdict.passed)
+        self.assertIn("unmatched ignored", verdict.errors)
 
     def test_unmatched_failure_cannot_masquerade_as_the_active_request(self):
         lines = [
@@ -86,6 +104,19 @@ class RuntimeVerifyFlowContractTest(unittest.TestCase):
                 probe_process_gone=True,
             ).passed
         )
+
+        stale_green = lines[:-1] + [
+            f"FakeGPS-Probe: event=delivered requestId=r1 fp={FP1} fields=1",
+            lines[-1],
+        ]
+        verdict = runtime_flow.verify_trace(
+            stale_green,
+            require_timeout_retry=True,
+            probe_process_gone=True,
+        )
+        self.assertFalse(verdict.passed)
+        self.assertIn("timed-out request delivered", verdict.errors)
+        self.assertIn("multiple terminal events for request", verdict.errors)
 
     def test_interval_matrix_and_single_scheduler_owner_are_strict(self):
         lines = [
