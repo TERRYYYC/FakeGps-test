@@ -20,8 +20,28 @@ android {
 
     }
 
+    signingConfigs {
+        // Release is signed with the SAME key as debug, on purpose.
+        //
+        // This is a personal instrumentation module, never distributed through a store, so key
+        // secrecy buys nothing here. What sharing one stable key does buy is real: debug and
+        // release can replace each other via `adb install -r` without an uninstall. An uninstall
+        // wipes /data/data, i.e. every profile the user configured — which has already cost us
+        // one full loss of the user's saved profiles. One key, no data loss when switching builds.
+        //
+        // The keystore lives outside the repo (~/.android/debug.keystore, created by the SDK) and
+        // is never committed.
+        release {
+            storeFile file("${System.getProperty('user.home')}/.android/debug.keystore")
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
