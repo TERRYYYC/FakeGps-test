@@ -3,6 +3,8 @@ package name.caiyao.fakegps.ui.navigation
 import androidx.lifecycle.Lifecycle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -87,6 +89,37 @@ class NavigationActionGuardTest {
         assertTrue(guard.submit(Lifecycle.State.RESUMED) { invocations += "second" })
 
         assertEquals(listOf("first", "second"), invocations)
+    }
+
+    @Test
+    fun resumedActionFailure_restoresReadyState() {
+        val guard = NavigationActionGuard()
+        val expected = IllegalArgumentException("invalid route")
+
+        val actual = assertThrows(IllegalArgumentException::class.java) {
+            guard.submit(Lifecycle.State.RESUMED) { throw expected }
+        }
+
+        assertSame(expected, actual)
+        var invoked = false
+        assertTrue(guard.submit(Lifecycle.State.RESUMED) { invoked = true })
+        assertTrue(invoked)
+    }
+
+    @Test
+    fun deferredActionFailure_restoresReadyState() {
+        val guard = NavigationActionGuard()
+        val expected = IllegalStateException("destination disappeared")
+
+        assertTrue(guard.submit(Lifecycle.State.STARTED) { throw expected })
+        val actual = assertThrows(IllegalStateException::class.java) {
+            guard.onStateChanged(Lifecycle.State.RESUMED)
+        }
+
+        assertSame(expected, actual)
+        var invoked = false
+        assertTrue(guard.submit(Lifecycle.State.RESUMED) { invoked = true })
+        assertTrue(invoked)
     }
 
     @Test

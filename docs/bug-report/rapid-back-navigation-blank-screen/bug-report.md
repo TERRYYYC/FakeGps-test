@@ -45,8 +45,9 @@ receive another click after the entry has already left `RESUMED`. The second pop
 the changing stack and can remove the Map root, leaving the NavHost without a destination.
 
 The working single-action case differs only in lifecycle state: the destination is `RESUMED` for
-the first action and `STARTED` while it exits. Therefore the canonical fix is to accept navigation
-actions only from a resumed back-stack entry, not to add delays or rebuild the Activity.
+the first action and `STARTED` while it exits. The fix therefore has to serialize entry-owned
+navigation across that lifecycle transition, not add delays or rebuild the Activity. It must also
+retain one legitimate first click received while a new entry is still becoming `RESUMED`.
 
 ## 4. Fix
 
@@ -63,6 +64,40 @@ Rejected alternatives:
 - Debouncing with an arbitrary time window: device animation duration is not a correctness source.
 - Restarting the Activity after a blank screen: treats the symptom and loses navigation state.
 - Fixing Verify only: leaves identical navigation callbacks vulnerable elsewhere.
+
+### Navigation guard state model
+
+`NavBackStackEntry` owns exactly one guard while its composable is active. The lifecycle observer
+is the only lifecycle driver; `pendingAction` and `navigationInFlight` are transient state and are
+never persisted or shared between entries.
+
+| State | Representation | Event | Next state / effect |
+|---|---|---|---|
+| Ready | active, no pending, not in flight | submit at `RESUMED` | Navigating; acquire token before executing |
+| Ready | active, no pending, not in flight | submit at `STARTED` | EnterQueued; retain exactly one action |
+| EnterQueued | pending, not in flight | lifecycle reaches `RESUMED` | Navigating; clear pending, acquire token, execute |
+| EnterQueued | pending, not in flight | direct submit observes `RESUMED` first | Navigating; execute the older pending action and reject the new action |
+| EnterQueued | pending, not in flight | lifecycle drops below `STARTED` | Ready; discard stale action |
+| Navigating | no pending, in flight | any submit | unchanged; reject duplicate |
+| Navigating | no pending, in flight | entry later returns to `RESUMED` | Ready; release token |
+| Navigating | no pending, in flight | action throws before transition | Ready; release token and rethrow the same failure |
+| Any active state | active | dispose | Disposed; clear all transient state |
+| Disposed | inactive | any event | unchanged; no action |
+
+Invariants:
+
+- **NAV-INV-1:** pending and in-flight are mutually exclusive; at most one action is retained.
+- **NAV-INV-2:** every action acquires the in-flight token before invoking `NavController`.
+- **NAV-INV-3:** an action failure cannot retain ownership; the token is released and the same
+  exception propagates.
+- **NAV-INV-4:** only a later `RESUMED` event, an execution failure, or disposal releases an
+  in-flight token; duplicate callbacks cannot release it.
+- **NAV-INV-5:** leaving before an entering action runs clears it, so a stale click cannot revive.
+
+The adversarial test matrix covers consecutive `RESUMED` callbacks, outgoing `STARTED` duplicates,
+incoming queue/drain and queue/discard, retained-entry return, direct and deferred action failures,
+and compound-action rejection. Real Navigation Compose/OEM ordering remains an exact-build device
+acceptance boundary.
 
 ## 5. Verification / diagnosis capsule
 

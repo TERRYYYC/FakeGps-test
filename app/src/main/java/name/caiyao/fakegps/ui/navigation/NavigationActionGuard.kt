@@ -21,12 +21,10 @@ internal class NavigationActionGuard {
             val pending = pendingAction
             if (pending != null) {
                 pendingAction = null
-                navigationInFlight = true
-                pending()
+                runInFlight(pending)
                 return false
             }
-            navigationInFlight = true
-            action()
+            runInFlight(action)
             return true
         }
         if (state == Lifecycle.State.STARTED && pendingAction == null) {
@@ -45,12 +43,21 @@ internal class NavigationActionGuard {
             }
             val pending = pendingAction ?: return false
             pendingAction = null
-            navigationInFlight = true
-            pending()
+            runInFlight(pending)
             return true
         }
         if (!state.isAtLeast(Lifecycle.State.STARTED)) pendingAction = null
         return false
+    }
+
+    private fun runInFlight(action: () -> Unit) {
+        navigationInFlight = true
+        try {
+            action()
+        } catch (failure: Throwable) {
+            navigationInFlight = false
+            throw failure
+        }
     }
 
     fun dispose() {
