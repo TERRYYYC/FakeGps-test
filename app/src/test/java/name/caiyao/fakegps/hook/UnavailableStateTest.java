@@ -148,6 +148,32 @@ public class UnavailableStateTest {
     }
 
     @Test
+    public void unavailableOnly_activatesExistingGsmCellLocationSurface() {
+        Snapshot s = Snapshot.from(new EmptySource(), new LinkedHashSet<>(Arrays.asList(
+                "lac", "cid", "psc")));
+
+        assertTrue("existing CellLocation must receive the unavailable projection",
+                s.hasGsmCellLocationDecision());
+        assertFalse("unavailable-only must still not fabricate a CellInfo RAT",
+                s.hasGsmCell());
+    }
+
+    @Test
+    public void configuredPscOnly_activatesExistingGsmCellLocationSurface() {
+        Snapshot s = new Snapshot();
+        s.psc = 321;
+
+        assertTrue("PSC is exposed by GsmCellLocation even without GSM reconstruction fields",
+                s.hasGsmCellLocationDecision());
+        assertFalse(s.hasGsmCell());
+    }
+
+    @Test
+    public void emptyProfile_doesNotActivateGsmCellLocationSurface() {
+        assertFalse(new Snapshot().hasGsmCellLocationDecision());
+    }
+
+    @Test
     public void emptyCellConstruction_failsSafeToPassthrough() {
         assertNull(Snapshot.acceptBuiltCellListOrPassthrough(new ArrayList<>()));
         ArrayList<Object> built = new ArrayList<>();

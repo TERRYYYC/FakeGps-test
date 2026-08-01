@@ -40,6 +40,11 @@ public class CarrierSurfaceCoverageTest {
     }
 
     @Test
+    public void gsmCellLocationHooksUseSurfaceSpecificActivation() throws Exception {
+        assertTrue(classBytecode(HookUtils.class).contains("hasGsmCellLocationDecision"));
+    }
+
+    @Test
     public void physicalUnavailableGetterRegistryIsApiGatedAndComplete() {
         assertEquals(
                 new LinkedHashSet<>(Arrays.asList(

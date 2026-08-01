@@ -336,6 +336,18 @@ class Snapshot {
     boolean hasGsmCell() { return hasSpoofValue("lac", lac) || hasSpoofValue("cid", cid)
             || hasSpoofValue("mcc", mcc) || hasSpoofValue("mnc", mnc)
             || hasSpoofValue("arfcn", arfcn) || hasSpoofValue("bsic", bsic); }
+    /**
+     * Whether an existing {@code GsmCellLocation} must be transformed.
+     *
+     * <p>This is deliberately broader than {@link #hasGsmCell()}: an unavailable-only decision
+     * must not fabricate a new {@code CellInfo} RAT, but it must still project {@code -1} onto an
+     * object already returned by Android. PSC belongs here because it is exposed by
+     * {@code GsmCellLocation} even though it is a WCDMA identity field.
+     */
+    boolean hasGsmCellLocationDecision() {
+        return lac != null || cid != null || psc != null
+                || isUnavailable("lac") || isUnavailable("cid") || isUnavailable("psc");
+    }
     boolean hasLteCell() { return hasSpoofValue("ci", ci) || hasSpoofValue("tac", tac)
             || hasSpoofValue("pci", pci) || hasSpoofValue("earfcn", earfcn)
             || hasSpoofValue("lte_bandwidth", lteBandwidth); }

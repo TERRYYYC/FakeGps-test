@@ -271,7 +271,7 @@ class HookUtils {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         Snapshot s = currentSnapshot();
-                        if (!s.hasGsmCell()) return;
+                        if (!shouldTransformGsmCellLocation(s)) return;
                         GsmCellLocation loc = spoofedGsmLocationOrPassthrough(s, param.getResult());
                         if (loc == null) return;
                         param.setResult(loc);
@@ -770,7 +770,7 @@ class HookUtils {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Snapshot s = currentSnapshot();
-                            if (!s.hasGsmCell()) return;
+                            if (!shouldTransformGsmCellLocation(s)) return;
                             GsmCellLocation loc = spoofedGsmLocationOrPassthrough(s, param.args[0]);
                             if (loc == null) return;
                             param.args[0] = loc;
@@ -1023,7 +1023,7 @@ class HookUtils {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = currentSnapshot();
-                        if (!s.hasGsmCell()) return;
+                        if (!shouldTransformGsmCellLocation(s)) return;
                         GsmCellLocation loc = spoofedGsmLocationOrPassthrough(s, param.args[0]);
                         if (loc == null) return;
                         param.args[0] = loc;
@@ -2131,11 +2131,12 @@ class HookUtils {
      * Spoofed {@link GsmCellLocation}, or {@code null} to pass the real one through.
      *
      * Fixes an unboxing NPE: {@code setLacAndCid(s.lac, s.cid)} dereferenced null whenever the
-     * profile configured any GSM-group field other than lac/cid (which {@code hasGsmCell()} now
-     * allows — mcc alone is enough). Because {@code tryHook} only guards hook REGISTRATION, that
-     * NPE surfaced inside the target app's own listener callback. Unset fields now fall back to the
-     * device's real values, and if neither side supplies lac/cid we pass through rather than
-     * inventing a cell.
+     * profile configured any GSM-group field other than lac/cid. Because {@code tryHook} only
+     * guards hook REGISTRATION, that NPE surfaced inside the target app's own listener callback.
+     * Unset fields now fall back to the device's real values, and if neither side supplies lac/cid
+     * we pass through rather than inventing a cell. Activation is governed separately by
+     * {@link Snapshot#hasGsmCellLocationDecision()} so unavailable-only decisions reach this
+     * surface without activating CellInfo reconstruction.
      */
     private static GsmCellLocation spoofedGsmLocationOrPassthrough(Snapshot s, Object realLoc) {
         Integer realLac = null, realCid = null;
@@ -2167,6 +2168,11 @@ class HookUtils {
             catch (Throwable t) { debug("setPsc unavailable: " + t); }
         }
         return loc;
+    }
+
+    /** Shared guard for all three existing-object GsmCellLocation surfaces. */
+    private static boolean shouldTransformGsmCellLocation(Snapshot s) {
+        return s.hasGsmCellLocationDecision();
     }
 
     private static ArrayList buildCellInfoList(Snapshot s, CellBaseline base) {
