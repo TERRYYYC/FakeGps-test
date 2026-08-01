@@ -130,6 +130,43 @@ Both `TelephonyManager.getAllCellInfo()` and `requestCellInfoUpdate()` must retu
 serving and neighbor cell sets. Telephony callbacks must expose the configured
 service/display/physical-channel values.
 
+### Serving-RAT construction state machine
+
+`Snapshot` owns field decisions; Android owns the incoming `CellInfo` topology; `HookUtils` owns
+the pure projection from those two inputs to the returned list. No second persisted RAT selector is
+introduced. Shared identity fields are projections, not evidence that a specific RAT exists.
+
+| Profile event | Serving-list transition | Neighbor transition |
+|---|---|---|
+| no RAT-specific identity field | preserve Android's serving RAT objects; apply shared/getter decisions at read time | register every real neighbor in the weak bypass registry |
+| configure GSM `arfcn/bsic` | construct/replace GSM only | preserve real neighbors unless explicit neighbor JSON replaces them |
+| configure WCDMA `psc/uarfcn` | construct/replace WCDMA only | same |
+| configure LTE `tac/ci/pci/earfcn/lte_bandwidth` | construct/replace LTE only | same |
+| configure NR `nci/nrarfcn/nr_pci/nr_tac` | construct/replace NR only (API 29+) | same |
+| configure multiple RAT-specific groups | construct exactly those groups; never infer another RAT from shared fields | same |
+| configure only MCC/MNC/LAC/CID | preserve Android topology and project onto compatible existing serving identities | real neighbors remain bypassed |
+| mark fields unavailable only | do not construct any serving RAT | existing surface-specific getters still return native unknown values |
+| configure `neighbor_cells_json` | does not select a serving RAT | construct the explicit neighbor set under the existing neighbor contract |
+
+Invariants:
+
+- INV-RAT-1: `mcc/mnc/lac/cid` never select GSM, WCDMA, LTE or NR construction;
+- INV-RAT-2: each constructed serving RAT has at least one configured, non-unavailable identity
+  field owned only by that RAT;
+- INV-RAT-3: absent an explicit RAT construction decision, the framework's serving topology is
+  preserved and shared fields are getter projections;
+- INV-RAT-4: multiple constructed serving RATs correspond one-for-one with explicitly configured
+  RAT-specific groups;
+- INV-RAT-5: unavailable-only and signal-only decisions never fabricate identity objects;
+- INV-RAT-6: every cell-list delivery path, subscription-topology guard, builder and real-cell
+  preservation path consumes the same canonical reconstruction predicate;
+- INV-RAT-7: real neighbors are entered in the weak bypass registry whenever the framework list is
+  passed through, so global serving getter hooks never rewrite them.
+
+Adversarial matrix: shared MCC/MNC + LTE; shared MCC/MNC + NR; LAC/CID + WCDMA; shared-only on a
+real LTE baseline; unavailable-only LAC/CID/PSC; signal-only; explicit GSM + LTE; WCDMA-only
+PSC; blank profile.
+
 ### API-35 physical-channel permission boundary
 
 `TelephonyCallback.PhysicalChannelConfigListener` is guarded by

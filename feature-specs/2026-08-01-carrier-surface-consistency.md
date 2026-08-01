@@ -67,6 +67,9 @@ Invariants:
 - INV-7: physical-channel unavailable getters whose result equals Builder defaults are installed
   from one production registry and covered by a JVM census; the device matrix does not call those
   paths independent dynamic negative controls.
+- INV-8: carrier and shared PLMN/area fields are pure projections and never select a serving RAT;
+  the canonical construction state machine is defined in
+  `feature-specs/2026-07-27-cellular-hook-verification.md`.
 
 Adversarial cases: only name configured; only numeric configured; roaming false; explicit empty
 operator name; rebuilt identity with real non-carrier metadata; API level where a surface class or
