@@ -1,6 +1,7 @@
 package name.caiyao.fakegps.ui.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -14,28 +15,36 @@ import name.caiyao.fakegps.ui.screen.verify.VerifyScreen
 @Composable
 fun AppNavGraph(navController: NavHostController) {
     NavHost(navController = navController, startDestination = Screen.Map) {
-        composable<Screen.Map> {
+        composable<Screen.Map> { entry ->
             MapScreen(
                 onAddProfile = { lat, lon ->
-                    navController.navigate(Screen.Editor(lat = lat, lon = lon))
+                    entry.navigateWhenResumed {
+                        navController.navigate(Screen.Editor(lat = lat, lon = lon))
+                    }
                 },
                 onOpenCollection = {
-                    navController.navigate(Screen.Collection)
+                    entry.navigateWhenResumed { navController.navigate(Screen.Collection) }
                 },
                 onOpenSettings = {
-                    navController.navigate(Screen.Settings)
+                    entry.navigateWhenResumed { navController.navigate(Screen.Settings) }
                 },
                 onOpenVerify = {
-                    navController.navigate(Screen.Verify)
+                    entry.navigateWhenResumed { navController.navigate(Screen.Verify) }
                 },
             )
         }
-        composable<Screen.Collection> {
+        composable<Screen.Collection> { entry ->
             CollectionScreen(
                 onEditProfile = { id, lat, lon ->
-                    navController.navigate(Screen.Editor(profileId = id, lat = lat, lon = lon))
+                    entry.navigateWhenResumed {
+                        navController.navigate(
+                            Screen.Editor(profileId = id, lat = lat, lon = lon),
+                        )
+                    }
                 },
-                onBack = { navController.popBackStack() },
+                onBack = {
+                    entry.navigateWhenResumed { navController.popBackStack() }
+                },
             )
         }
         composable<Screen.Editor> { backStackEntry ->
@@ -44,24 +53,35 @@ fun AppNavGraph(navController: NavHostController) {
                 profileId = route.profileId,
                 lat = route.lat,
                 lon = route.lon,
-                onBack = { navController.popBackStack() },
+                onBack = {
+                    backStackEntry.navigateWhenResumed { navController.popBackStack() }
+                },
                 onVerify = {
-                    // Replace the editor in the back stack: after verifying, "back" should return
-                    // to the profile list, not to a stale editor holding an already-saved draft.
-                    navController.popBackStack()
-                    navController.navigate(Screen.Verify)
+                    backStackEntry.navigateWhenResumed {
+                        // Replace the editor in the back stack: after verifying, "back" should
+                        // return to the profile list, not to a stale already-saved editor.
+                        navController.popBackStack()
+                        navController.navigate(Screen.Verify)
+                    }
                 },
             )
         }
-        composable<Screen.Settings> {
+        composable<Screen.Settings> { entry ->
             SettingsScreen(
-                onBack = { navController.popBackStack() },
+                onBack = {
+                    entry.navigateWhenResumed { navController.popBackStack() }
+                },
             )
         }
-        composable<Screen.Verify> {
+        composable<Screen.Verify> { entry ->
             VerifyScreen(
-                onBack = { navController.popBackStack() },
+                onBack = {
+                    entry.navigateWhenResumed { navController.popBackStack() }
+                },
             )
         }
     }
 }
+
+private fun NavBackStackEntry.navigateWhenResumed(action: () -> Unit): Boolean =
+    NavigationActionGuard.runWhenResumed(lifecycle.currentState, action)
