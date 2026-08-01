@@ -370,6 +370,19 @@ class VerificationEngineTest {
     }
 
     @Test
+    fun `text column does not borrow boolean or numeric coercion`() {
+        val specs = linkedMapOf("x" to listOf(FieldSpec("operator_name", "运营商", "", FieldType.TEXT)))
+        for (observed in listOf("true", "1.0", "\"1\"")) {
+            val r = VerificationEngine.buildReport(
+                configured = mapOf("operator_name" to "1"),
+                observed = mapOf("operator_name" to observed),
+                specs = specs,
+            )
+            assertEquals(FieldVerdict.MISMATCH, r.field("operator_name").verdict)
+        }
+    }
+
+    @Test
     fun `surrounding whitespace does not create a false mismatch`() {
         val specs = linkedMapOf("x" to listOf(FieldSpec("operator_name", "运营商", "", FieldType.TEXT)))
         val r = VerificationEngine.buildReport(

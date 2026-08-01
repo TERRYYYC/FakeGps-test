@@ -329,26 +329,14 @@ object VerificationEngine {
     }
 
     /**
-     * Whether an observed value is the configured one.
-     *
-     * The two sides travel through different type systems — SQLite INTEGER/REAL → JSON number →
-     * String on one side, typed Android getters → String on the other — so equal values legitimately
-     * arrive in different shapes (`5.0` vs `"5"`, `1` vs `"true"`, `HomeNet` vs `"HomeNet"` with
-     * literal quotes). Comparing those verbatim would report a working hook as broken.
-     *
-     * The tolerance is bounded by what a WORKING hook can actually emit. PLMN string getters are
-     * the sole integer exception: Android requires canonical MCC/MNC widths, so `mnc=0` is emitted
-     * as `"00"`. A genuine baseline is compared with that same field rule before the match can be
-     * called proof; an identical real PLMN therefore remains AMBIGUOUS.
-     *
-     * Remaining text is compared verbatim, case included: the hook hands back the configured string
-     * untouched, so any other difference means the value did not come from us.
-     */
-    /**
      * Whether [observed] is a value the hook could have produced from [configured] for this field.
      *
-     * Two field-specific relaxations on top of [valuesMatch], each bounded by hook behaviour:
+     * The tolerance is bounded by [FieldSpec.type] and concrete hook behaviour:
      *
+     *  - TEXT stays textual; only `wifi_ssid` removes Android's wrapper quotes.
+     *  - BOOLEAN accepts SQLite `0/1` against Android `false/true`.
+     *  - Numeric fields accept transport formatting such as `5.0` against getter `5`.
+     *  - MCC/MNC additionally accept Android's canonical PLMN width (`0` against `00`).
      *  - FLOAT columns round-trip Float → SQLite REAL → JSON double, so a configured `0.1f` is
      *    published as `0.10000000149011612` while the getter reports `0.1`. Comparing as Float
      *    collapses exactly that artefact and nothing else.
@@ -385,16 +373,41 @@ object VerificationEngine {
         configured: String,
         observed: String,
     ): Boolean {
+        val configuredValue = normalizeTextContract(spec, configured)
+        val observedValue = normalizeTextContract(spec, observed)
+        if (configuredValue == observedValue) return true
+
         if (spec.dbColumn == "mcc" || spec.dbColumn == "mnc") {
-            val configuredNumber = unquote(configured.trim()).toIntOrNull()
-            val observedNumber = unquote(observed.trim()).toIntOrNull()
+            val configuredNumber = configuredValue.toIntOrNull()
+            val observedNumber = observedValue.toIntOrNull()
             if (configuredNumber != null && observedNumber != null) {
                 return configuredNumber == observedNumber
             }
         }
-        return valuesMatch(configured, observed)
+
+        return when (spec.type) {
+            FieldType.TEXT -> false
+            FieldType.BOOLEAN -> {
+                val a = asBoolean(configuredValue)
+                val b = asBoolean(observedValue)
+                a != null && b != null && a == b
+            }
+            FieldType.INTEGER, FieldType.DOUBLE, FieldType.FLOAT -> {
+                if (isZeroPadded(configuredValue) || isZeroPadded(observedValue)) return false
+                val a = configuredValue.toBigDecimalOrNull()
+                val b = observedValue.toBigDecimalOrNull()
+                a != null && b != null && a.compareTo(b) == 0
+            }
+        }
     }
 
+    /** WifiInfo#getSSID is the only observed text contract here that adds wrapper quotes. */
+    private fun normalizeTextContract(spec: FieldSpec, value: String): String {
+        val trimmed = value.trim()
+        return if (spec.dbColumn == "wifi_ssid") unquote(trimmed) else trimmed
+    }
+
+    /** Shape-tolerant collision hint for editor inputs, where no [FieldSpec] is available. */
     internal fun valuesMatch(configured: String, observed: String): Boolean {
         val a = unquote(configured.trim())
         val b = unquote(observed.trim())
