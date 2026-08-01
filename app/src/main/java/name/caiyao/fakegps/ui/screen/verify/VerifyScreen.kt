@@ -47,6 +47,8 @@ import name.caiyao.fakegps.verify.FieldReport
 import name.caiyao.fakegps.verify.FieldVerdict
 import name.caiyao.fakegps.verify.HookApplicability
 import name.caiyao.fakegps.verify.ObservationScope
+import name.caiyao.fakegps.verify.ProbeFailure
+import name.caiyao.fakegps.verify.ProbeUiStatus
 import name.caiyao.fakegps.verify.VerificationSummary
 import name.caiyao.fakegps.verify.VerificationStatus
 
@@ -107,6 +109,9 @@ fun VerifyScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             item(key = "verdict") { VerdictCard(state) }
+            if (state.scope != ObservationScope.SELF_HOOKED) {
+                item(key = "probe") { ProbeCard(state.probeStatus) }
+            }
             item(key = "scope") { ScopeCard(state) }
             item(key = "payload") { PayloadCard(state) }
 
@@ -227,9 +232,14 @@ private fun VerdictCard(state: VerifyUiState) {
                 HookApplicability.APPLYING -> { headline = ""; detail = "" }
             }
         }
+        state.probeStatus is ProbeUiStatus.Failed -> {
+            headline = "无法完成运行时验证"
+            detail = probeFailureMessage(state.probeStatus.failure)
+            tone = MaterialTheme.colorScheme.error
+        }
         summary == null -> {
             headline = "无法验证"
-            detail = "未能读取配置。"
+            detail = "未取得可用于字段判定的运行时观测。"
             tone = MaterialTheme.colorScheme.error
         }
         else -> when (summary.status) {
@@ -335,6 +345,17 @@ internal fun partialVerificationDetail(summary: VerificationSummary): String {
         "没有发现矛盾，但也不能说全部生效。"
 }
 
+internal fun probeFailureMessage(failure: ProbeFailure): String = when (failure) {
+    ProbeFailure.NOT_SCOPED ->
+        "验证探针进程没有被 Vector/LSPosed 注入；这是作用域问题，不对任何字段作失败判定。" +
+            "请确认 FakeGPS 模块已启用并重试。"
+    ProbeFailure.TIMEOUT -> "验证探针超时，未取得本次请求的结果；旧结果已丢弃，可以重试。"
+    ProbeFailure.PAYLOAD_MISMATCH -> "验证探针读到的配置指纹与本页不同，结果已拒绝；请重试。"
+    ProbeFailure.MALFORMED_RESULT -> "验证探针返回了无法解析的结果，旧结果未保留。"
+    ProbeFailure.START_FAILED -> "验证探针进程无法启动，请确认模块安装状态后重试。"
+    ProbeFailure.INTERNAL_ERROR -> "验证探针读取系统 API 时发生错误，本次无法判断。"
+}
+
 @Composable
 private fun ScopeCard(state: VerifyUiState) {
     val text = when (state.scope) {
@@ -342,12 +363,33 @@ private fun ScopeCard(state: VerifyUiState) {
             "调试构建：本应用已 hook 自身进程，所以这里的读回值可以直接证明 hook 是否生效（受控探针模式）。" +
                 "同时会在一次受保护的基线读取中绕过自身 getter hook；若配置值恰好等于真值，" +
                 "该字段会标为「巧合」而不是「已生效」，避免把未运行误判成成功。"
+        ObservationScope.HOOK_PROBE ->
+            "正式构建的主界面保持未 hook；本次观测来自独立、非导出的 :hook_verify 进程。" +
+                "只有 Vector/LSPosed 已把模块注入该进程、且请求 ID 与配置指纹都匹配时，" +
+                "这些公共 API 读回值才会进入字段判定。"
         ObservationScope.REAL_BASELINE ->
             "正式构建不会 hook 自己的进程 —— 否则配置界面会把伪造值当成真值显示回来。" +
                 "因此本页读到的是本机真实值，不能用来判断目标 App 内的 hook 是否生效；" +
                 "它的用途是给你一份真实基线，好挑一个明显区别于真实网络的值。"
     }
     InfoCard(title = "这一页能证明什么", body = text)
+}
+
+@Composable
+private fun ProbeCard(status: ProbeUiStatus) {
+    val (title, body) = probeStatusCopy(status)
+    InfoCard(title = title, body = body)
+}
+
+internal fun probeStatusCopy(status: ProbeUiStatus): Pair<String, String> = when (status) {
+    ProbeUiStatus.NotRequested ->
+        "运行时探针" to "当前配置不具备运行条件，未启动探针；这里不会据此判定任何字段失败。"
+    ProbeUiStatus.Starting ->
+        "运行时探针连接中" to "正在启动独立 hook 进程并等待本次请求的匹配结果。"
+    ProbeUiStatus.Verified ->
+        "运行时探针已连接" to "请求 ID 与配置指纹匹配；下方字段来自 hook 进程的公共 API 读回值。"
+    is ProbeUiStatus.Failed ->
+        "运行时探针不可用" to probeFailureMessage(status.failure)
 }
 
 @Composable
@@ -434,8 +476,12 @@ private fun InfoCard(title: String, body: String) {
 
 @Composable
 private fun FieldRow(f: FieldReport, scope: ObservationScope) {
-    val observedLabel = if (scope == ObservationScope.SELF_HOOKED) "观测" else "真实"
-    val observedValue = f.observed ?: f.baseline
+    val observedLabel = when (scope) {
+        ObservationScope.SELF_HOOKED -> "观测"
+        ObservationScope.HOOK_PROBE -> "探针观测"
+        ObservationScope.REAL_BASELINE -> "真实"
+    }
+    val observedValue = displayedObservation(scope, f.observed, f.baseline)
 
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(
@@ -471,6 +517,12 @@ private fun FieldRow(f: FieldReport, scope: ObservationScope) {
         }
     }
 }
+
+internal fun displayedObservation(
+    scope: ObservationScope,
+    observed: String?,
+    baseline: String?,
+): String? = if (scope == ObservationScope.REAL_BASELINE) baseline else observed
 
 @Composable
 private fun ValueSlot(label: String, value: String?, modifier: Modifier = Modifier) {

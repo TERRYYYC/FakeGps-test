@@ -258,6 +258,7 @@ private fun TextField(
     val referenceLabel = when (scope) {
         ObservationScope.REAL_BASELINE -> "本机真实值"
         ObservationScope.SELF_HOOKED -> "本机当前读到（调试构建已自我 hook，可能已是伪造值）"
+        ObservationScope.HOOK_PROBE -> "验证探针读到（已被 hook）"
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -327,6 +328,7 @@ private fun BooleanField(
     val referenceLabel = when (scope) {
         ObservationScope.REAL_BASELINE -> "本机真实值"
         ObservationScope.SELF_HOOKED -> "本机当前读到（调试构建已自我 hook，可能已是伪造值）"
+        ObservationScope.HOOK_PROBE -> "验证探针读到（已被 hook）"
     }
     val referenceText = reference?.let { if (it.equals("true", true) || it == "1") "是" else "否" }
 

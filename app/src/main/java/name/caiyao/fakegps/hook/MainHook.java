@@ -9,6 +9,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
+import de.robv.android.xposed.XC_MethodReplacement;
+import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import name.caiyao.fakegps.config.ConfigCodec;
@@ -16,6 +18,8 @@ import name.caiyao.fakegps.config.SpoofConfig;
 import name.caiyao.fakegps.config.ConfigPrefsSync;
 import name.caiyao.fakegps.config.PublishedConfig;
 import name.caiyao.fakegps.config.TransportSchemaContract;
+import name.caiyao.fakegps.verify.RuntimeSelfHookPolicy;
+import name.caiyao.fakegps.verify.RuntimeHookSentinel;
 
 /**
  * Xposed module entry point.
@@ -61,15 +65,19 @@ public class MainHook implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // Self-hooking is a DEBUG-ONLY capability, not a shipped behaviour.
+        // The configuration process is never self-hooked in release. The sole shipped exception
+        // is the private one-shot :hook_verify process, selected by the shared policy below.
         //
         // A debug build hooks its own process so it can act as a controlled probe: it reads plain
         // LocationManager (MapScreen/VerifyViewModel, no GMS fused path), which is what lets
         // scripts/test-hook.sh tell "the hook machinery is broken" apart from "the target app uses
         // an API we don't cover". A release build must never spoof its own UI — that would make the
-        // configuration screen display the fake values back to the user as if they were real.
-        if (!name.caiyao.fakegps.BuildConfig.DEBUG
-                && "name.caiyao.fakegps".equals(lpparam.packageName)) {
+        // configuration screen display the fake values back to the user as if they were real. The
+        // release probe keeps that isolation while providing a deliberately hook-enabled reader.
+        if (!RuntimeSelfHookPolicy.shouldHook(
+                name.caiyao.fakegps.BuildConfig.DEBUG,
+                lpparam.packageName,
+                lpparam.processName)) {
             return;
         }
 
@@ -86,6 +94,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 ? lpparam.classLoader
                 : MainHook.class.getClassLoader();
         if (RUNTIME_OWNERSHIP.claimHooks(targetClassLoader)) {
+            installProbeSentinelIfPresent(targetClassLoader);
             HookUtils.registerAllHooks(targetClassLoader);
         }
 
@@ -231,6 +240,24 @@ public class MainHook implements IXposedHookLoadPackage {
     private Snapshot acceptLoadedSnapshot(Snapshot snapshot, Integer refreshIntervalSec) {
         REFRESH_SCHEDULER.acceptPayloadInterval(refreshIntervalSec, true);
         return snapshot;
+    }
+
+    /**
+     * Replace the app-classloader sentinel only when this target actually contains it.
+     *
+     * A module-classloader static cannot prove injection because the app and Xposed may load two
+     * copies of the same class. Hooking the Method object from the target classloader makes the
+     * probe's own call return true only when LSPosed really installed this module in that process.
+     */
+    private void installProbeSentinelIfPresent(ClassLoader targetClassLoader) {
+        Class<?> sentinel = XposedHelpers.findClassIfExists(
+                RuntimeHookSentinel.class.getName(),
+                targetClassLoader);
+        if (sentinel == null) return;
+        XposedHelpers.findAndHookMethod(
+                sentinel,
+                "isHookActive",
+                XC_MethodReplacement.returnConstant(true));
     }
 
 }
