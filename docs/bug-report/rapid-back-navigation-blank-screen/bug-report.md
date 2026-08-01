@@ -50,10 +50,13 @@ actions only from a resumed back-stack entry, not to add delays or rebuild the A
 
 ## 4. Fix
 
-Add one lifecycle-state guard used by every navigation callback in `AppNavGraph`. A destination may
-pop or navigate only while its own back-stack entry is `RESUMED`; duplicate clicks during an exit
-transition are ignored. This also covers the sibling Settings, Collection and Editor routes that
-use the same top-left back pattern.
+Add one lifecycle-state guard per back-stack entry and use it for every navigation callback in
+`AppNavGraph`. A `RESUMED` destination acquires an in-flight token before it navigates, so a second
+callback is rejected even if both callbacks observe `RESUMED`. The token resets only if that entry
+later returns to `RESUMED`. A first click received while a new destination is entering in `STARTED`
+is queued until `RESUMED`; an outgoing entry already owns the token and rejects the duplicate.
+At most one action can be queued. This also covers the sibling Settings, Collection and Editor
+routes that use the same top-left back pattern.
 
 Rejected alternatives:
 
@@ -72,4 +75,4 @@ Rejected alternatives:
 | Timeout strategy | If the lifecycle guard does not reproduce Red→Green in one attempt, return to runtime tracing rather than layering another fix |
 | Warning strategy | Any failure outside navigation or any third attempted repair means the hypothesis is wrong |
 | User-visible correction | Rapid taps no longer strand the stable app on a white screen |
-| Acceptance | Guard JVM test; full JVM gate; repeat the exact moto g54 gesture after cross-individual review |
+| Acceptance | Guard JVM state-transition tests; full JVM gate; after cross-individual review repeat both the original double event and an entry-animation first back on moto g54 |
