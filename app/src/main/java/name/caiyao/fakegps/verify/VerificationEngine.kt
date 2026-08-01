@@ -33,6 +33,14 @@ enum class FieldVerdict {
      */
     NOT_VERIFIABLE,
 
+    /**
+     * Not configured by the user, but produced by an object-level hook that replaces the whole
+     * public object. For example, latitude + longitude create a new Location whose unset accuracy,
+     * altitude, speed and bearing expose constructor defaults rather than the real device values.
+     * This is informational: it is neither configured evidence nor passthrough.
+     */
+    GROUP_DERIVED,
+
     /** Not configured, so the app correctly sees the real device value. */
     PASSTHROUGH,
 }
@@ -102,6 +110,8 @@ data class VerificationSummary(
     val mismatch: Int,
     val unobservable: Int,
     val passthrough: Int,
+    /** Unconfigured values synthesized by an active object-level replacement group. */
+    val groupDerived: Int = 0,
     /**
      * Configured fields that no Android getter can ever report (module control knobs such as
      * signal_fluctuation_*). Distinct from [unobservable], which is a device/API limitation: these
@@ -196,6 +206,15 @@ object VerificationEngine {
     )
 
     /**
+     * A configured latitude/longitude pair activates HookUtils#createFakeLocation, which returns a
+     * new Location object. These unset sibling getters therefore expose group defaults rather than
+     * the underlying device values and must not be advertised as passthrough.
+     */
+    private val LOCATION_GROUP_DERIVED_COLUMNS = setOf(
+        "altitude", "speed", "bearing", "accuracy",
+    )
+
+    /**
      * The interval a configured signal value can legitimately be observed within.
      *
      * Mirrors `Snapshot.fluctuate`: `base + rnd.nextInt(range + 1) - range / 2`, i.e.
@@ -226,9 +245,12 @@ object VerificationEngine {
         var unobservable = 0
         var notVerifiable = 0
         var ambiguousCount = 0
+        var groupDerived = 0
         val window = fluctuationWindow(configured)
         var passthrough = 0
         val mappedColumns = mutableSetOf<String>()
+        val locationGroupActive =
+            !configured["latitude"].isNullOrBlank() && !configured["longitude"].isNullOrBlank()
 
         for ((category, fields) in specs) {
             val rows = mutableListOf<FieldReport>()
@@ -251,10 +273,13 @@ object VerificationEngine {
                 // configured, or the screen would claim nothing is being spoofed.
                 val moduleKnob = spec.dbColumn in NOT_DEVICE_OBSERVABLE
                 if (moduleKnob && cfg == null) continue   // nothing configured, nothing to say
+                val derivedByLocationGroup = cfg == null && locationGroupActive &&
+                    spec.dbColumn in LOCATION_GROUP_DERIVED_COLUMNS
 
                 val ambiguous = cfg != null && real != null && canonicalValuesMatch(spec, cfg, real)
                 val verdict = when {
                     moduleKnob -> FieldVerdict.NOT_VERIFIABLE
+                    derivedByLocationGroup -> FieldVerdict.GROUP_DERIVED
                     cfg == null -> FieldVerdict.PASSTHROUGH
                     obs == null -> FieldVerdict.UNOBSERVABLE
                     ambiguous && fieldMatches(spec, cfg, obs, window) -> FieldVerdict.AMBIGUOUS
@@ -269,6 +294,7 @@ object VerificationEngine {
                     FieldVerdict.UNOBSERVABLE -> unobservable++
                     FieldVerdict.PASSTHROUGH -> passthrough++
                     FieldVerdict.NOT_VERIFIABLE -> notVerifiable++
+                    FieldVerdict.GROUP_DERIVED -> groupDerived++
                 }
 
                 rows += FieldReport(
@@ -286,8 +312,14 @@ object VerificationEngine {
         return VerificationReport(
             groups = groups,
             summary = VerificationSummary(
-                spoofed, mismatch, unobservable, passthrough, notVerifiable,
-                ambiguousCount, propagationPending,
+                spoofed = spoofed,
+                mismatch = mismatch,
+                unobservable = unobservable,
+                passthrough = passthrough,
+                groupDerived = groupDerived,
+                notVerifiable = notVerifiable,
+                ambiguous = ambiguousCount,
+                propagationPending = propagationPending,
             ),
             payloadFieldCount = configured.size + unavailable.size,
             unmappedPayloadColumns = (configured.keys + unavailable)

@@ -164,8 +164,9 @@ fun VerifyScreen(
 
 private fun FieldReport.visibleUnder(filter: RowFilter): Boolean = when (filter) {
     RowFilter.ALL -> true
-    // A passthrough row reflects no decision the user made, so it is noise while checking a config.
-    RowFilter.CONFIGURED -> verdict != FieldVerdict.PASSTHROUGH
+    // Group-derived and passthrough rows reflect no decision the user made, so they are noise while
+    // checking only configured fields. The configured value is the single truth source here.
+    RowFilter.CONFIGURED -> configured != null
 }
 
 // -- header cards -------------------------------------------------------------------------------
@@ -311,6 +312,9 @@ private fun VerdictCard(state: VerifyUiState) {
                     // which is how "读不到 0" ended up sitting above a row that said 读不到.
                     if (summary.notVerifiable > 0) {
                         CountPill("不可验证", summary.notVerifiable, verdictColor(FieldVerdict.NOT_VERIFIABLE))
+                    }
+                    if (summary.groupDerived > 0) {
+                        CountPill("联动值", summary.groupDerived, verdictColor(FieldVerdict.GROUP_DERIVED))
                     }
                     CountPill("透传", summary.passthrough, verdictColor(FieldVerdict.PASSTHROUGH))
                 }
@@ -496,6 +500,7 @@ private fun VerdictChip(verdict: FieldVerdict) {
         FieldVerdict.UNOBSERVABLE -> "读不到"
         FieldVerdict.PASSTHROUGH -> "透传"
         FieldVerdict.NOT_VERIFIABLE -> "不可验证"
+        FieldVerdict.GROUP_DERIVED -> "联动值"
     }
     val color = verdictColor(verdict)
     Box(
@@ -526,6 +531,7 @@ private fun verdictColor(v: FieldVerdict): Color = when (v) {
     FieldVerdict.UNOBSERVABLE -> MaterialTheme.colorScheme.tertiary
     FieldVerdict.PASSTHROUGH -> MaterialTheme.colorScheme.outline
     FieldVerdict.NOT_VERIFIABLE -> MaterialTheme.colorScheme.tertiary
+    FieldVerdict.GROUP_DERIVED -> MaterialTheme.colorScheme.outline
 }
 
 private fun modeLabel(mode: String): String = when (mode) {

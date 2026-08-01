@@ -97,6 +97,48 @@ class VerificationEngineTest {
     }
 
     @Test
+    fun `location group defaults are derived rather than passthrough`() {
+        val locationSpecs = linkedMapOf(
+            "定位" to listOf(
+                FieldSpec("latitude", "纬度", "", FieldType.DOUBLE),
+                FieldSpec("longitude", "经度", "", FieldType.DOUBLE),
+                FieldSpec("altitude", "海拔", "", FieldType.DOUBLE),
+                FieldSpec("speed", "速度", "", FieldType.FLOAT),
+                FieldSpec("bearing", "方向", "", FieldType.FLOAT),
+                FieldSpec("accuracy", "精度", "", FieldType.FLOAT),
+            ),
+        )
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("latitude" to "50.45", "longitude" to "30.52"),
+            observed = mapOf(
+                "latitude" to "50.45",
+                "longitude" to "30.52",
+                "altitude" to "0.0",
+                "speed" to "0.0",
+                "bearing" to "0.0",
+                "accuracy" to "10.0",
+            ),
+            baseline = mapOf(
+                "latitude" to "50.40",
+                "longitude" to "30.60",
+                "altitude" to "184.0",
+                "speed" to "1.5",
+                "bearing" to "91.0",
+                "accuracy" to "4.0",
+            ),
+            specs = locationSpecs,
+        )
+
+        for (field in listOf("altitude", "speed", "bearing", "accuracy")) {
+            assertEquals(FieldVerdict.GROUP_DERIVED, r.field(field).verdict)
+        }
+        assertEquals(4, r.summary.groupDerived)
+        assertEquals(0, r.summary.passthrough)
+        assertEquals(2, r.summary.configuredCount)
+        assertEquals(VerificationStatus.EFFECTIVE, r.summary.status)
+    }
+
+    @Test
     fun `field that is neither configured nor observed is omitted entirely`() {
         // Listing 87 rows of "null / null" would bury the handful of rows that carry information.
         val r = VerificationEngine.buildReport(
