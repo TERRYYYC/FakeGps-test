@@ -122,21 +122,34 @@ class VerificationEngineTest {
     }
 
     @Test
-    fun `zero-padded observation is a MISMATCH because a working hook never pads`() {
-        // Verified against HookUtils#registerCellIdentityHooks: getMncString returns
-        // String.valueOf(s.mnc), so a hooked mnc=0 comes back as "0" — NEVER "00". Padding can
-        // therefore only originate from the real radio passing through unhooked.
-        //
-        // Treating "0" == "00" as a match reports an entirely inert module as 已生效: a China
-        // Mobile user enters mnc=0 (exactly what the field hint suggests), the module is not in
-        // the framework scope, the radio reports "00", and the screen congratulates them.
+    fun `PLMN string width is normalized only for MCC and MNC fields`() {
         val specs = linkedMapOf("x" to listOf(FieldSpec("mnc", "MNC", "", FieldType.INTEGER)))
         val r = VerificationEngine.buildReport(
             configured = mapOf("mnc" to "0"),
             observed = mapOf("mnc" to "00"),
             specs = specs,
         )
-        assertEquals(FieldVerdict.MISMATCH, r.field("mnc").verdict)
+        assertEquals(FieldVerdict.SPOOFED, r.field("mnc").verdict)
+
+        val mccSpecs = linkedMapOf("x" to listOf(FieldSpec("mcc", "MCC", "", FieldType.INTEGER)))
+        val mcc = VerificationEngine.buildReport(
+            configured = mapOf("mcc" to "46"),
+            observed = mapOf("mcc" to "046"),
+            specs = mccSpecs,
+        )
+        assertEquals(FieldVerdict.SPOOFED, mcc.field("mcc").verdict)
+    }
+
+    @Test
+    fun `zero-padded real MNC stays AMBIGUOUS instead of proving the hook`() {
+        val specs = linkedMapOf("x" to listOf(FieldSpec("mnc", "MNC", "", FieldType.INTEGER)))
+        val r = VerificationEngine.buildReport(
+            configured = mapOf("mnc" to "3"),
+            observed = mapOf("mnc" to "03"),
+            baseline = mapOf("mnc" to "03"),
+            specs = specs,
+        )
+        assertEquals(FieldVerdict.AMBIGUOUS, r.field("mnc").verdict)
     }
 
     @Test

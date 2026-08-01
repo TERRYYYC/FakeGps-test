@@ -125,6 +125,26 @@ class Snapshot {
     }
 
     /**
+     * Canonicalize a PLMN value read from a loosely typed source such as neighbor JSON.
+     *
+     * <p>Numeric JSON values have already lost their display width, so they use the same canonical
+     * MCC/MNC formatting as profile integers. Explicit two/three-digit strings retain their width,
+     * which is required to distinguish valid two-digit and three-digit MNCs with leading zeroes.
+     */
+    static String resolvePlmnStringValue(String field, Object configured, String real) {
+        if (configured == null) return real;
+        String value = String.valueOf(configured).trim();
+        String canonicalPattern;
+        switch (field) {
+            case "mcc": canonicalPattern = "[0-9]{3}"; break;
+            case "mnc": canonicalPattern = "[0-9]{2,3}"; break;
+            default: throw new IllegalArgumentException("not a PLMN field: " + field);
+        }
+        if (value.matches(canonicalPattern)) return value;
+        return resolvePlmnString(field, Integer.parseInt(value), real, false);
+    }
+
+    /**
      * Resolve the public WCDMA signal-power surface.
      *
      * Android's public {@code CellSignalStrengthWcdma#getDbm()} is backed by RSCP on modern

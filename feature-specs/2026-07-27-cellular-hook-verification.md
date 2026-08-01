@@ -148,6 +148,13 @@ failure, getter mismatch, unexpected exception, or missing ordinary callback rem
 failure. This verifies the module's callback interception without claiming that an unprivileged
 third-party app can receive a framework event Android does not allow it to register for.
 
+Two unavailable observations, `band=0` and `physicalCellId=-1`, equal the no-arg Builder defaults.
+Exact observation plus a full-profile negative control therefore cannot independently distinguish
+their individual getter hooks from a per-method no-op. They are explicitly excluded from the
+dynamic-negative-control claim. A production-consumed `PhysicalChannelHookRegistry` plus JVM
+census covers those methods (and the two sibling bandwidth getters); dynamic acceptance still
+proves callback replacement and the physical-channel hook group with non-default fields.
+
 ## Override lifecycle and invariants
 
 | Current state | Event | Next state | Required effect |

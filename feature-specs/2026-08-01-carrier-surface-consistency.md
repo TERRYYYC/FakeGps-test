@@ -40,6 +40,9 @@ For a target app process that has loaded a profile snapshot:
 - `PhoneStateListener` and `TelephonyCallback` need no carrier-specific state mutation: their
   delivered `ServiceState` and `CellInfo` objects expose the same hooked getters;
 - a rebuilt GSM/WCDMA/LTE identity stores the configured alpha name in its constructor metadata.
+- MCC/MNC integer profile values use one canonical string projection on constructor, getter and
+  configured-neighbor surfaces (`mcc=46 → "046"`, `mnc=0/3 → "00"/"03"`); verification applies
+  the same field rule and reports `AMBIGUOUS` when the genuine baseline is identical.
 
 Not building: Cellular-Pro private/native hooks, modem protocol rewriting, or implicit
 `operator_numeric` → MCC/MNC coupling. Those would cross the public Android surface boundary or
@@ -59,6 +62,11 @@ Invariants:
 - INV-4: callback observation is derived from the object getter contract, not a second carrier
   state machine;
 - INV-5: neighbor identity bypass semantics remain unchanged.
+- INV-6: every integer-to-PLMN string boundary uses the canonical width resolver; API 24–27 integer
+  getters remain integers and are not padded.
+- INV-7: physical-channel unavailable getters whose result equals Builder defaults are installed
+  from one production registry and covered by a JVM census; the device matrix does not call those
+  paths independent dynamic negative controls.
 
 Adversarial cases: only name configured; only numeric configured; roaming false; explicit empty
 operator name; rebuilt identity with real non-carrier metadata; API level where a surface class or
@@ -101,7 +109,8 @@ method does not exist.
 1. Add failing contract expectations for identity alpha names, direct ServiceState carrier fields,
    NetworkRegistrationInfo PLMN/roaming, and callback ServiceState carrier fields.
 2. Extend the probe using API-gated public getters only.
-3. Extend the matrix so every new path maps back to exactly one profile source field.
+3. Extend the matrix so every new path maps back to exactly one profile source field, including
+   serving `mnc=0 → "00"` and configured-neighbor `mnc=3 → "03"`.
 4. Run the Kotlin/JVM contract tests and Python matrix tests.
 
 ### Task 4: Regression and handoff

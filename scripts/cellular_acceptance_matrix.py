@@ -24,7 +24,7 @@ _NEIGHBOR_CELLS = [
     {
         "type": "gsm",
         "mcc": 311,
-        "mnc": 480,
+        "mnc": 3,
         "lac": 1_111,
         "cid": 2_222,
         "arfcn": 700,
@@ -65,7 +65,7 @@ _NEIGHBOR_CELLS = [
 
 _COMMON_FIELDS = {
     "mcc": 310,
-    "mnc": 260,
+    "mnc": 0,
     "lac": 32_123,
     "cid": 54_321,
     "arfcn": 512,
@@ -175,6 +175,12 @@ _UNAVAILABLE_NEGATIVE_CONTROL_PATHS = (
     "cellInfo.sync.lte.rsrp",
     "telephony.networkOperator",
     "telephony.networkType",
+)
+
+# These exact unavailable values equal a no-arg PhysicalChannelConfig.Builder's defaults.
+# Dynamic comparison therefore cannot distinguish the getter hook from a per-method no-op; the
+# production-installed registry and its JVM census provide that independent evidence instead.
+_UNAVAILABLE_STATIC_CENSUS_PATHS = (
     "callback.physicalChannel.band",
     "callback.physicalChannel.physicalCellId",
 )
@@ -186,6 +192,18 @@ def scenario_names() -> Tuple[str, ...]:
 
 def unavailable_negative_control_paths() -> Tuple[str, ...]:
     return _UNAVAILABLE_NEGATIVE_CONTROL_PATHS
+
+
+def unavailable_static_census_paths() -> Tuple[str, ...]:
+    return _UNAVAILABLE_STATIC_CENSUS_PATHS
+
+
+def _plmn_string(field: str, value: int) -> str:
+    if field == "mcc":
+        return "{:03d}".format(value)
+    if field == "mnc":
+        return "{:0{}d}".format(value, 3 if value >= 100 else 2)
+    raise ValueError("not a PLMN field: {!r}".format(field))
 
 
 def get_scenario(name: str) -> Scenario:
@@ -292,8 +310,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
 
     radio_values = {
         "gsm": {
-            "mccString": ("310", ("mcc",)),
-            "mncString": ("260", ("mnc",)),
+            "mccString": (_plmn_string("mcc", fields["mcc"]), ("mcc",)),
+            "mncString": (_plmn_string("mnc", fields["mnc"]), ("mnc",)),
             "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
             "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "lac": (fields["lac"], ("lac",)),
@@ -305,8 +323,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
             "timingAdvance": (fields["gsm_ta"], ("gsm_ta",)),
         },
         "wcdma": {
-            "mccString": ("310", ("mcc",)),
-            "mncString": ("260", ("mnc",)),
+            "mccString": (_plmn_string("mcc", fields["mcc"]), ("mcc",)),
+            "mncString": (_plmn_string("mnc", fields["mnc"]), ("mnc",)),
             "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
             "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "lac": (fields["lac"], ("lac",)),
@@ -324,8 +342,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
             "ecNo": (fields["wcdma_ecno"], ("wcdma_ecno",)),
         },
         "lte": {
-            "mccString": ("310", ("mcc",)),
-            "mncString": ("260", ("mnc",)),
+            "mccString": (_plmn_string("mcc", fields["mcc"]), ("mcc",)),
+            "mncString": (_plmn_string("mnc", fields["mnc"]), ("mnc",)),
             "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
             "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "tac": (fields["tac"], ("tac",)),
@@ -342,8 +360,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
             "timingAdvance": (fields["lte_ta"], ("lte_ta",)),
         },
         "nr": {
-            "mccString": ("310", ("mcc",)),
-            "mncString": ("260", ("mnc",)),
+            "mccString": (_plmn_string("mcc", fields["mcc"]), ("mcc",)),
+            "mncString": (_plmn_string("mnc", fields["mnc"]), ("mnc",)),
             "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
             "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "nci": (fields["nci"], ("nci",)),
@@ -373,8 +391,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
     neighbor_values = {
         "gsm": {
             "registered": False,
-            "mccString": "311",
-            "mncString": "480",
+            "mccString": _plmn_string("mcc", _NEIGHBOR_CELLS[0]["mcc"]),
+            "mncString": _plmn_string("mnc", _NEIGHBOR_CELLS[0]["mnc"]),
             "operatorAlphaLong": fields["operator_name"],
             "operatorAlphaShort": fields["operator_name"],
             "lac": 1_111,
@@ -387,8 +405,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
         },
         "lte": {
             "registered": False,
-            "mccString": "312",
-            "mncString": "530",
+            "mccString": _plmn_string("mcc", _NEIGHBOR_CELLS[1]["mcc"]),
+            "mncString": _plmn_string("mnc", _NEIGHBOR_CELLS[1]["mnc"]),
             "operatorAlphaLong": fields["operator_name"],
             "operatorAlphaShort": fields["operator_name"],
             "tac": 5_000,
@@ -406,8 +424,8 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
         },
         "wcdma": {
             "registered": False,
-            "mccString": "313",
-            "mncString": "610",
+            "mccString": _plmn_string("mcc", _NEIGHBOR_CELLS[2]["mcc"]),
+            "mncString": _plmn_string("mnc", _NEIGHBOR_CELLS[2]["mnc"]),
             "operatorAlphaLong": fields["operator_name"],
             "operatorAlphaShort": fields["operator_name"],
             "lac": 3_333,

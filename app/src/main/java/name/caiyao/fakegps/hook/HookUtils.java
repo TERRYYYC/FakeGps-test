@@ -406,9 +406,9 @@ class HookUtils {
         // NR/5G (API 29+)
         if (Build.VERSION.SDK_INT >= 29) {
             hookPlmnStringGetter(cl, "android.telephony.CellIdentityNr", "getMccString", "mcc",
-                    s -> s.mcc != null ? String.valueOf(s.mcc) : null);
+                    s -> configuredPlmnString("mcc", s));
             hookPlmnStringGetter(cl, "android.telephony.CellIdentityNr", "getMncString", "mnc",
-                    s -> s.mnc != null ? String.valueOf(s.mnc) : null);
+                    s -> configuredPlmnString("mnc", s));
             hookGetter(cl, "android.telephony.CellIdentityNr", "getNci", s -> s.nci);
             hookGetter(cl, "android.telephony.CellIdentityNr", "getNrarfcn", s -> s.nrarfcn);
             hookGetter(cl, "android.telephony.CellIdentityNr", "getPci", s -> s.nrPci);
@@ -422,11 +422,23 @@ class HookUtils {
                     "android.telephony.CellIdentityWcdma",
                     "android.telephony.CellIdentityLte"}) {
                 hookPlmnStringGetter(cl, cls, "getMccString", "mcc",
-                        s -> s.mcc != null ? String.valueOf(s.mcc) : null);
+                        s -> configuredPlmnString("mcc", s));
                 hookPlmnStringGetter(cl, cls, "getMncString", "mnc",
-                        s -> s.mnc != null ? String.valueOf(s.mnc) : null);
+                        s -> configuredPlmnString("mnc", s));
             }
         }
+    }
+
+    static String configuredPlmnString(String field, Snapshot snapshot) {
+        Integer configured;
+        if ("mcc".equals(field)) {
+            configured = snapshot.mcc;
+        } else if ("mnc".equals(field)) {
+            configured = snapshot.mnc;
+        } else {
+            throw new IllegalArgumentException("not a PLMN field: " + field);
+        }
+        return Snapshot.resolvePlmnString(field, configured, null, false);
     }
 
     // ==========================================================================
@@ -1294,15 +1306,17 @@ class HookUtils {
         if (Build.VERSION.SDK_INT < 29) return;
 
         try {
-            Class<?> pccClass = XposedHelpers.findClass("android.telephony.PhysicalChannelConfig", cl);
+            XposedHelpers.findClass("android.telephony.PhysicalChannelConfig", cl);
 
-            // PhysicalChannelConfig.getCellBandwidthDownlinkKhz() (API 29+)
-            hookGetter(cl, "android.telephony.PhysicalChannelConfig",
-                    "getCellBandwidthDownlinkKhz", s -> s.cellBandwidthDownlink);
-
-            // PhysicalChannelConfig.getPhysicalCellId() (API 29+)
-            hookGetter(cl, "android.telephony.PhysicalChannelConfig",
-                    "getPhysicalCellId", s -> s.physicalCellId);
+            // These unavailable values coincide with a no-arg Builder's defaults, so dynamic
+            // acceptance alone cannot prove their individual getter hooks. Install all from one
+            // tested registry whose API census supplies the missing static evidence.
+            for (PhysicalChannelHookRegistry.Entry binding
+                    : PhysicalChannelHookRegistry.entriesForApi(Build.VERSION.SDK_INT)) {
+                hookGetter(cl, "android.telephony.PhysicalChannelConfig",
+                        binding.methodName, s -> physicalChannelUnavailableValue(
+                                binding.field, s));
+            }
 
             // PhysicalChannelConfig.getConnectionStatus() (API 29+) — PRIMARY_SERVING=1
             hookGetter(cl, "android.telephony.PhysicalChannelConfig",
@@ -1316,10 +1330,6 @@ class HookUtils {
 
             // API 31+: getBand(), getDownlinkChannelNumber(), getUplinkChannelNumber()
             if (Build.VERSION.SDK_INT >= 31) {
-                // getBand() returns band number (e.g. 1,3,7 for LTE; 41,77,78 for NR)
-                // NOT bandwidth — these are distinct concepts
-                hookGetter(cl, "android.telephony.PhysicalChannelConfig",
-                        "getBand", s -> s.band);
                 hookGetter(cl, "android.telephony.PhysicalChannelConfig",
                         "getDownlinkChannelNumber", s -> {
                             // Map to appropriate ARFCN based on available cell config
@@ -1338,14 +1348,20 @@ class HookUtils {
                         });
             }
 
-            // API 33+: getCellBandwidthUplinkKhz()
-            if (Build.VERSION.SDK_INT >= 33) {
-                hookGetter(cl, "android.telephony.PhysicalChannelConfig",
-                        "getCellBandwidthUplinkKhz",
-                        s -> Snapshot.resolvePhysicalUplinkBandwidth(s.channelBandwidth));
-            }
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": PhysicalChannelConfig class not found, skipping: " + t.getMessage());
+        }
+    }
+
+    private static Object physicalChannelUnavailableValue(String field, Snapshot snapshot) {
+        switch (field) {
+            case "cell_bandwidth_downlink": return snapshot.cellBandwidthDownlink;
+            case "physical_cell_id": return snapshot.physicalCellId;
+            case "band": return snapshot.band;
+            case "channel_bandwidth":
+                return Snapshot.resolvePhysicalUplinkBandwidth(snapshot.channelBandwidth);
+            default: throw new IllegalArgumentException(
+                    "unknown physical-channel field: " + field);
         }
     }
 
@@ -2300,8 +2316,14 @@ class HookUtils {
                     try {
                         org.json.JSONObject obj = arr.getJSONObject(i);
                         String type = obj.optString("type", "gsm");
-                        String nMccString = obj.optString("mcc", mccString);
-                        String nMncString = obj.optString("mnc", mncString);
+                        Object neighborMcc = obj.has("mcc") && !obj.isNull("mcc")
+                                ? obj.opt("mcc") : null;
+                        Object neighborMnc = obj.has("mnc") && !obj.isNull("mnc")
+                                ? obj.opt("mnc") : null;
+                        String nMccString = Snapshot.resolvePlmnStringValue(
+                                "mcc", neighborMcc, mccString);
+                        String nMncString = Snapshot.resolvePlmnStringValue(
+                                "mnc", neighborMnc, mncString);
                         if ("lte".equals(type)) {
                             CellInfoLte lte = (CellInfoLte) XposedHelpers.newInstance(CellInfoLte.class);
                             NEIGHBOR_BYPASS.add(lte);

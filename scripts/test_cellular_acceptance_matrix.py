@@ -64,6 +64,15 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
     def test_expected_paths_cover_every_delivery_surface_and_exact_type(self):
         expected = matrix.expected_for("full-rscp", SESSION_ID)
 
+        self.assertEqual(0, matrix.get_scenario("full-rscp").fields["mnc"])
+        for prefix in ("cellInfo.sync", "cellInfo.request", "callback.cellInfo"):
+            for radio in ("gsm", "wcdma", "lte", "nr"):
+                self.assertEqual("00", expected["{}.{}.mncString".format(prefix, radio)])
+        self.assertEqual(
+            "03",
+            expected["cellInfo.sync.neighbors.gsm.mncString"],
+        )
+
         for delivery in ("sync", "request"):
             for radio in ("lte", "gsm", "wcdma", "nr"):
                 prefix = "cellInfo.{}.{}.".format(delivery, radio)
@@ -178,6 +187,18 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
         self.assertEqual(0, expected["telephony.networkType"])
         self.assertEqual(0, expected["callback.physicalChannel.band"])
         self.assertEqual(-1, expected["callback.physicalChannel.physicalCellId"])
+        self.assertEqual(
+            {
+                "callback.physicalChannel.band",
+                "callback.physicalChannel.physicalCellId",
+            },
+            set(matrix.unavailable_static_census_paths()),
+        )
+        self.assertTrue(
+            set(matrix.unavailable_static_census_paths()).isdisjoint(
+                matrix.unavailable_negative_control_paths()
+            )
+        )
         for path in matrix.unavailable_negative_control_paths():
             self.assertIn(path, expected)
             self.assertNotEqual(

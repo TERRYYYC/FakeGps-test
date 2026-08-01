@@ -252,7 +252,7 @@ object VerificationEngine {
                 val moduleKnob = spec.dbColumn in NOT_DEVICE_OBSERVABLE
                 if (moduleKnob && cfg == null) continue   // nothing configured, nothing to say
 
-                val ambiguous = cfg != null && real != null && valuesMatch(cfg, real)
+                val ambiguous = cfg != null && real != null && canonicalValuesMatch(spec, cfg, real)
                 val verdict = when {
                     moduleKnob -> FieldVerdict.NOT_VERIFIABLE
                     cfg == null -> FieldVerdict.PASSTHROUGH
@@ -304,10 +304,10 @@ object VerificationEngine {
      * arrive in different shapes (`5.0` vs `"5"`, `1` vs `"true"`, `HomeNet` vs `"HomeNet"` with
      * literal quotes). Comparing those verbatim would report a working hook as broken.
      *
-     * The tolerance is bounded by what a WORKING hook can actually emit. HookUtils returns
-     * `String.valueOf(value)`, which never zero-pads, so an observed `"00"` against a configured
-     * `0` cannot have come from the hook — it is the real radio passing through unhooked, and
-     * calling it a match would report an entirely inert module as working.
+     * The tolerance is bounded by what a WORKING hook can actually emit. PLMN string getters are
+     * the sole integer exception: Android requires canonical MCC/MNC widths, so `mnc=0` is emitted
+     * as `"00"`. A genuine baseline is compared with that same field rule before the match can be
+     * called proof; an identical real PLMN therefore remains AMBIGUOUS.
      *
      * Remaining text is compared verbatim, case included: the hook hands back the configured string
      * untouched, so any other difference means the value did not come from us.
@@ -323,8 +323,7 @@ object VerificationEngine {
      *  - Signal columns pass through `Snapshot.fluctuate`, so with fluctuation enabled the hook
      *    deliberately returns a randomised value inside a known window.
      *
-     * Neither applies to identity columns, so `mnc=3` against a real, unhooked `"03"` stays a
-     * mismatch.
+     * PLMN identity strings use [canonicalValuesMatch]; other identity columns stay exact.
      */
     internal fun fieldMatches(
         spec: FieldSpec,
@@ -332,7 +331,7 @@ object VerificationEngine {
         observed: String,
         window: IntRange?,
     ): Boolean {
-        if (valuesMatch(configured, observed)) return true
+        if (canonicalValuesMatch(spec, configured, observed)) return true
 
         if (spec.type == FieldType.FLOAT) {
             val a = configured.trim().toFloatOrNull()
@@ -347,6 +346,21 @@ object VerificationEngine {
         }
 
         return false
+    }
+
+    private fun canonicalValuesMatch(
+        spec: FieldSpec,
+        configured: String,
+        observed: String,
+    ): Boolean {
+        if (spec.dbColumn == "mcc" || spec.dbColumn == "mnc") {
+            val configuredNumber = unquote(configured.trim()).toIntOrNull()
+            val observedNumber = unquote(observed.trim()).toIntOrNull()
+            if (configuredNumber != null && observedNumber != null) {
+                return configuredNumber == observedNumber
+            }
+        }
+        return valuesMatch(configured, observed)
     }
 
     internal fun valuesMatch(configured: String, observed: String): Boolean {

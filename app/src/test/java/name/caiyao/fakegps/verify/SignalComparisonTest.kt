@@ -10,7 +10,8 @@ import org.junit.Test
  * verbatim, so strict equality would report a working module as broken.
  *
  * Each relaxation here is bounded by what the hook can actually emit — deliberately NOT a blanket
- * loosening of numeric comparison, which would resurrect the `mnc=3` vs real `"03"` false success.
+ * loosening of numeric comparison. PLMN string widths are the intentional field-specific exception;
+ * ordinary integer identity values must remain exact.
  */
 class SignalComparisonTest {
 
@@ -137,15 +138,15 @@ class SignalComparisonTest {
 
     @Test
     fun `float normalisation does not leak into integer columns`() {
-        // Guards the regression this whole comparison layer was tightened for: mnc=3 configured
-        // against a real, unhooked "03" must remain a MISMATCH.
-        val specs = linkedMapOf("x" to listOf(FieldSpec("mnc", "MNC", "", FieldType.INTEGER)))
+        // TAC is emitted verbatim; unlike MCC/MNC string getters, zero padding is not its Android
+        // public contract and must remain evidence of a different value shape.
+        val specs = linkedMapOf("x" to listOf(FieldSpec("tac", "TAC", "", FieldType.INTEGER)))
         val r = VerificationEngine.buildReport(
-            configured = mapOf("mnc" to "3"),
-            observed = mapOf("mnc" to "03"),
+            configured = mapOf("tac" to "3"),
+            observed = mapOf("tac" to "03"),
             specs = specs,
         )
-        assertEquals(FieldVerdict.MISMATCH, r.field("mnc").verdict)
+        assertEquals(FieldVerdict.MISMATCH, r.field("tac").verdict)
     }
 
     private fun VerificationReport.field(col: String) =

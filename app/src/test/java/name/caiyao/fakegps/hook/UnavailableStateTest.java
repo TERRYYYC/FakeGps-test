@@ -181,6 +181,8 @@ public class UnavailableStateTest {
         assertEquals("460", Snapshot.resolvePlmnString("mcc", null, "460", false));
         assertEquals("310", Snapshot.resolvePlmnString("mcc", 310, "460", false));
         assertEquals("00", Snapshot.resolvePlmnString("mnc", 0, "00", false));
+        assertEquals("03", Snapshot.resolvePlmnStringValue("mnc", 3, "260"));
+        assertEquals("003", Snapshot.resolvePlmnStringValue("mnc", "003", "260"));
     }
 
     private static final class EmptySource implements Snapshot.FieldSource {
