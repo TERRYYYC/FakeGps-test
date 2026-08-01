@@ -30,11 +30,13 @@ CHANGE_RE = re.compile(
     rf"FakeGPS-Hook:\s+event=interval_changed process=({TOKEN}) "
     rf"fromMs=([0-9]+) toMs=([0-9]+)\s*$"
 )
+BRIEF_PID_RE = re.compile(r"(?:^|\s)[VDIWEF]/[^\r\n(]+\(\s*([0-9]+)\):")
 
 
 @dataclass(frozen=True)
 class RuntimeEvent:
     event: str
+    pid: Optional[int] = None
     request_id: Optional[str] = None
     fingerprint: Optional[str] = None
     fields: Optional[int] = None
@@ -52,7 +54,13 @@ class RuntimeVerifyVerdict:
     events: Tuple[RuntimeEvent, ...]
 
 
+def _logcat_pid(line: str) -> Optional[int]:
+    match = BRIEF_PID_RE.search(line)
+    return int(match.group(1)) if match else None
+
+
 def parse_line(line: str) -> Optional[RuntimeEvent]:
+    pid = _logcat_pid(line)
     match = PROBE_RE.search(line.strip())
     if match:
         event, request_id, fingerprint, fields, reason = match.groups()
@@ -64,6 +72,7 @@ def parse_line(line: str) -> Optional[RuntimeEvent]:
             return None
         return RuntimeEvent(
             event=event,
+            pid=pid,
             request_id=request_id,
             fingerprint=fingerprint,
             fields=int(fields) if fields is not None else None,
@@ -75,7 +84,9 @@ def parse_line(line: str) -> Optional[RuntimeEvent]:
         value = int(interval_ms)
         if value <= 0:
             return None
-        return RuntimeEvent(event="scheduler_owned", process=process, interval_ms=value)
+        return RuntimeEvent(
+            event="scheduler_owned", pid=pid, process=process, interval_ms=value
+        )
     match = CHANGE_RE.search(line.strip())
     if match:
         process, from_ms, to_ms = match.groups()
@@ -84,6 +95,7 @@ def parse_line(line: str) -> Optional[RuntimeEvent]:
             return None
         return RuntimeEvent(
             event="interval_changed",
+            pid=pid,
             process=process,
             from_ms=before,
             to_ms=after,
@@ -149,13 +161,19 @@ def verify_trace(
         ) == key:
             errors.append("ignored active result")
 
-    owner_counts = {}
+    owners_by_process = {}
     for event in events:
         if event.event == "scheduler_owned":
-            owner_counts[event.process] = owner_counts.get(event.process, 0) + 1
-    for process, count in owner_counts.items():
-        if count != 1:
-            errors.append(f"duplicate scheduler owner for {process}")
+            owners_by_process.setdefault(event.process, []).append(event.pid)
+    for process, pids in owners_by_process.items():
+        if None in pids:
+            if len(pids) != 1:
+                errors.append(f"duplicate scheduler owner for {process}")
+            continue
+        pid_counts = {pid: pids.count(pid) for pid in set(pids)}
+        for pid, count in pid_counts.items():
+            if count > 1:
+                errors.append(f"duplicate scheduler owner for {process} pid={pid}")
 
     observed_intervals = {
         event.to_ms for event in events if event.event == "interval_changed"
@@ -168,7 +186,7 @@ def verify_trace(
 
     if require_probe and not delivered:
         errors.append("no correlated probe delivery")
-    if require_scheduler and not owner_counts:
+    if require_scheduler and not owners_by_process:
         errors.append("no scheduler owner evidence")
 
     if expected_probe_failure is not None:

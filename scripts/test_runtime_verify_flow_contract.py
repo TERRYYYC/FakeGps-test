@@ -132,6 +132,32 @@ class RuntimeVerifyFlowContractTest(unittest.TestCase):
         self.assertFalse(verdict.passed)
         self.assertIn("duplicate scheduler owner for com.example", verdict.errors)
 
+    def test_scheduler_owner_is_unique_per_android_pid_not_process_name(self):
+        restarted = [
+            "I/LSPosed-Bridge( 100): FakeGPS-Hook: event=scheduler_owned "
+            "process=com.example intervalMs=30000",
+            "I/LSPosed-Bridge( 101): FakeGPS-Hook: event=scheduler_owned "
+            "process=com.example intervalMs=30000",
+        ]
+        self.assertTrue(runtime_flow.verify_trace(restarted).passed)
+
+        duplicate_in_one_process = restarted[:1] * 2
+        verdict = runtime_flow.verify_trace(duplicate_in_one_process)
+        self.assertFalse(verdict.passed)
+        self.assertIn("duplicate scheduler owner for com.example pid=100", verdict.errors)
+
+    def test_scheduler_owner_with_mixed_pid_provenance_fails_closed(self):
+        mixed = [
+            "I/LSPosed-Bridge( 100): FakeGPS-Hook: event=scheduler_owned "
+            "process=com.example intervalMs=30000",
+            "FakeGPS-Hook: event=scheduler_owned process=com.example intervalMs=30000",
+        ]
+
+        verdict = runtime_flow.verify_trace(mixed)
+
+        self.assertFalse(verdict.passed)
+        self.assertIn("duplicate scheduler owner for com.example", verdict.errors)
+
     def test_expected_fingerprint_and_not_scoped_failure_are_explicit_scenarios(self):
         not_scoped = [
             f"FakeGPS-Probe: event=requested requestId=r1 fp={FP1}",
