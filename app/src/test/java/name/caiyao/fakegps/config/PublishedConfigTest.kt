@@ -27,6 +27,19 @@ class PublishedConfigTest {
     }
 
     @Test
+    fun `parses optional refresh interval without changing schema v3 compatibility`() {
+        val configured = PublishedConfig.parse(
+            """{"schemaVersion":3,"refreshIntervalSec":5,"fields":{},"unavailable":[]}"""
+        )!!
+        val legacyShape = PublishedConfig.parse(
+            """{"schemaVersion":3,"fields":{},"unavailable":[]}"""
+        )!!
+
+        assertEquals(5, configured.refreshIntervalSec)
+        assertNull(legacyShape.refreshIntervalSec)
+    }
+
+    @Test
     fun `parses validated unavailable set separately from spoof fields`() {
         val p = PublishedConfig.parse(
             """{"schemaVersion":3,"mode":"always_on","fields":{"tac":4095},"unavailable":["lac","operator_name"]}"""

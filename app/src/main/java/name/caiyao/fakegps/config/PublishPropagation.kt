@@ -16,6 +16,10 @@ object PublishPropagation {
     /** Seconds; the cadence used when nothing has been configured. */
     const val DEFAULT_REFRESH_INTERVAL_SEC = 30
 
+    /** Runtime safety bounds; payload values are clamped here even if they bypass the UI. */
+    const val MIN_RUNTIME_REFRESH_INTERVAL_SEC = 5
+    const val MAX_RUNTIME_REFRESH_INTERVAL_SEC = 60
+
     /**
      * Mirrors MainHook's default refresh cadence, DERIVED from
      * [DEFAULT_REFRESH_INTERVAL_SEC] so the number exists exactly once.
@@ -59,6 +63,21 @@ object PublishPropagation {
      */
     fun sanitizeInterval(seconds: Int): Int =
         if (isValidInterval(seconds)) seconds else DEFAULT_REFRESH_INTERVAL_SEC
+
+    /**
+     * Delay accepted by the hook process from an optional transport value.
+     *
+     * Missing keeps the schema-v3-compatible 30-second default. A hostile numeric value is
+     * clamped rather than trusted: unlike the persisted UI preference, the cross-process payload
+     * is an input boundary and may not have passed through [isValidInterval].
+     */
+    @JvmStatic
+    fun runtimeIntervalMs(rawSeconds: Int?): Long {
+        val seconds = rawSeconds
+            ?.coerceIn(MIN_RUNTIME_REFRESH_INTERVAL_SEC, MAX_RUNTIME_REFRESH_INTERVAL_SEC)
+            ?: DEFAULT_REFRESH_INTERVAL_SEC
+        return seconds * 1000L
+    }
 
     /**
      * What the stored publish timestamp must become when publication fails: absent.

@@ -55,6 +55,10 @@ public class MainHook implements IXposedHookLoadPackage {
     /** Current spoofing config. Hooks read this atomically via CURRENT.get(). */
     static final AtomicReference<Snapshot> CURRENT = new AtomicReference<>(Snapshot.PASSTHROUGH);
 
+    /** One owner per module classloader/process, even if LSPosed repeats the callback. */
+    private static final HookRuntimeOwnership RUNTIME_OWNERSHIP = new HookRuntimeOwnership();
+    private static final HookRefreshScheduler REFRESH_SCHEDULER = new HookRefreshScheduler();
+
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         // Self-hooking is a DEBUG-ONLY capability, not a shipped behaviour.
@@ -76,10 +80,20 @@ public class MainHook implements IXposedHookLoadPackage {
                 + " | location=" + initial.hasLocation()
                 + " | cellRebuild=" + initial.hasCellReconstructionDecision());
 
-        // 2. Register hooks ONCE — they read CURRENT.get() at invocation time
-        HookUtils.registerAllHooks(lpparam.classLoader);
+        // 2. Register once per target classloader. LSPosed may repeat handleLoadPackage in the
+        // same process; without this gate every getter receives duplicate hooks.
+        ClassLoader targetClassLoader = lpparam.classLoader != null
+                ? lpparam.classLoader
+                : MainHook.class.getClassLoader();
+        if (RUNTIME_OWNERSHIP.claimHooks(targetClassLoader)) {
+            HookUtils.registerAllHooks(targetClassLoader);
+        }
 
-        // 3. Background refresh: re-read prefs periodically, do NOT re-register hooks
+        // 3. One background refresh per process. Duplicate callbacks must not multiply timers.
+        if (!RUNTIME_OWNERSHIP.claimScheduler()) {
+            debug("duplicate load-package callback; refresh scheduler already owned");
+            return;
+        }
         final Handler handler = new Handler(Looper.getMainLooper()) {
             @Override
             public void handleMessage(Message msg) {
@@ -88,10 +102,10 @@ public class MainHook implements IXposedHookLoadPackage {
                     CURRENT.set(refreshed);
                     debug("timer refresh -> hasLocation=" + refreshed.hasLocation());
                 }
-                sendEmptyMessageDelayed(1, 30 * 1000);
+                sendEmptyMessageDelayed(1, REFRESH_SCHEDULER.currentDelayMs());
             }
         };
-        handler.sendEmptyMessageDelayed(1, 3 * 1000);
+        handler.sendEmptyMessageDelayed(1, HookRefreshScheduler.INITIAL_DELAY_MS);
     }
 
     /**
@@ -125,6 +139,12 @@ public class MainHook implements IXposedHookLoadPackage {
 
             org.json.JSONObject root = new org.json.JSONObject(jsonStr);
 
+            Integer refreshIntervalSec = null;
+            Object rawRefreshInterval = root.opt("refreshIntervalSec");
+            if (rawRefreshInterval instanceof Number) {
+                refreshIntervalSec = ((Number) rawRefreshInterval).intValue();
+            }
+
             // schemaVersion gate: refuse to interpret a payload written by an incompatible build
             // rather than silently mis-reading it. Keep last-known-good (never revert to real data
             // mid-test) instead of falling back to passthrough.
@@ -142,7 +162,7 @@ public class MainHook implements IXposedHookLoadPackage {
             String mode = root.optString("mode", "always_on");
             if ("off".equals(mode)) {
                 debug("mode=off -> passthrough");
-                return Snapshot.PASSTHROUGH;
+                return acceptLoadedSnapshot(Snapshot.PASSTHROUGH, refreshIntervalSec);
             }
             if ("time_based".equals(mode)) {
                 org.json.JSONObject hours = root.optJSONObject("activeHours");
@@ -154,7 +174,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (!inRange) {
                         debug("outside active hours (" + start + "-" + end
                                 + ") current=" + h + " -> passthrough");
-                        return Snapshot.PASSTHROUGH;
+                        return acceptLoadedSnapshot(Snapshot.PASSTHROUGH, refreshIntervalSec);
                     }
                 }
             }
@@ -199,12 +219,18 @@ public class MainHook implements IXposedHookLoadPackage {
                     + " unavailable=" + unavailable.asList().size()
                     + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude
                     + " rebuildCells=" + s.hasCellReconstructionDecision());
-            return s;
+            return acceptLoadedSnapshot(s, refreshIntervalSec);
         } catch (Throwable t) {
             // Read/parse failure: keep last-known-good (do NOT revert to real device data mid-test).
             debug("loadSnapshot prefs error: " + t);
             return CURRENT.get();
         }
+    }
+
+    /** Commit Snapshot and delay as one accepted last-known-good transport decision. */
+    private Snapshot acceptLoadedSnapshot(Snapshot snapshot, Integer refreshIntervalSec) {
+        REFRESH_SCHEDULER.acceptPayloadInterval(refreshIntervalSec, true);
+        return snapshot;
     }
 
 }

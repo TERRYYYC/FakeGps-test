@@ -23,6 +23,8 @@ data class PublishedConfig(
     val schemaVersion: Int,
     val mode: String,
     val fields: Map<String, String>,
+    /** Optional in schema v3 so already-published payloads keep the 30-second default. */
+    val refreshIntervalSec: Int? = null,
     val unavailable: Set<String> = emptySet(),
     /**
      * Whether the payload carried a `fields` object at all.
@@ -84,6 +86,7 @@ data class PublishedConfig(
                 schemaVersion = root["schemaVersion"]?.intOrNull() ?: SCHEMA_UNKNOWN,
                 mode = (root["mode"] as? JsonPrimitive)?.content ?: DEFAULT_MODE,
                 fields = fields,
+                refreshIntervalSec = root["refreshIntervalSec"]?.intOrNull(),
                 unavailable = unavailable,
                 fieldsPresent = fieldsObject != null,
                 unavailablePresent = unavailableArray != null,
