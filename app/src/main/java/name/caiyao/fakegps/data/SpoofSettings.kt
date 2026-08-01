@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import name.caiyao.fakegps.config.PublishPropagation
 
 /**
  * SharedPreferences wrapper for spoof configuration.
@@ -17,6 +18,15 @@ class SpoofSettings private constructor(private val prefs: SharedPreferences) {
         const val KEY_SPOOF_MODE = "spoof_mode"
         const val KEY_ACTIVE_HOUR_START = "active_hour_start"
         const val KEY_ACTIVE_HOUR_END = "active_hour_end"
+
+        /**
+         * How often the hook re-reads the published payload, in seconds.
+         *
+         * Valid values are defined by [PublishPropagation]; every read goes through
+         * `sanitizeInterval` so a corrupt or stale preference degrades to the default cadence
+         * rather than to "never refresh".
+         */
+        const val KEY_REFRESH_INTERVAL_SEC = "refresh_interval_sec"
 
         /** Mode values — also used by MainHook when reading from ContentProvider */
         const val MODE_ALWAYS_ON = "always_on"
@@ -44,6 +54,9 @@ class SpoofSettings private constructor(private val prefs: SharedPreferences) {
     private val _activeHourEnd = MutableStateFlow(prefs.getInt(KEY_ACTIVE_HOUR_END, 22))
     val activeHourEnd: StateFlow<Int> = _activeHourEnd
 
+    private val _refreshIntervalSec = MutableStateFlow(readRefreshIntervalSec())
+    val refreshIntervalSec: StateFlow<Int> = _refreshIntervalSec
+
     fun setSpoofMode(mode: String) {
         prefs.edit().putString(KEY_SPOOF_MODE, mode).apply()
         _spoofMode.value = mode
@@ -58,6 +71,28 @@ class SpoofSettings private constructor(private val prefs: SharedPreferences) {
         prefs.edit().putInt(KEY_ACTIVE_HOUR_END, hour.coerceIn(0, 23)).apply()
         _activeHourEnd.value = hour.coerceIn(0, 23)
     }
+
+    /**
+     * Persist the hook's refresh cadence.
+     *
+     * The value is sanitised through [PublishPropagation] on the way IN as well as on the way out,
+     * so an out-of-policy interval can never reach storage in the first place.
+     */
+    fun setRefreshIntervalSec(seconds: Int) {
+        val sanitized = PublishPropagation.sanitizeInterval(seconds)
+        prefs.edit().putInt(KEY_REFRESH_INTERVAL_SEC, sanitized).apply()
+        _refreshIntervalSec.value = sanitized
+    }
+
+    /**
+     * Current cadence, always a value the hook can honour.
+     *
+     * Also the read path for the hook-side scheduler: it must never receive a raw preference,
+     * because a 0 or a negative would translate into a busy loop or a frozen snapshot.
+     */
+    fun readRefreshIntervalSec(): Int = PublishPropagation.sanitizeInterval(
+        prefs.getInt(KEY_REFRESH_INTERVAL_SEC, PublishPropagation.DEFAULT_REFRESH_INTERVAL_SEC)
+    )
 
     /** Read raw prefs — used by AppInfoProvider (no Flow needed). */
     fun getRawMode(): String = prefs.getString(KEY_SPOOF_MODE, MODE_ALWAYS_ON)!!

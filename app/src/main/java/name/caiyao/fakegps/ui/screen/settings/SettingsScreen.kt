@@ -48,7 +48,10 @@ fun SettingsScreen(
     val hourStart by vm.activeHourStart.collectAsState()
     val hourEnd by vm.activeHourEnd.collectAsState()
 
+    val refreshIntervalSec by vm.refreshIntervalSec.collectAsState()
+
     var showModeDialog by remember { mutableStateOf(false) }
+    var showRefreshDialog by remember { mutableStateOf(false) }
     var showHourStartDialog by remember { mutableStateOf(false) }
     var showHourEndDialog by remember { mutableStateOf(false) }
 
@@ -91,9 +94,15 @@ fun SettingsScreen(
                     )
                 }
             }
+            // The value shown here comes from the persisted flow, never from a literal: this row
+            // used to render a hardcoded "60 秒" while the hook re-read every 30 s, and had no
+            // clickable modifier — a number that was both wrong and unchangeable.
             ListItem(
                 headlineContent = { Text("刷新间隔") },
-                supportingContent = { Text("60 秒") },
+                supportingContent = {
+                    Text("$refreshIntervalSec 秒 · 改配置后最多等这么久生效")
+                },
+                modifier = Modifier.clickable { showRefreshDialog = true },
             )
             HorizontalDivider()
 
@@ -135,6 +144,54 @@ fun SettingsScreen(
     }
 
     // Mode selection dialog
+    if (showRefreshDialog) {
+        AlertDialog(
+            onDismissRequest = { showRefreshDialog = false },
+            title = { Text("刷新间隔") },
+            text = {
+                Column {
+                    // Choices come from the policy so this screen cannot offer a cadence the
+                    // hook is not allowed to run at.
+                    for (sec in vm.refreshIntervalChoicesSec) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    vm.setRefreshIntervalSec(sec)
+                                    showRefreshDialog = false
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = refreshIntervalSec == sec,
+                                onClick = {
+                                    vm.setRefreshIntervalSec(sec)
+                                    showRefreshDialog = false
+                                },
+                            )
+                            Text(
+                                text = "$sec 秒",
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Hook 按这个周期重新读取配置。\n" +
+                                "改完档案后，最长要等一个周期才会在目标 App 上生效——" +
+                                "间隔越短生效越快，代价是更频繁的读取。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showRefreshDialog = false }) { Text("关闭") }
+            },
+        )
+    }
+
     if (showModeDialog) {
         val options = listOf(
             SpoofSettings.MODE_ALWAYS_ON to "始终开启",
