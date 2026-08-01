@@ -3,6 +3,7 @@ package name.caiyao.fakegps.probe
 import android.content.Context
 import android.util.Log
 import name.caiyao.fakegps.config.ConfigPrefsSync
+import name.caiyao.fakegps.config.PublishedConfig
 
 internal object HookAcceptanceRecovery {
     const val TAG = "FakeGPSAcceptanceRecovery"
@@ -13,6 +14,10 @@ internal object HookAcceptanceRecovery {
     fun hasPending(context: Context): Boolean =
         recordPrefs(context).getBoolean(KEY_PENDING, false)
 
+    /** Fingerprint of the durable payload itself, before any normal Activity publish can mask it. */
+    fun pendingFingerprint(context: Context): String? =
+        pendingPayload(context)?.let(PublishedConfig::fingerprint)
+
     fun prepare(context: Context): Boolean = runCatching {
         coordinator(context).prepare()
     }.onFailure {
@@ -20,7 +25,11 @@ internal object HookAcceptanceRecovery {
     }.getOrDefault(false)
 
     fun recoverIfPending(context: Context): Boolean = runCatching {
-        coordinator(context).recoverIfPending()
+        if (hasPending(context) && pendingPayload(context) == null) {
+            false
+        } else {
+            coordinator(context).recoverIfPending()
+        }
     }.onFailure {
         Log.e(TAG, "recovery_failed", it)
     }.getOrDefault(false)
@@ -71,4 +80,10 @@ internal object HookAcceptanceRecovery {
 
     private fun recordPrefs(context: Context) =
         context.getSharedPreferences(RECORD_PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun pendingPayload(context: Context): String? {
+        val prefs = recordPrefs(context)
+        if (!prefs.getBoolean(KEY_PENDING, false)) return null
+        return prefs.getString(KEY_PREVIOUS_JSON, null)
+    }
 }

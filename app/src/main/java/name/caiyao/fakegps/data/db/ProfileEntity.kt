@@ -133,4 +133,7 @@ data class ProfileEntity(
 
     // Neighbor Cells
     @ColumnInfo(name = "neighbor_cells_json") val neighborCellsJson: String? = null,
+
+    // Orthogonal third state. Canonical JSON array; null/[] means no explicit-unavailable fields.
+    @ColumnInfo(name = "unavailable_fields") val unavailableFields: String? = null,
 )

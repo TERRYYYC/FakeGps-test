@@ -215,7 +215,7 @@ final class CellConstructorCompat {
     }
 
     private static int numericPlmn(String value) {
-        return Integer.parseInt(value);
+        return value == null ? Integer.MAX_VALUE : Integer.parseInt(value);
     }
 
     private static NoSuchMethodException unsupported(Class<?> type, String expected) {

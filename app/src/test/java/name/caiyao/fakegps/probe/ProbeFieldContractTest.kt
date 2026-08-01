@@ -12,6 +12,8 @@ class ProbeFieldContractTest {
                 "registered",
                 "mccString",
                 "mncString",
+                "operatorAlphaLong",
+                "operatorAlphaShort",
                 "tac",
                 "ci",
                 "pci",
@@ -32,6 +34,8 @@ class ProbeFieldContractTest {
                 "registered",
                 "mccString",
                 "mncString",
+                "operatorAlphaLong",
+                "operatorAlphaShort",
                 "lac",
                 "cid",
                 "arfcn",
@@ -47,6 +51,8 @@ class ProbeFieldContractTest {
                 "registered",
                 "mccString",
                 "mncString",
+                "operatorAlphaLong",
+                "operatorAlphaShort",
                 "lac",
                 "cid",
                 "psc",
@@ -61,6 +67,8 @@ class ProbeFieldContractTest {
                 "registered",
                 "mccString",
                 "mncString",
+                "operatorAlphaLong",
+                "operatorAlphaShort",
                 "nci",
                 "nrarfcn",
                 "pci",
@@ -95,11 +103,26 @@ class ProbeFieldContractTest {
                 "dataState",
                 "dataActivity",
                 "serviceState",
+                "serviceStateDetails",
             ),
             ProbeFieldContract.telephonyFields,
         )
         assertEquals(
-            setOf("state"),
+            setOf(
+                "state",
+                "operatorAlphaLong",
+                "operatorAlphaShort",
+                "operatorNumeric",
+                "roaming",
+                "registrationPlmn",
+                "registrationRoaming",
+                "registrationOperatorAlphaLong",
+                "registrationOperatorAlphaShort",
+            ),
+            ProbeFieldContract.serviceStateFields,
+        )
+        assertEquals(
+            ProbeFieldContract.serviceStateFields,
             ProbeFieldContract.callbackFields.getValue("serviceState"),
         )
         assertEquals(
@@ -139,6 +162,6 @@ class ProbeFieldContractTest {
             ),
             ProbeFieldContract.physicalChannelDeliveryModes,
         )
-        assertEquals(1, ProbeFieldContract.VERSION)
+        assertEquals(2, ProbeFieldContract.VERSION)
     }
 }

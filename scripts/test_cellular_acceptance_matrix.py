@@ -10,9 +10,18 @@ SESSION_ID = "acceptance-123"
 
 class CellularAcceptanceMatrixTest(unittest.TestCase):
 
+    def test_python_payload_version_is_pinned_to_writer_contract(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "app/src/main/java/name/caiyao/fakegps/config/ConfigPrefsSync.kt"
+        ).read_text(encoding="utf-8")
+        match = re.search(r"const val SCHEMA_VERSION\s*=\s*(\d+)", source)
+        self.assertIsNotNone(match)
+        self.assertEqual(int(match.group(1)), matrix.payload_for("full-rscp", SESSION_ID)["schemaVersion"])
+
     def test_two_scenarios_cover_wcdma_power_aliases_without_ambiguity(self):
         self.assertEqual(
-            ("full-rscp", "full-rssi", "fluctuation-enabled"),
+            ("full-rscp", "full-rssi", "fluctuation-enabled", "unavailable"),
             matrix.scenario_names(),
         )
 
@@ -28,14 +37,15 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
             set(rssi.fields).difference({"wcdma_rssi"}),
         )
 
-    def test_payload_is_canonical_schema_v2_and_preserves_nr_long_width(self):
+    def test_payload_is_canonical_schema_v3_and_preserves_nr_long_width(self):
         payload = matrix.payload_for("full-rscp", SESSION_ID)
 
         self.assertEqual(
-            ["acceptanceSessionId", "fields", "mode", "schemaVersion"],
+            ["acceptanceSessionId", "fields", "mode", "schemaVersion", "unavailable"],
             sorted(payload),
         )
-        self.assertEqual(2, payload["schemaVersion"])
+        self.assertEqual(3, payload["schemaVersion"])
+        self.assertEqual([], payload["unavailable"])
         self.assertEqual(SESSION_ID, payload["acceptanceSessionId"])
         self.assertEqual("always_on", payload["mode"])
         self.assertEqual(68_719_400_000, payload["fields"]["nci"])
@@ -53,6 +63,15 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
 
     def test_expected_paths_cover_every_delivery_surface_and_exact_type(self):
         expected = matrix.expected_for("full-rscp", SESSION_ID)
+
+        self.assertEqual(0, matrix.get_scenario("full-rscp").fields["mnc"])
+        for prefix in ("cellInfo.sync", "cellInfo.request", "callback.cellInfo"):
+            for radio in ("gsm", "wcdma", "lte", "nr"):
+                self.assertEqual("00", expected["{}.{}.mncString".format(prefix, radio)])
+        self.assertEqual(
+            "03",
+            expected["cellInfo.sync.neighbors.gsm.mncString"],
+        )
 
         for delivery in ("sync", "request"):
             for radio in ("lte", "gsm", "wcdma", "nr"):
@@ -96,17 +115,97 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
             100_000,
             expected["callback.physicalChannel.cellBandwidthDownlinkKhz"],
         )
+        marker = "HOOK-SESSION:acceptance-123"
+        for prefix in ("cellInfo.sync", "cellInfo.request", "callback.cellInfo"):
+            for radio in ("gsm", "wcdma", "lte", "nr"):
+                self.assertEqual(
+                    marker,
+                    expected["{}.{}.operatorAlphaLong".format(prefix, radio)],
+                )
+                self.assertEqual(
+                    marker,
+                    expected["{}.{}.operatorAlphaShort".format(prefix, radio)],
+                )
+        for prefix in ("telephony.serviceStateDetails", "callback.serviceState"):
+            self.assertEqual(marker, expected[prefix + ".operatorAlphaLong"])
+            self.assertEqual(marker, expected[prefix + ".operatorAlphaShort"])
+            self.assertEqual("310260", expected[prefix + ".operatorNumeric"])
+            self.assertIs(expected[prefix + ".roaming"], True)
+            self.assertEqual("310260", expected[prefix + ".registrationPlmn"])
+            self.assertIs(expected[prefix + ".registrationRoaming"], True)
+            self.assertEqual(
+                marker,
+                expected[prefix + ".registrationOperatorAlphaLong"],
+            )
+            self.assertEqual(
+                marker,
+                expected[prefix + ".registrationOperatorAlphaShort"],
+            )
 
     def test_every_configured_field_has_an_expected_public_observation(self):
         for name in matrix.scenario_names():
             scenario = matrix.get_scenario(name)
             covered = matrix.covered_profile_fields(name)
-            self.assertEqual(set(scenario.fields), covered, name)
+            self.assertEqual(
+                set(scenario.fields).union(scenario.unavailable),
+                covered,
+                name,
+            )
 
         self.assertNotIn(
             "signal_fluctuation_enabled",
             matrix.get_scenario("full-rscp").fields,
         )
+
+    def test_unavailable_scenario_uses_orthogonal_set_and_native_surface_values(self):
+        payload = matrix.payload_for("unavailable", SESSION_ID)
+        selected = {
+            "tac",
+            "nci",
+            "lte_rsrp",
+            "operator_numeric",
+            "network_type",
+            "band",
+            "physical_cell_id",
+        }
+        self.assertEqual(sorted(selected), payload["unavailable"])
+        self.assertTrue(selected.isdisjoint(payload["fields"]))
+
+        expected = matrix.expected_for("unavailable", SESSION_ID)
+        self.assertEqual(2_147_483_647, expected["cellInfo.sync.lte.tac"])
+        self.assertEqual(9_223_372_036_854_775_807, expected["cellInfo.sync.nr.nci"])
+        self.assertEqual(2_147_483_647, expected["cellInfo.sync.lte.rsrp"])
+        self.assertEqual("", expected["telephony.networkOperator"])
+        self.assertIsNone(
+            expected["telephony.serviceStateDetails.operatorNumeric"]
+        )
+        self.assertIsNone(
+            expected["telephony.serviceStateDetails.registrationPlmn"]
+        )
+        self.assertIsNone(expected["callback.serviceState.operatorNumeric"])
+        self.assertIsNone(expected["callback.serviceState.registrationPlmn"])
+        self.assertEqual(0, expected["telephony.networkType"])
+        self.assertEqual(0, expected["callback.physicalChannel.band"])
+        self.assertEqual(-1, expected["callback.physicalChannel.physicalCellId"])
+        self.assertEqual(
+            {
+                "callback.physicalChannel.band",
+                "callback.physicalChannel.physicalCellId",
+            },
+            set(matrix.unavailable_static_census_paths()),
+        )
+        self.assertTrue(
+            set(matrix.unavailable_static_census_paths()).isdisjoint(
+                matrix.unavailable_negative_control_paths()
+            )
+        )
+        for path in matrix.unavailable_negative_control_paths():
+            self.assertIn(path, expected)
+            self.assertNotEqual(
+                expected[path],
+                matrix.expected_for("full-rscp", SESSION_ID)[path],
+                path,
+            )
         fluctuation = matrix.get_scenario("fluctuation-enabled")
         self.assertEqual(1, fluctuation.fields["signal_fluctuation_enabled"])
         self.assertEqual(6, fluctuation.fields["signal_fluctuation_range_db"])
@@ -145,6 +244,57 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
             "Android API 33+ required for --cellular-matrix",
             matrix_preflight,
         )
+
+    def test_debug_apk_install_is_digest_idempotent_and_never_mutates_lsposed_policy(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        install = self._shell_function(script, "install_debug_apk_if_changed")
+
+        self.assertIn('if [ "$installed_sha" = "$local_sha" ]', install)
+        self.assertIn("identical debug APK already installed", install)
+        self.assertIn("adb install -r -t", install)
+        self.assertIn("HARNESS_ACTION", install)
+        self.assertNotIn("adb reboot", install)
+        self.assertNotIn("modules_config.db", install)
+
+    def test_transport_snapshot_compares_payload_not_publish_metadata(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        snapshot = self._shell_function(script, "snapshot_prefs")
+
+        self.assertIn('name="json"', snapshot)
+        self.assertNotIn("sha256sum", snapshot)
+        self.assertNotIn("published_at", snapshot)
+
+    def test_matrix_preflight_waits_for_room_migration_before_protection_snapshot(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        matrix_preflight = self._shell_function(script, "preflight_matrix")
+        schema_wait = self._shell_function(script, "wait_for_profile_schema")
+
+        self.assertIn("wait_for_profile_schema", matrix_preflight)
+        self.assertIn("unavailable_fields=", schema_wait)
+
+    def test_final_pass_is_emitted_only_after_transaction_restore(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        cleanup = self._shell_function(script, "cleanup_transaction")
+        matrix = self._shell_function(script, "run_cellular_matrix")
+
+        self.assertIn("ACCEPTANCE_PASS", cleanup)
+        self.assertNotIn("ACCEPTANCE_PASS", matrix)
+        self.assertIn('[ "$RESTORE_FAILED" -eq 0 ]', cleanup)
+
+    def test_sigkill_recovery_is_bound_to_the_durable_payload_fingerprint(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        recovery = self._shell_function(script, "verify_durable_recovery")
+
+        self.assertIn('fp=$PREFS_BEFORE_FINGERPRINT', recovery)
+        self.assertIn('grep -F', recovery)
+
+    def test_scenario_restore_flag_is_derived_from_observed_state(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        scenario = self._shell_function(script, "run_scenario")
+
+        self.assertIn('if has_state "$session" "restored"', scenario)
+        self.assertIn('restored_args+=(--restored)', scenario)
+        self.assertNotRegex(scenario, r"\n\s*--restored\s*\\")
 
     def test_current_profile_waits_for_the_asynchronous_probe_result(self):
         script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")

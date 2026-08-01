@@ -17,7 +17,7 @@ created: 2026-07-27
 > carrier, service-state, display-info, and physical-channel field reaches the public Android API
 > observed by an app, without modifying the user's saved profiles.
 
-**Architecture:** Add a debug-only acceptance activity that temporarily publishes a schema-v2
+**Architecture:** Add a debug-only acceptance activity that temporarily publishes a schema-v3
 field-map payload to the existing XSharedPreferences transport, waits for the hook refresh, runs an
 expanded public-API probe, and restores the real database-backed payload in `finally`. Before any
 override, a debug-only recovery record durably stores the previous transport payload; the next
@@ -130,6 +130,43 @@ Both `TelephonyManager.getAllCellInfo()` and `requestCellInfoUpdate()` must retu
 serving and neighbor cell sets. Telephony callbacks must expose the configured
 service/display/physical-channel values.
 
+### Serving-RAT construction state machine
+
+`Snapshot` owns field decisions; Android owns the incoming `CellInfo` topology; `HookUtils` owns
+the pure projection from those two inputs to the returned list. No second persisted RAT selector is
+introduced. Shared identity fields are projections, not evidence that a specific RAT exists.
+
+| Profile event | Serving-list transition | Neighbor transition |
+|---|---|---|
+| no RAT-specific identity field | preserve Android's serving RAT objects; apply shared/getter decisions at read time | register every real neighbor in the weak bypass registry |
+| configure GSM `arfcn/bsic` | construct/replace GSM only | preserve real neighbors unless explicit neighbor JSON replaces them |
+| configure WCDMA `psc/uarfcn` | construct/replace WCDMA only | same |
+| configure LTE `tac/ci/pci/earfcn/lte_bandwidth` | construct/replace LTE only | same |
+| configure NR `nci/nrarfcn/nr_pci/nr_tac` | construct/replace NR only (API 29+) | same |
+| configure multiple RAT-specific groups | construct exactly those groups; never infer another RAT from shared fields | same |
+| configure only MCC/MNC/LAC/CID | preserve Android topology and project onto compatible existing serving identities | real neighbors remain bypassed |
+| mark fields unavailable only | do not construct any serving RAT | existing surface-specific getters still return native unknown values |
+| configure `neighbor_cells_json` | does not select a serving RAT | construct the explicit neighbor set under the existing neighbor contract |
+
+Invariants:
+
+- INV-RAT-1: `mcc/mnc/lac/cid` never select GSM, WCDMA, LTE or NR construction;
+- INV-RAT-2: each constructed serving RAT has at least one configured, non-unavailable identity
+  field owned only by that RAT;
+- INV-RAT-3: absent an explicit RAT construction decision, the framework's serving topology is
+  preserved and shared fields are getter projections;
+- INV-RAT-4: multiple constructed serving RATs correspond one-for-one with explicitly configured
+  RAT-specific groups;
+- INV-RAT-5: unavailable-only and signal-only decisions never fabricate identity objects;
+- INV-RAT-6: every cell-list delivery path, subscription-topology guard, builder and real-cell
+  preservation path consumes the same canonical reconstruction predicate;
+- INV-RAT-7: real neighbors are entered in the weak bypass registry whenever the framework list is
+  passed through, so global serving getter hooks never rewrite them.
+
+Adversarial matrix: shared MCC/MNC + LTE; shared MCC/MNC + NR; LAC/CID + WCDMA; shared-only on a
+real LTE baseline; unavailable-only LAC/CID/PSC; signal-only; explicit GSM + LTE; WCDMA-only
+PSC; blank profile.
+
 ### API-35 physical-channel permission boundary
 
 `TelephonyCallback.PhysicalChannelConfigListener` is guarded by
@@ -148,11 +185,18 @@ failure, getter mismatch, unexpected exception, or missing ordinary callback rem
 failure. This verifies the module's callback interception without claiming that an unprivileged
 third-party app can receive a framework event Android does not allow it to register for.
 
+Two unavailable observations, `band=0` and `physicalCellId=-1`, equal the no-arg Builder defaults.
+Exact observation plus a full-profile negative control therefore cannot independently distinguish
+their individual getter hooks from a per-method no-op. They are explicitly excluded from the
+dynamic-negative-control claim. A production-consumed `PhysicalChannelHookRegistry` plus JVM
+census covers those methods (and the two sibling bandwidth getters); dynamic acceptance still
+proves callback replacement and the physical-channel hook group with non-default fields.
+
 ## Override lifecycle and invariants
 
 | Current state | Event | Next state | Required effect |
 |---|---|---|---|
-| `idle` | valid debug intent | `published` | First durably record the current transport payload in debug-private recovery state, then publish the schema-v2 test payload with top-level session ID and session-specific operator marker; do not touch Room |
+| `idle` | valid debug intent | `published` | First durably record the current transport payload in debug-private recovery state, then publish the schema-v3 test payload with top-level session ID and session-specific operator marker; do not touch Room |
 | `idle` | invalid/missing payload | `aborted` | Log validation error; do not alter transport |
 | `published` | hook refresh delay elapsed | `probing` | Read the public network-operator getter and probe only if it exposes this run's session marker |
 | `probing` | success or exception | `restoring` | Emit exactly one terminal probe/error record |
@@ -187,7 +231,7 @@ Invariants:
 - Reject missing/blank session IDs, non-object `fields`, unsupported schema versions, and keys
   outside the profile field map.
 - Prove the canonical envelope is
-  `{schemaVersion:2, acceptanceSessionId:"...", mode:"always_on", fields:{...}}`.
+  `{schemaVersion:3, acceptanceSessionId:"...", mode:"always_on", fields:{...}, unavailable:[]}`.
 - Reject an envelope session or public operator marker that differs from the activity session.
 - Prove numeric values retain integer/long width (`nci` must not round through `Double`).
 

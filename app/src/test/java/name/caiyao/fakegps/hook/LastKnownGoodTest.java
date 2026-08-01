@@ -11,7 +11,7 @@ import org.junit.Test;
  * <p>Context (review FC-2 / FC-7): the earlier JVM suite only covered the typed
  * SpoofConfig/ConfigHolder path, which is no longer on the runtime path — so when the
  * transport moved to flat `fields` JSON, the invariant silently regressed in two places
- * (missing prefs payload, and a v2 payload with no `fields` object). Both reverted an
+ * (missing prefs payload, and a compatible payload with no `fields` object). Both reverted an
  * ACTIVE spoof to real device data, which leaks the true environment to the app under test.
  *
  * <p>These tests fail if that regression is ever reintroduced.

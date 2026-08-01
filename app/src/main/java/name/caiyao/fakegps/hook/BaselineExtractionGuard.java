@@ -9,7 +9,7 @@ import java.util.function.Supplier;
  * guard, baseline extraction calls getTac()/getRsrp()/isRegistered() and reads back this module's
  * own spoofed results instead of the framework values it is supposed to preserve.
  */
-final class BaselineExtractionGuard {
+public final class BaselineExtractionGuard {
     private static final ThreadLocal<Integer> DEPTH = new ThreadLocal<Integer>() {
         @Override
         protected Integer initialValue() {
@@ -19,11 +19,11 @@ final class BaselineExtractionGuard {
 
     private BaselineExtractionGuard() {}
 
-    static boolean isActive() {
+    public static boolean isActive() {
         return DEPTH.get() > 0;
     }
 
-    static <T> T call(Supplier<T> supplier) {
+    public static <T> T call(Supplier<T> supplier) {
         DEPTH.set(DEPTH.get() + 1);
         try {
             return supplier.get();

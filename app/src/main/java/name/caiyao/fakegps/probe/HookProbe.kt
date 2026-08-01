@@ -5,6 +5,7 @@ import android.content.Context
 import android.location.LocationManager
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.telephony.CellIdentity
 import android.telephony.CellIdentityGsm
 import android.telephony.CellIdentityLte
 import android.telephony.CellIdentityNr
@@ -202,6 +203,9 @@ object HookProbe {
             observe(out, "mccString", errors, stage) { id.mcc.toString() }
             observe(out, "mncString", errors, stage) { id.mnc.toString() }
         }
+        if (Build.VERSION.SDK_INT >= 28) {
+            observeIdentityCarrier(out, id, errors, stage)
+        }
         observe(out, "tac", errors, stage) { id.tac }
         observe(out, "ci", errors, stage) { id.ci }
         observe(out, "pci", errors, stage) { id.pci }
@@ -243,6 +247,9 @@ object HookProbe {
             observe(out, "mccString", errors, stage) { id.mcc.toString() }
             observe(out, "mncString", errors, stage) { id.mnc.toString() }
         }
+        if (Build.VERSION.SDK_INT >= 28) {
+            observeIdentityCarrier(out, id, errors, stage)
+        }
         observe(out, "lac", errors, stage) { id.lac }
         observe(out, "cid", errors, stage) { id.cid }
         observe(out, "arfcn", errors, stage) { id.arfcn }
@@ -272,6 +279,9 @@ object HookProbe {
             observe(out, "mccString", errors, stage) { id.mcc.toString() }
             observe(out, "mncString", errors, stage) { id.mnc.toString() }
         }
+        if (Build.VERSION.SDK_INT >= 28) {
+            observeIdentityCarrier(out, id, errors, stage)
+        }
         observe(out, "lac", errors, stage) { id.lac }
         observe(out, "cid", errors, stage) { id.cid }
         observe(out, "psc", errors, stage) { id.psc }
@@ -296,6 +306,7 @@ object HookProbe {
         observe(out, "registered", errors, stage) { cell.isRegistered }
         observe(out, "mccString", errors, stage) { id.mccString }
         observe(out, "mncString", errors, stage) { id.mncString }
+        observeIdentityCarrier(out, id, errors, stage)
         observe(out, "nci", errors, stage) { id.nci }
         observe(out, "nrarfcn", errors, stage) { id.nrarfcn }
         observe(out, "pci", errors, stage) { id.pci }
@@ -307,6 +318,70 @@ object HookProbe {
         observe(out, "csiRsrp", errors, stage) { signal.csiRsrp }
         observe(out, "csiRsrq", errors, stage) { signal.csiRsrq }
         observe(out, "csiSinr", errors, stage) { signal.csiSinr }
+        return out
+    }
+
+    @RequiresApi(28)
+    private fun observeIdentityCarrier(
+        out: JSONObject,
+        identity: CellIdentity,
+        errors: JSONArray,
+        stage: String,
+    ) {
+        observe(out, "operatorAlphaLong", errors, stage) {
+            identity.operatorAlphaLong?.toString()
+        }
+        observe(out, "operatorAlphaShort", errors, stage) {
+            identity.operatorAlphaShort?.toString()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    @Suppress("DEPRECATION")
+    private fun observeServiceState(
+        serviceState: ServiceState,
+        errors: JSONArray,
+        stage: String,
+    ): JSONObject {
+        val out = JSONObject()
+        observe(out, "state", errors, stage) { serviceState.state }
+        observe(out, "operatorAlphaLong", errors, stage) {
+            serviceState.operatorAlphaLong
+        }
+        observe(out, "operatorAlphaShort", errors, stage) {
+            serviceState.operatorAlphaShort
+        }
+        observe(out, "operatorNumeric", errors, stage) {
+            serviceState.operatorNumeric
+        }
+        observe(out, "roaming", errors, stage) { serviceState.roaming }
+
+        if (Build.VERSION.SDK_INT >= 30) {
+            val registration = try {
+                val registrations = serviceState.networkRegistrationInfoList
+                registrations.firstOrNull { it.cellIdentity != null }
+                    ?: registrations.firstOrNull()
+            } catch (failure: Throwable) {
+                recordError(errors, "$stage.networkRegistrationInfo", failure)
+                null
+            }
+            observe(out, "registrationPlmn", errors, stage) {
+                registration?.registeredPlmn
+            }
+            observe(out, "registrationRoaming", errors, stage) {
+                if (Build.VERSION.SDK_INT >= 34) {
+                    registration?.isNetworkRoaming
+                } else {
+                    registration?.isRoaming
+                }
+            }
+            observe(out, "registrationOperatorAlphaLong", errors, stage) {
+                registration?.cellIdentity?.operatorAlphaLong?.toString()
+            }
+            observe(out, "registrationOperatorAlphaShort", errors, stage) {
+                registration?.cellIdentity?.operatorAlphaShort?.toString()
+            }
+        }
         return out
     }
 
@@ -380,7 +455,19 @@ object HookProbe {
         observe(out, "dataState", errors, "telephony") { manager.dataState }
         observe(out, "dataActivity", errors, "telephony") { manager.dataActivity }
         if (Build.VERSION.SDK_INT >= 26) {
-            observe(out, "serviceState", errors, "telephony") { manager.serviceState?.state }
+            val serviceState = try {
+                manager.serviceState
+            } catch (failure: Throwable) {
+                recordError(errors, "telephony.serviceState", failure)
+                null
+            }
+            observe(out, "serviceState", errors, "telephony") { serviceState?.state }
+            if (serviceState != null) {
+                out.put(
+                    "serviceStateDetails",
+                    observeServiceState(serviceState, errors, "telephony.serviceStateDetails"),
+                )
+            }
         }
         return out
     }
@@ -532,9 +619,7 @@ object HookProbe {
 
         @Suppress("DEPRECATION")
         override fun onServiceStateChanged(serviceState: ServiceState) {
-            val out = JSONObject()
-            observe(out, "state", errors, "callback.serviceState") { serviceState.state }
-            service.set(out)
+            service.set(observeServiceState(serviceState, errors, "callback.serviceState"))
             mark(serviceSeen)
         }
 

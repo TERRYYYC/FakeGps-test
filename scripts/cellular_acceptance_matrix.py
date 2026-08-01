@@ -17,13 +17,14 @@ class Scenario:
     name: str
     fields: Mapping[str, Any]
     fluctuation: bool = False
+    unavailable: Tuple[str, ...] = ()
 
 
 _NEIGHBOR_CELLS = [
     {
         "type": "gsm",
         "mcc": 311,
-        "mnc": 480,
+        "mnc": 3,
         "lac": 1_111,
         "cid": 2_222,
         "arfcn": 700,
@@ -64,7 +65,7 @@ _NEIGHBOR_CELLS = [
 
 _COMMON_FIELDS = {
     "mcc": 310,
-    "mnc": 260,
+    "mnc": 0,
     "lac": 32_123,
     "cid": 54_321,
     "arfcn": 512,
@@ -122,6 +123,19 @@ _COMMON_FIELDS = {
     ),
 }
 
+_UNAVAILABLE_NATIVE_VALUES = {
+    "tac": 2_147_483_647,
+    "nci": 9_223_372_036_854_775_807,
+    "lte_rsrp": 2_147_483_647,
+    "operator_numeric": "",
+    "network_type": 0,
+    "band": 0,
+    "physical_cell_id": -1,
+}
+_UNAVAILABLE_FIELDS = dict(_COMMON_FIELDS, wcdma_rscp=-88)
+for _field in _UNAVAILABLE_NATIVE_VALUES:
+    _UNAVAILABLE_FIELDS.pop(_field)
+
 _SCENARIOS = {
     "full-rscp": Scenario(
         "full-rscp",
@@ -148,11 +162,48 @@ _SCENARIOS = {
         },
         fluctuation=True,
     ),
+    "unavailable": Scenario(
+        "unavailable",
+        _UNAVAILABLE_FIELDS,
+        unavailable=tuple(sorted(_UNAVAILABLE_NATIVE_VALUES)),
+    ),
 }
+
+_UNAVAILABLE_NEGATIVE_CONTROL_PATHS = (
+    "cellInfo.sync.lte.tac",
+    "cellInfo.sync.nr.nci",
+    "cellInfo.sync.lte.rsrp",
+    "telephony.networkOperator",
+    "telephony.networkType",
+)
+
+# These exact unavailable values equal a no-arg PhysicalChannelConfig.Builder's defaults.
+# Dynamic comparison therefore cannot distinguish the getter hook from a per-method no-op; the
+# production-installed registry and its JVM census provide that independent evidence instead.
+_UNAVAILABLE_STATIC_CENSUS_PATHS = (
+    "callback.physicalChannel.band",
+    "callback.physicalChannel.physicalCellId",
+)
 
 
 def scenario_names() -> Tuple[str, ...]:
     return tuple(_SCENARIOS)
+
+
+def unavailable_negative_control_paths() -> Tuple[str, ...]:
+    return _UNAVAILABLE_NEGATIVE_CONTROL_PATHS
+
+
+def unavailable_static_census_paths() -> Tuple[str, ...]:
+    return _UNAVAILABLE_STATIC_CENSUS_PATHS
+
+
+def _plmn_string(field: str, value: int) -> str:
+    if field == "mcc":
+        return "{:03d}".format(value)
+    if field == "mnc":
+        return "{:0{}d}".format(value, 3 if value >= 100 else 2)
+    raise ValueError("not a PLMN field: {!r}".format(field))
 
 
 def get_scenario(name: str) -> Scenario:
@@ -170,10 +221,11 @@ def get_scenario(name: str) -> Scenario:
 def payload_for(name: str, session_id: str) -> Dict[str, Any]:
     scenario = _scenario_for_session(name, session_id)
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "acceptanceSessionId": session_id,
         "mode": "always_on",
         "fields": dict(scenario.fields),
+        "unavailable": list(scenario.unavailable),
     }
 
 
@@ -233,6 +285,7 @@ def _scenario_for_session(name: str, session_id: str) -> Scenario:
         name=scenario.name,
         fields=fields,
         fluctuation=scenario.fluctuation,
+        unavailable=scenario.unavailable,
     )
 
 
@@ -240,7 +293,9 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
     if scenario.fluctuation:
         return _build_fluctuation_expected(scenario)
 
-    fields = scenario.fields
+    fields = dict(scenario.fields)
+    for field in scenario.unavailable:
+        fields[field] = _UNAVAILABLE_NATIVE_VALUES[field]
     expected: Dict[str, Any] = {}
     covered: Set[str] = set()
 
@@ -250,10 +305,15 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
         expected[path] = value
         covered.update(sources)
 
+    def carrier_object(field: str) -> Any:
+        return None if field in scenario.unavailable else fields[field]
+
     radio_values = {
         "gsm": {
-            "mccString": ("310", ("mcc",)),
-            "mncString": ("260", ("mnc",)),
+            "mccString": (_plmn_string("mcc", fields["mcc"]), ("mcc",)),
+            "mncString": (_plmn_string("mnc", fields["mnc"]), ("mnc",)),
+            "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
+            "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "lac": (fields["lac"], ("lac",)),
             "cid": (fields["cid"], ("cid",)),
             "arfcn": (fields["arfcn"], ("arfcn",)),
@@ -263,8 +323,10 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
             "timingAdvance": (fields["gsm_ta"], ("gsm_ta",)),
         },
         "wcdma": {
-            "mccString": ("310", ("mcc",)),
-            "mncString": ("260", ("mnc",)),
+            "mccString": (_plmn_string("mcc", fields["mcc"]), ("mcc",)),
+            "mncString": (_plmn_string("mnc", fields["mnc"]), ("mnc",)),
+            "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
+            "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "lac": (fields["lac"], ("lac",)),
             "cid": (fields["cid"], ("cid",)),
             "psc": (fields["psc"], ("psc",)),
@@ -280,8 +342,10 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
             "ecNo": (fields["wcdma_ecno"], ("wcdma_ecno",)),
         },
         "lte": {
-            "mccString": ("310", ("mcc",)),
-            "mncString": ("260", ("mnc",)),
+            "mccString": (_plmn_string("mcc", fields["mcc"]), ("mcc",)),
+            "mncString": (_plmn_string("mnc", fields["mnc"]), ("mnc",)),
+            "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
+            "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "tac": (fields["tac"], ("tac",)),
             "ci": (fields["ci"], ("ci",)),
             "pci": (fields["pci"], ("pci",)),
@@ -296,8 +360,10 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
             "timingAdvance": (fields["lte_ta"], ("lte_ta",)),
         },
         "nr": {
-            "mccString": ("310", ("mcc",)),
-            "mncString": ("260", ("mnc",)),
+            "mccString": (_plmn_string("mcc", fields["mcc"]), ("mcc",)),
+            "mncString": (_plmn_string("mnc", fields["mnc"]), ("mnc",)),
+            "operatorAlphaLong": (carrier_object("operator_name"), ("operator_name",)),
+            "operatorAlphaShort": (carrier_object("operator_name"), ("operator_name",)),
             "nci": (fields["nci"], ("nci",)),
             "nrarfcn": (fields["nrarfcn"], ("nrarfcn",)),
             "pci": (fields["nr_pci"], ("nr_pci",)),
@@ -325,8 +391,10 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
     neighbor_values = {
         "gsm": {
             "registered": False,
-            "mccString": "311",
-            "mncString": "480",
+            "mccString": _plmn_string("mcc", _NEIGHBOR_CELLS[0]["mcc"]),
+            "mncString": _plmn_string("mnc", _NEIGHBOR_CELLS[0]["mnc"]),
+            "operatorAlphaLong": fields["operator_name"],
+            "operatorAlphaShort": fields["operator_name"],
             "lac": 1_111,
             "cid": 2_222,
             "arfcn": 700,
@@ -337,8 +405,10 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
         },
         "lte": {
             "registered": False,
-            "mccString": "312",
-            "mncString": "530",
+            "mccString": _plmn_string("mcc", _NEIGHBOR_CELLS[1]["mcc"]),
+            "mncString": _plmn_string("mnc", _NEIGHBOR_CELLS[1]["mnc"]),
+            "operatorAlphaLong": fields["operator_name"],
+            "operatorAlphaShort": fields["operator_name"],
             "tac": 5_000,
             "ci": 87_654_321,
             "pci": 411,
@@ -354,8 +424,10 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
         },
         "wcdma": {
             "registered": False,
-            "mccString": "313",
-            "mncString": "610",
+            "mccString": _plmn_string("mcc", _NEIGHBOR_CELLS[2]["mcc"]),
+            "mncString": _plmn_string("mnc", _NEIGHBOR_CELLS[2]["mnc"]),
+            "operatorAlphaLong": fields["operator_name"],
+            "operatorAlphaShort": fields["operator_name"],
             "lac": 3_333,
             "cid": 4_444,
             "psc": 222,
@@ -408,11 +480,26 @@ def _build_expected(scenario: Scenario) -> Tuple[Dict[str, Any], Set[str]]:
     for public_name, (source, value) in telephony.items():
         add("telephony.{}".format(public_name), value, (source,))
 
-    add(
-        "callback.serviceState.state",
-        fields["service_state"],
-        ("service_state",),
-    )
+    service_state = {
+        "state": ("service_state", fields["service_state"]),
+        "operatorAlphaLong": ("operator_name", carrier_object("operator_name")),
+        "operatorAlphaShort": ("operator_name", carrier_object("operator_name")),
+        "operatorNumeric": ("operator_numeric", carrier_object("operator_numeric")),
+        "roaming": ("is_roaming", True),
+        "registrationPlmn": ("operator_numeric", carrier_object("operator_numeric")),
+        "registrationRoaming": ("is_roaming", True),
+        "registrationOperatorAlphaLong": (
+            "operator_name",
+            carrier_object("operator_name"),
+        ),
+        "registrationOperatorAlphaShort": (
+            "operator_name",
+            carrier_object("operator_name"),
+        ),
+    }
+    for prefix in ("telephony.serviceStateDetails", "callback.serviceState"):
+        for public_name, (source, value) in service_state.items():
+            add("{}.{}".format(prefix, public_name), value, (source,))
     add(
         "callback.displayInfo.networkType",
         fields["network_type"],

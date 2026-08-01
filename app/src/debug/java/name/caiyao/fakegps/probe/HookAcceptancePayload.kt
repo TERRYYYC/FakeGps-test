@@ -2,15 +2,18 @@ package name.caiyao.fakegps.probe
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import name.caiyao.fakegps.config.ConfigPrefsSync
+import name.caiyao.fakegps.config.UnavailablePayloadContract
 
 internal object HookAcceptancePayload {
-    private const val SCHEMA_VERSION = 2
+    internal const val schemaVersion = ConfigPrefsSync.SCHEMA_VERSION
     private const val PUBLIC_MARKER_PREFIX = "HOOK-SESSION:"
     private val SESSION_ID = Regex("[A-Za-z0-9._-]{1,80}")
 
@@ -90,8 +93,8 @@ internal object HookAcceptancePayload {
 
         val root = Json.parseToJsonElement(rawEnvelope) as? JsonObject
             ?: throw IllegalArgumentException("acceptance payload must be an object")
-        require(root["schemaVersion"]?.jsonPrimitive?.intOrNull == SCHEMA_VERSION) {
-            "schemaVersion must be 2"
+        require(root["schemaVersion"]?.jsonPrimitive?.intOrNull == schemaVersion) {
+            "schemaVersion must be $schemaVersion"
         }
         require(root["mode"]?.jsonPrimitive?.content == "always_on") {
             "mode must be always_on"
@@ -125,12 +128,22 @@ internal object HookAcceptancePayload {
         ) {
             "operator_name must carry the acceptance session marker"
         }
+        val unavailableArray = root["unavailable"] as? JsonArray
+            ?: throw IllegalArgumentException("unavailable must be an array")
+        val unavailableNames = unavailableArray.map {
+            val primitive = it as? JsonPrimitive
+                ?: throw IllegalArgumentException("unavailable fields must be strings")
+            require(primitive.isString) { "unavailable fields must be strings" }
+            primitive.content
+        }
+        val unavailable = UnavailablePayloadContract.validate(fields.keys, unavailableNames)
 
         val canonical = buildJsonObject {
-            put("schemaVersion", SCHEMA_VERSION)
+            put("schemaVersion", schemaVersion)
             put("acceptanceSessionId", sessionId)
             put("mode", "always_on")
             put("fields", fields)
+            put("unavailable", JsonArray(unavailable.asList().map(::JsonPrimitive)))
         }
         return Validated(
             sessionId = sessionId,

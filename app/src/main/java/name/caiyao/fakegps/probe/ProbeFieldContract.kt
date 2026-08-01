@@ -1,7 +1,7 @@
 package name.caiyao.fakegps.probe
 
 object ProbeFieldContract {
-    const val VERSION = 1
+    const val VERSION = 2
 
     val cellInfoPaths: Set<String> = setOf("sync", "request")
 
@@ -18,6 +18,8 @@ object ProbeFieldContract {
             "registered",
             "mccString",
             "mncString",
+            "operatorAlphaLong",
+            "operatorAlphaShort",
             "tac",
             "ci",
             "pci",
@@ -35,6 +37,8 @@ object ProbeFieldContract {
             "registered",
             "mccString",
             "mncString",
+            "operatorAlphaLong",
+            "operatorAlphaShort",
             "lac",
             "cid",
             "arfcn",
@@ -47,6 +51,8 @@ object ProbeFieldContract {
             "registered",
             "mccString",
             "mncString",
+            "operatorAlphaLong",
+            "operatorAlphaShort",
             "lac",
             "cid",
             "psc",
@@ -58,6 +64,8 @@ object ProbeFieldContract {
             "registered",
             "mccString",
             "mncString",
+            "operatorAlphaLong",
+            "operatorAlphaShort",
             "nci",
             "nrarfcn",
             "pci",
@@ -87,10 +95,23 @@ object ProbeFieldContract {
         "dataState",
         "dataActivity",
         "serviceState",
+        "serviceStateDetails",
+    )
+
+    val serviceStateFields: Set<String> = setOf(
+        "state",
+        "operatorAlphaLong",
+        "operatorAlphaShort",
+        "operatorNumeric",
+        "roaming",
+        "registrationPlmn",
+        "registrationRoaming",
+        "registrationOperatorAlphaLong",
+        "registrationOperatorAlphaShort",
     )
 
     val callbackFields: Map<String, Set<String>> = linkedMapOf(
-        "serviceState" to setOf("state"),
+        "serviceState" to serviceStateFields,
         "displayInfo" to setOf("networkType", "overrideNetworkType"),
         "physicalChannel" to setOf(
             "cellBandwidthDownlinkKhz",

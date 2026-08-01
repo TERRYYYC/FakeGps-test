@@ -13,6 +13,9 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import name.caiyao.fakegps.config.ConfigCodec;
 import name.caiyao.fakegps.config.SpoofConfig;
+import name.caiyao.fakegps.config.ConfigPrefsSync;
+import name.caiyao.fakegps.config.PublishedConfig;
+import name.caiyao.fakegps.config.TransportSchemaContract;
 
 /**
  * Xposed module entry point.
@@ -34,10 +37,10 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "FakeGPS";
 
-    /** Must match ConfigPrefsSync.PREFS_NAME / KEY_JSON / SCHEMA_VERSION on the app write side. */
-    private static final String PREFS_NAME = "spoof_config";
-    private static final String PREFS_KEY_JSON = "json";
-    private static final int TRANSPORT_SCHEMA_VERSION = 2;
+    private static final String PREFS_NAME = ConfigPrefsSync.PREFS_NAME;
+    private static final String PREFS_KEY_JSON = ConfigPrefsSync.KEY_JSON;
+    private static final int TRANSPORT_SCHEMA_VERSION = ConfigPrefsSync.SCHEMA_VERSION;
+    private static final int LEGACY_TRANSPORT_SCHEMA_VERSION = ConfigPrefsSync.LEGACY_SCHEMA_VERSION;
 
     /**
      * Verbose diagnostics, debug builds only. These run inside the TARGET app's process, so in a
@@ -71,8 +74,7 @@ public class MainHook implements IXposedHookLoadPackage {
         CURRENT.set(initial);
         XposedBridge.log(TAG + ": Loaded config for " + lpparam.packageName
                 + " | location=" + initial.hasLocation()
-                + " | cell=" + initial.hasGsmCell()
-                + " | lte=" + initial.hasLteCell());
+                + " | cellRebuild=" + initial.hasCellReconstructionDecision());
 
         // 2. Register hooks ONCE — they read CURRENT.get() at invocation time
         HookUtils.registerAllHooks(lpparam.classLoader);
@@ -127,11 +129,15 @@ public class MainHook implements IXposedHookLoadPackage {
             // rather than silently mis-reading it. Keep last-known-good (never revert to real data
             // mid-test) instead of falling back to passthrough.
             int version = root.optInt("schemaVersion", -1);
-            if (version != TRANSPORT_SCHEMA_VERSION) {
-                debug("incompatible schemaVersion=" + version
-                        + " (expected " + TRANSPORT_SCHEMA_VERSION + ") -> keep last-known-good");
+            String fingerprint = PublishedConfig.Companion.fingerprint(jsonStr);
+            boolean legacyV2 = version == LEGACY_TRANSPORT_SCHEMA_VERSION;
+            if (!TransportSchemaContract.supports(version)) {
+                XposedBridge.log(TAG + ": transport rejected schema=" + version
+                        + " expected=" + TRANSPORT_SCHEMA_VERSION + " fp=" + fingerprint);
                 return CURRENT.get();
             }
+            XposedBridge.log(TAG + ": transport accepted schema=" + version
+                    + " fp=" + fingerprint);
 
             String mode = root.optString("mode", "always_on");
             if ("off".equals(mode)) {
@@ -157,7 +163,7 @@ public class MainHook implements IXposedHookLoadPackage {
             // coverage equals the profile table instead of a hand-maintained subset.
             org.json.JSONObject fields = root.optJSONObject("fields");
             if (fields == null) {
-                // last-known-good (review FC-2): a v2-valid payload that carries no `fields` object
+                // last-known-good (review FC-2): a v3-valid payload that carries no `fields` object
                 // is structurally incomplete, not an instruction to stop spoofing. Publishing an
                 // all-null Snapshot here would silently drop an active spoof back to real data.
                 Snapshot resolved = Snapshot.keepLastKnownGoodOr(CURRENT.get());
@@ -166,10 +172,33 @@ public class MainHook implements IXposedHookLoadPackage {
                                                             : "keep last-known-good"));
                 return resolved;
             }
-            Snapshot s = Snapshot.fromJson(fields);
+            org.json.JSONArray unavailableJson = root.optJSONArray("unavailable");
+            if (unavailableJson == null && !legacyV2) {
+                Snapshot resolved = Snapshot.keepLastKnownGoodOr(CURRENT.get());
+                debug("payload has no 'unavailable' array -> keep last-known-good");
+                return resolved;
+            }
+            java.util.List<String> requestedUnavailable = new java.util.ArrayList<>();
+            if (unavailableJson != null) {
+                for (int i = 0; i < unavailableJson.length(); i++) {
+                    Object value = unavailableJson.get(i);
+                    if (!(value instanceof String)) {
+                        throw new IllegalArgumentException("unavailable entry is not a string");
+                    }
+                    requestedUnavailable.add((String) value);
+                }
+            }
+            java.util.Set<String> configuredFields = new java.util.HashSet<>();
+            java.util.Iterator<String> keys = fields.keys();
+            while (keys.hasNext()) configuredFields.add(keys.next());
+            name.caiyao.fakegps.config.UnavailablePayloadContract.Validated unavailable =
+                    name.caiyao.fakegps.config.UnavailablePayloadContract.validate(
+                            configuredFields, requestedUnavailable);
+            Snapshot s = Snapshot.fromJson(fields, unavailable.asSet());
             debug("prefs loaded fields=" + (fields == null ? 0 : fields.length())
+                    + " unavailable=" + unavailable.asList().size()
                     + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude
-                    + " hasLte=" + s.hasLteCell() + " hasGsm=" + s.hasGsmCell());
+                    + " rebuildCells=" + s.hasCellReconstructionDecision());
             return s;
         } catch (Throwable t) {
             // Read/parse failure: keep last-known-good (do NOT revert to real device data mid-test).
@@ -177,4 +206,5 @@ public class MainHook implements IXposedHookLoadPackage {
             return CURRENT.get();
         }
     }
+
 }

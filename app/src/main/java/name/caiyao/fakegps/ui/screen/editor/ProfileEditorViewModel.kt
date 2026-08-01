@@ -3,65 +3,137 @@ package name.caiyao.fakegps.ui.screen.editor
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import name.caiyao.fakegps.config.UnavailableFieldSet
 import name.caiyao.fakegps.data.db.AppDatabase
 import name.caiyao.fakegps.data.db.ProfileEntity
 import name.caiyao.fakegps.data.repository.ProfileRepository
+import name.caiyao.fakegps.hook.BaselineExtractionGuard
+import name.caiyao.fakegps.verify.DeviceObserver
+import name.caiyao.fakegps.verify.ObservationScope
 
 class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = ProfileRepository(AppDatabase.getInstance(app), app)
 
-    private val _fieldValues = MutableStateFlow<MutableMap<String, String>>(mutableMapOf())
+    private val _fieldValues = MutableStateFlow<Map<String, String>>(emptyMap())
     val fieldValues: StateFlow<Map<String, String>> = _fieldValues
 
     private val _saved = MutableStateFlow(false)
     val saved: StateFlow<Boolean> = _saved
 
+    private val _fieldErrors = MutableStateFlow<Map<String, String>>(emptyMap())
+    val fieldErrors: StateFlow<Map<String, String>> = _fieldErrors
+
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice
+
+    /**
+     * What this device currently reports, keyed by dbColumn.
+     *
+     * Shown beside each input because a spoofed value is only verifiable if it DIFFERS from the real
+     * one — with an empty form and no reference, users could not tell whether the value they typed
+     * was distinguishable from the network they were already on.
+     */
+    private val _reference = MutableStateFlow<Map<String, String>>(emptyMap())
+    val reference: StateFlow<Map<String, String>> = _reference
+
+    /** Whether [reference] holds real device values or values this process already spoofs. */
+    val scope: ObservationScope = ObservationScope.current()
+
     private var editingId: Long = 0L
 
     fun load(profileId: Long, defaultLat: Double, defaultLon: Double) {
         viewModelScope.launch {
-            if (profileId > 0) {
-                val entity = repo.getById(profileId)
-                if (entity != null) {
-                    editingId = entity.id
-                    _fieldValues.value = entityToMap(entity).toMutableMap()
-                    return@launch
+            runCatching {
+                if (profileId > 0) {
+                    val entity = repo.getById(profileId)
+                    if (entity != null) {
+                        editingId = entity.id
+                        _fieldValues.value = runCatching { entityToMap(entity) }
+                            .getOrElse { metadataError ->
+                                _notice.value =
+                                    "档案中的不上报元数据已损坏或来自不兼容版本；已保留普通字段，请检查后重新保存"
+                                entityToMap(entity.copy(unavailableFields = null))
+                            }
+                        _fieldErrors.value = ProfileFieldDraft.validationErrors(_fieldValues.value)
+                        return@runCatching
+                    }
                 }
+                editingId = 0L
+                _fieldValues.value = mapOf(
+                    "latitude" to defaultLat.toString(),
+                    "longitude" to defaultLon.toString(),
+                )
+                _fieldErrors.value = emptyMap()
+            }.onSuccess {
+                refreshReference(_fieldValues.value)
+            }.onFailure { failure ->
+                _notice.value = "档案读取失败：${failure.message ?: failure.javaClass.simpleName}"
             }
-            editingId = 0L
-            val defaults = mutableMapOf<String, String>()
-            defaults["latitude"] = defaultLat.toString()
-            defaults["longitude"] = defaultLon.toString()
-            _fieldValues.value = defaults
         }
     }
 
     fun updateField(column: String, value: String) {
-        val current = _fieldValues.value.toMutableMap()
-        if (value.isBlank()) {
-            current.remove(column)
-        } else {
-            current[column] = value
-        }
-        _fieldValues.value = current
+        val previousRouting = DeviceObserver.wcdmaDbmColumn(referenceColumns(_fieldValues.value))
+        _fieldValues.value = ProfileFieldDraft.update(_fieldValues.value, column, value)
+        _fieldErrors.value = ProfileFieldDraft.validationErrors(_fieldValues.value)
+        _notice.value = null
+        val nextRouting = DeviceObserver.wcdmaDbmColumn(referenceColumns(_fieldValues.value))
+        if (previousRouting != nextRouting) refreshReference(_fieldValues.value)
     }
 
     fun save() {
         viewModelScope.launch {
             val values = _fieldValues.value
-            val entity = mapToEntity(values, editingId)
-            val id = repo.save(entity)
-            editingId = id
-            _saved.value = true
+            val errors = ProfileFieldDraft.validationErrors(values)
+            _fieldErrors.value = errors
+            if (errors.isNotEmpty()) {
+                _notice.value = "有 ${errors.size} 个字段格式无效，尚未保存"
+                return@launch
+            }
+            runCatching {
+                val entity = mapToEntity(values, editingId)
+                val result = repo.save(entity)
+                editingId = result.id
+                if (result.published) {
+                    _saved.value = true
+                } else {
+                    _notice.value = "档案已写入数据库，但未发布给 Hook；当前目标 App 仍使用上一份配置"
+                }
+            }.onFailure { failure ->
+                _notice.value = "保存失败：${failure.message ?: failure.javaClass.simpleName}"
+            }
+        }
+    }
+
+    private fun refreshReference(values: Map<String, String>) {
+        val configuredColumns = referenceColumns(values)
+        viewModelScope.launch(Dispatchers.IO) {
+            _reference.value = runCatching {
+                val observe = {
+                    DeviceObserver(
+                        getApplication(),
+                        configuredColumns = configuredColumns,
+                    ).observe().values
+                }
+                if (scope == ObservationScope.SELF_HOOKED) {
+                    BaselineExtractionGuard.call(observe)
+                } else {
+                    observe()
+                }
+            }.getOrDefault(emptyMap())
         }
     }
 }
 
-private fun entityToMap(entity: ProfileEntity): Map<String, String> {
+internal fun referenceColumns(values: Map<String, String>): Set<String> =
+    values.filterValues { it.isNotBlank() }.keys
+
+internal fun entityToMap(entity: ProfileEntity): Map<String, String> {
     val m = mutableMapOf<String, String>()
     fun put(k: String, v: Any?) { if (v != null) m[k] = v.toString() }
     // Skip addname — auto-generated on save
@@ -150,10 +222,12 @@ private fun entityToMap(entity: ProfileEntity): Map<String, String> {
     put("connection_type", entity.connectionType)
     put("interface_name", entity.interfaceName)
     put("neighbor_cells_json", entity.neighborCellsJson)
-    return m
+    return ProfileFieldDraft.forDisplay(m, UnavailableFieldSet.decode(entity.unavailableFields))
 }
 
-private fun mapToEntity(values: Map<String, String>, id: Long): ProfileEntity {
+internal fun mapToEntity(draft: Map<String, String>, id: Long): ProfileEntity {
+    val split = ProfileFieldDraft.split(draft)
+    val values = split.values
     val lat = values["latitude"]?.toDoubleOrNull()
     val lon = values["longitude"]?.toDoubleOrNull()
     val addname = if (lat != null && lon != null) "%.6f, %.6f".format(lat, lon) else null
@@ -246,5 +320,6 @@ private fun mapToEntity(values: Map<String, String>, id: Long): ProfileEntity {
         connectionType = values["connection_type"],
         interfaceName = values["interface_name"],
         neighborCellsJson = values["neighbor_cells_json"],
+        unavailableFields = UnavailableFieldSet.encode(split.unavailable),
     )
 }

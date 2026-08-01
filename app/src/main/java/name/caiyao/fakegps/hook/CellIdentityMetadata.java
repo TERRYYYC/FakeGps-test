@@ -58,6 +58,19 @@ final class CellIdentityMetadata {
         return value instanceof Number ? ((Number) value).intValue() : null;
     }
 
+    /**
+     * Project the configured network operator into both public alpha-name variants.
+     *
+     * <p>{@code null} retains the real device metadata (passthrough). The snapshot's empty string
+     * represents {@code --} on TelephonyManager, but CellIdentity's native unknown is null.
+     */
+    CellIdentityMetadata withOperatorName(String operatorName) {
+        if (operatorName == null) return this;
+        String identityValue = operatorName.isEmpty() ? null : operatorName;
+        return new CellIdentityMetadata(
+                bands, identityValue, identityValue, additionalPlmns, csgInfo);
+    }
+
     int[] bandsOrEmpty() {
         return bands != null ? bands : new int[0];
     }

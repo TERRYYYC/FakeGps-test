@@ -2,7 +2,14 @@ package name.caiyao.fakegps.hook;
 
 import android.database.Cursor;
 
+import java.util.Collections;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Random;
+import java.util.Set;
+
+import name.caiyao.fakegps.config.UnavailableSpec;
 
 /**
  * Thread-safe snapshot of current spoofing configuration.
@@ -16,6 +23,13 @@ class Snapshot {
 
     /** Default: everything null = passthrough all real values. */
     static final Snapshot PASSTHROUGH = new Snapshot();
+
+    /** One choke point for every hook invocation during an in-process real-baseline read. */
+    static Snapshot forHookInvocation(Snapshot configured, boolean extractingBaseline) {
+        return extractingBaseline ? PASSTHROUGH : configured;
+    }
+
+    private Set<String> unavailableFields = Collections.emptySet();
 
     /**
      * LAST-KNOWN-GOOD resolution for an unreadable / structurally incomplete config payload.
@@ -34,6 +48,22 @@ class Snapshot {
     static Snapshot keepLastKnownGoodOr(Snapshot lastGood) {
         boolean everPublished = lastGood != null && lastGood != PASSTHROUGH;
         return everPublished ? lastGood : PASSTHROUGH;
+    }
+
+    static ArrayList acceptBuiltCellListOrPassthrough(ArrayList built) {
+        return built == null || built.isEmpty() ? null : built;
+    }
+
+    /** Keep real cells unless the user supplied neighbors or this registered RAT is replaced. */
+    static boolean shouldPreserveRealCell(
+            boolean registered, boolean replacingRat, boolean configuredNeighborList) {
+        return registered ? !replacingRat : !configuredNeighborList;
+    }
+
+    /** A preserved serving cell stays serving only when no explicit serving RAT is rebuilt. */
+    static boolean shouldBypassPreservedRealCell(
+            boolean registered, boolean rebuildingServingRat) {
+        return !registered || rebuildingServingRat;
     }
 
     /**
@@ -60,11 +90,59 @@ class Snapshot {
      *
      * Returns null when neither side has one, which callers MUST treat as "pass the real
      * CellLocation through". Previously the caller unboxed {@code s.lac}/{@code s.cid} directly, so
-     * a profile configuring any other GSM-group field (mcc alone now satisfies hasGsmCell) threw an
-     * NPE inside the target app's own listener callback (FC-4).
+     * a profile configuring a CellLocation field without both LAC/CID values threw an NPE inside
+     * the target app's own listener callback (FC-4).
      */
     static Integer resolveCellField(Integer configured, Integer real) {
         return configured != null ? configured : real;
+    }
+
+    static Integer resolveGsmCellLocationField(
+            String field, Integer configured, Integer real, boolean unavailable) {
+        if (unavailable) {
+            UnavailableValueResolver.Resolution resolution = UnavailableValueResolver.resolve(
+                    field, UnavailableValueResolver.Surface.GSM_CELL_LOCATION);
+            if (!resolution.handled()) {
+                throw new IllegalArgumentException(
+                        "no GsmCellLocation unavailable resolver for " + field);
+            }
+            return (Integer) resolution.value();
+        }
+        return resolveCellField(configured, real);
+    }
+
+    static String resolvePlmnString(
+            String field, Integer configured, String real, boolean unavailable) {
+        if (unavailable) return null;
+        if (configured == null) return real;
+        if ("mcc".equals(field)) {
+            return String.format(Locale.US, "%03d", configured);
+        }
+        if ("mnc".equals(field)) {
+            int width = configured >= 100 ? 3 : 2;
+            return String.format(Locale.US, "%0" + width + "d", configured);
+        }
+        throw new IllegalArgumentException("not a PLMN field: " + field);
+    }
+
+    /**
+     * Canonicalize a PLMN value read from a loosely typed source such as neighbor JSON.
+     *
+     * <p>Numeric JSON values have already lost their display width, so they use the same canonical
+     * MCC/MNC formatting as profile integers. Explicit two/three-digit strings retain their width,
+     * which is required to distinguish valid two-digit and three-digit MNCs with leading zeroes.
+     */
+    static String resolvePlmnStringValue(String field, Object configured, String real) {
+        if (configured == null) return real;
+        String value = String.valueOf(configured).trim();
+        String canonicalPattern;
+        switch (field) {
+            case "mcc": canonicalPattern = "[0-9]{3}"; break;
+            case "mnc": canonicalPattern = "[0-9]{2,3}"; break;
+            default: throw new IllegalArgumentException("not a PLMN field: " + field);
+        }
+        if (value.matches(canonicalPattern)) return value;
+        return resolvePlmnString(field, Integer.parseInt(value), real, false);
     }
 
     /**
@@ -250,17 +328,46 @@ class Snapshot {
     // ==========================================================
 
     boolean hasLocation() { return latitude != null && longitude != null; }
-    // "Configured" = ANY field in the group is set, matching the NULL = passthrough contract.
-    // Previously these demanded a specific key (hasLteCell required `ci`), so a profile that set
-    // only `tac` was treated as "no LTE config" and every LTE hook silently no-op'd.
-    boolean hasGsmCell() { return lac != null || cid != null || mcc != null || mnc != null
-            || arfcn != null || bsic != null; }
-    boolean hasLteCell() { return ci != null || tac != null || pci != null || earfcn != null
-            || lteBandwidth != null; }
-    boolean hasNrCell() { return nci != null || nrTac != null || nrPci != null || nrarfcn != null; }
+    // A serving RAT may only be constructed from identity fields unique to that RAT. Shared
+    // MCC/MNC/LAC/CID values are projected onto framework-owned identities by getter hooks.
+    private boolean hasSpoofValue(String field, Object value) {
+        return value != null && !isUnavailable(field);
+    }
+    boolean hasGsmRatConstruction() {
+        return hasSpoofValue("arfcn", arfcn) || hasSpoofValue("bsic", bsic);
+    }
+    boolean hasWcdmaRatConstruction() {
+        return hasSpoofValue("psc", psc) || hasSpoofValue("uarfcn", uarfcn);
+    }
+    /**
+     * Whether an existing {@code GsmCellLocation} must be transformed.
+     *
+     * <p>An unavailable-only decision must not fabricate a new {@code CellInfo} RAT, but it must
+     * still project {@code -1} onto an object already returned by Android. PSC belongs here because
+     * it is exposed by {@code GsmCellLocation} even though it is a WCDMA identity field.
+     */
+    boolean hasGsmCellLocationDecision() {
+        return lac != null || cid != null || psc != null
+                || isUnavailable("lac") || isUnavailable("cid") || isUnavailable("psc");
+    }
+    boolean hasLteRatConstruction() { return hasSpoofValue("ci", ci) || hasSpoofValue("tac", tac)
+            || hasSpoofValue("pci", pci) || hasSpoofValue("earfcn", earfcn)
+            || hasSpoofValue("lte_bandwidth", lteBandwidth); }
+    boolean hasNrRatConstruction() { return hasSpoofValue("nci", nci) || hasSpoofValue("nr_tac", nrTac)
+            || hasSpoofValue("nr_pci", nrPci) || hasSpoofValue("nrarfcn", nrarfcn); }
+    boolean hasCellReconstructionDecision() {
+        return hasGsmRatConstruction() || hasWcdmaRatConstruction()
+                || hasLteRatConstruction() || hasNrRatConstruction();
+    }
+    boolean hasCellListMutationDecision() {
+        return hasCellReconstructionDecision() || neighborCellsJson != null;
+    }
     boolean hasWifi() { return wifiSsid != null || wifiBssid != null; }
     boolean hasPhysicalChannelConfig() {
-        return band != null || channelBandwidth != null || cellBandwidthDownlink != null || physicalCellId != null;
+        return hasSpoofValue("band", band)
+                || hasSpoofValue("channel_bandwidth", channelBandwidth)
+                || hasSpoofValue("cell_bandwidth_downlink", cellBandwidthDownlink)
+                || hasSpoofValue("physical_cell_id", physicalCellId);
     }
 
     /**
@@ -268,6 +375,12 @@ class Snapshot {
      * Returns baseValue +/- random offset within configured range.
      */
     int fluctuate(int baseValue, Random rnd) {
+        // A sentinel means "no data", not "a reading of 2147483647". Adding jitter to it
+        // overflows into a large NEGATIVE number, which reads as a perfectly plausible signal
+        // level — i.e. it would silently turn "unavailable" into fabricated data.
+        if (name.caiyao.fakegps.config.UnavailableSpec.isUnavailableSentinel(baseValue)) {
+            return baseValue;
+        }
         if (signalFluctuationEnabled != null && signalFluctuationEnabled
                 && signalFluctuationRangeDb != null && signalFluctuationRangeDb > 0) {
             int halfRange = signalFluctuationRangeDb / 2;
@@ -405,6 +518,37 @@ class Snapshot {
         return s;
     }
 
+    /**
+     * Build a snapshot with an orthogonal unavailable decision set.
+     *
+     * <p>The wrapper materializes the canonical value used by generic hooks; call sites whose
+     * Android surface differs (PLMN strings and {@code GsmCellLocation}) must inspect
+     * {@link #isUnavailable(String)} and use {@link UnavailableValueResolver} for that surface.
+     */
+    static Snapshot from(FieldSource src, Set<String> unavailable) {
+        Set<String> copy = unavailable == null
+                ? Collections.emptySet() : new LinkedHashSet<>(unavailable);
+        for (String field : copy) {
+            if (!UnavailableSpec.supportsUnavailable(field)) {
+                throw new IllegalArgumentException("unsupported unavailable field: " + field);
+            }
+            if (!UnavailableValueResolver.resolveSnapshotField(field).handled()) {
+                throw new IllegalArgumentException("no snapshot resolver for unavailable field: " + field);
+            }
+        }
+        Snapshot s = from(copy.isEmpty() ? src : new UnavailableSource(src, copy));
+        s.unavailableFields = Collections.unmodifiableSet(copy);
+        return s;
+    }
+
+    boolean isUnavailable(String field) {
+        return unavailableFields.contains(field);
+    }
+
+    Set<String> unavailableFields() {
+        return unavailableFields;
+    }
+
     /** Read the profile row out of a DB cursor (in-app path). */
     static Snapshot fromCursor(Cursor c) {
         return from(new CursorSource(c));
@@ -420,6 +564,19 @@ class Snapshot {
      */
     static Snapshot fromJson(org.json.JSONObject fields) {
         return from(new JsonSource(fields));
+    }
+
+    static Snapshot fromJson(org.json.JSONObject fields, Set<String> unavailable) {
+        Set<String> configured = new LinkedHashSet<>();
+        java.util.Iterator<String> keys = fields.keys();
+        while (keys.hasNext()) configured.add(keys.next());
+        name.caiyao.fakegps.config.UnavailablePayloadContract.Validated validated =
+                name.caiyao.fakegps.config.UnavailablePayloadContract.validate(
+                        configured,
+                        unavailable == null
+                                ? Collections.emptyList()
+                                : new java.util.ArrayList<>(unavailable));
+        return from(new JsonSource(fields), validated.asSet());
     }
 
     /**
@@ -467,6 +624,45 @@ class Snapshot {
             if (v instanceof Boolean) return (Boolean) v;
             if (v instanceof Number)  return ((Number) v).intValue() != 0;
             return Boolean.parseBoolean(String.valueOf(v));
+        }
+    }
+
+    private static final class UnavailableSource implements FieldSource {
+        private final FieldSource delegate;
+        private final Set<String> unavailable;
+
+        UnavailableSource(FieldSource delegate, Set<String> unavailable) {
+            this.delegate = delegate;
+            this.unavailable = unavailable;
+        }
+
+        private Object value(String col) {
+            if (!unavailable.contains(col)) return null;
+            UnavailableValueResolver.Resolution r =
+                    UnavailableValueResolver.resolveSnapshotField(col);
+            if (!r.handled()) {
+                throw new IllegalArgumentException("no unavailable resolver for " + col);
+            }
+            return r.value();
+        }
+
+        @Override public Double getDouble(String col) {
+            return unavailable.contains(col) ? (Double) value(col) : delegate.getDouble(col);
+        }
+        @Override public Float getFloat(String col) {
+            return unavailable.contains(col) ? (Float) value(col) : delegate.getFloat(col);
+        }
+        @Override public Integer getInt(String col) {
+            return unavailable.contains(col) ? (Integer) value(col) : delegate.getInt(col);
+        }
+        @Override public Long getLong(String col) {
+            return unavailable.contains(col) ? (Long) value(col) : delegate.getLong(col);
+        }
+        @Override public String getString(String col) {
+            return unavailable.contains(col) ? (String) value(col) : delegate.getString(col);
+        }
+        @Override public Boolean getBool(String col) {
+            return unavailable.contains(col) ? (Boolean) value(col) : delegate.getBool(col);
         }
     }
 }

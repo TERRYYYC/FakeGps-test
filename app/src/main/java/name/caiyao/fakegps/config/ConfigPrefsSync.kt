@@ -4,7 +4,9 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
+import name.caiyao.fakegps.data.db.AppDatabase
 
 /**
  * WRITE side of the XSharedPreferences config transport.
@@ -32,12 +34,19 @@ object ConfigPrefsSync {
     const val PREFS_NAME = "spoof_config"
     const val KEY_JSON = "json"
 
+    /** Wall-clock time of the last publish. Read by the UI only; the hook ignores it. */
+    const val KEY_PUBLISHED_AT = "published_at"
+    const val KEY_PUBLISH_FAILED = "publish_failed"
+
     /**
      * Transport payload version. Bumped from SpoofConfig's v1 typed schema to the flat field map.
      * The hook rejects a payload it cannot interpret rather than silently mis-reading it, and keeps
      * its last-known-good config instead of reverting to real device data mid-test.
      */
-    const val SCHEMA_VERSION = 2
+    const val SCHEMA_VERSION = 3
+    /** Losslessly readable predecessor: it has the same flat `fields` map and no unavailable set. */
+    const val LEGACY_SCHEMA_VERSION = 2
+
 
     private val APP_URI: Uri = Uri.parse("content://name.caiyao.fakegps.data.AppInfoProvider/app")
     private val SETTINGS_URI: Uri = Uri.parse("content://name.caiyao.fakegps.data.AppInfoProvider/settings")
@@ -72,7 +81,40 @@ object ConfigPrefsSync {
                 Log.e(TAG, "MODE_WORLD_READABLE rejected (${se.javaClass.simpleName}) — falling back to MODE_PRIVATE", se)
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             }
-            val committed = prefs.edit().putString(KEY_JSON, jsonStr).commit()
+            // The publish timestamp rides in the SAME commit as the payload, and only when the
+            // write is cross-process readable.
+            //
+            // Both halves matter, for different reasons:
+            //  - same commit: the UI reads the timestamp to tell "the hook has not re-read yet"
+            //    from "the hook is ignoring this config". A second commit could be interrupted
+            //    (PR #4 hardens exactly this against SIGKILL), leaving a new payload beside a stale
+            //    timestamp — which reads as "not pending" and resurrects the false-red this was
+            //    added to remove.
+            //  - only when worldReadable: a MODE_PRIVATE fallback still commits successfully, but
+            //    XSharedPreferences can never read it from another process. Recording a timestamp
+            //    there would let the UI soften a permanent publication failure into "刚保存，稍等".
+            //
+            // `worldReadable` is known before edit(), and `committed` is atomic, so this yields
+            // exactly: timestamp present <=> published == true. No divergence window.
+            //
+            // Timestamp is stored ALONGSIDE the payload, never inside it — embedding it would
+            // change the bytes on every sync and destroy the fingerprint's value as content identity.
+            val editor = prefs.edit().putString(KEY_JSON, jsonStr)
+            val stamp = if (worldReadable) {
+                System.currentTimeMillis()
+            } else {
+                PublishPropagation.timestampOnFailedPublish()
+            }
+            // null means REMOVE, not "leave alone". The prefs file is persistent, so merely skipping
+            // the write leaves the timestamp from the LAST successful publish on disk — and this
+            // new, cross-process-unreadable payload would borrow that still-open window and be
+            // reported as "刚保存，尚未生效" instead of the permanent failure it is.
+            if (stamp != null) {
+                editor.putLong(KEY_PUBLISHED_AT, stamp).remove(KEY_PUBLISH_FAILED)
+            } else {
+                editor.remove(KEY_PUBLISHED_AT).putBoolean(KEY_PUBLISH_FAILED, true)
+            }
+            val committed = editor.commit()
             val published = ConfigPublicationContract.isCrossProcessPublishSuccessful(
                 worldReadable,
                 committed,
@@ -82,9 +124,11 @@ object ConfigPrefsSync {
                 "published crossProcess=$published worldReadable=$worldReadable commit=$committed " +
                     "fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}",
             )
+            if (!published) markPublicationFailure(context)
             published
         } catch (e: Throwable) {
             Log.e(TAG, "sync failed", e)
+            markPublicationFailure(context)
             false
         }
     }
@@ -97,6 +141,10 @@ object ConfigPrefsSync {
      * their SQLite type so the hook side reads them back with matching types.
      */
     private fun buildFieldMapJson(context: Context): String {
+        // Force Room to open and run pending migrations before the provider creates its second,
+        // read-only connection. Without this, the first publish after an upgrade can observe the
+        // previous schema and silently omit newly migrated metadata.
+        AppDatabase.getInstance(context).openHelper.readableDatabase
         val cr = context.contentResolver
         val root = JSONObject()
         root.put("schemaVersion", SCHEMA_VERSION)
@@ -115,13 +163,20 @@ object ConfigPrefsSync {
         }
         root.put("mode", mode)
 
-        // profile row -> flat field map (generic: every non-null column, whatever it is)
+        // profile row -> flat field map plus an orthogonal explicit-unavailable set.
         val fields = JSONObject()
-        cr.query(APP_URI, null, null, null, "id ASC")?.use { c ->
+        var storedUnavailable: String? = null
+        val profileCursor = cr.query(APP_URI, null, null, null, "id ASC")
+            ?: throw IllegalStateException("profile query failed")
+        profileCursor.use { c ->
             if (c.moveToFirst()) {
                 for (i in 0 until c.columnCount) {
-                    if (c.isNull(i)) continue                 // NULL = passthrough: never transported
                     val name = c.getColumnName(i)
+                    if (name == "unavailable_fields") {
+                        storedUnavailable = if (c.isNull(i)) null else c.getString(i)
+                        continue
+                    }
+                    if (c.isNull(i)) continue                 // NULL = passthrough: never transported
                     if (name == "id") continue
                     when (c.getType(i)) {
                         Cursor.FIELD_TYPE_INTEGER -> fields.put(name, c.getLong(i))
@@ -132,16 +187,69 @@ object ConfigPrefsSync {
                 }
             }
         }
+        val fieldNames = buildSet {
+            val keys = fields.keys()
+            while (keys.hasNext()) add(keys.next())
+        }
+        val requested = UnavailableFieldSet.decode(storedUnavailable).toList()
+        val unavailable = UnavailablePayloadContract.validate(fieldNames, requested)
         root.put("fields", fields)
-        Log.w(TAG, "field map built: ${fields.length()} non-null fields")
+        root.put("unavailable", JSONArray(unavailable.asList()))
+        Log.w(
+            TAG,
+            "field map built: ${fields.length()} spoof fields, " +
+                "${unavailable.asList().size} unavailable fields",
+        )
         return root.toString()
     }
 
-    /** SHA-256 of the published payload — config provenance, comparable across UI / log / probe. */
-    private fun fingerprint(json: String): String {
-        val d = java.security.MessageDigest.getInstance("SHA-256").digest(json.toByteArray())
-        return "sha256:" + d.joinToString("") { "%02x".format(it) }.take(16)
+    /**
+     * Read back the exact payload the hook consumes.
+     *
+     * Returns null when nothing has ever been published. The file is written MODE_WORLD_READABLE for
+     * other processes; reading it from our own process needs no special mode.
+     *
+     * The verify UI reconciles against THIS rather than the DB row on purpose — a DB read proves
+     * only that the editor saved something, while the defect that actually shipped lived in the gap
+     * between the DB and this payload.
+     */
+    @JvmStatic
+    fun readPublished(context: Context): PayloadRead = try {
+        val text = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_JSON, null)
+        if (text == null) PayloadRead.Absent else PayloadRead.Raw(text)
+    } catch (t: Throwable) {
+        // Distinct from Absent on purpose: a failed read means the hook is still running its
+        // last-known-good config, which is the opposite of "nothing is being spoofed".
+        PayloadRead.ReadError("${t.javaClass.simpleName}: ${t.message}")
     }
+
+    /** Wall-clock time of the last publish, or null if never published / not recorded. */
+    @JvmStatic
+    fun readPublishedAt(context: Context): Long? = runCatching {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(KEY_PUBLISHED_AT, 0L)
+            .takeIf { it > 0L }
+    }.getOrNull()
+
+    @JvmStatic
+    fun hasPublicationFailure(context: Context): Boolean = runCatching {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_PUBLISH_FAILED, false)
+    }.getOrDefault(true)
+
+    private fun markPublicationFailure(context: Context) {
+        runCatching {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .remove(KEY_PUBLISHED_AT)
+                .putBoolean(KEY_PUBLISH_FAILED, true)
+                .commit()
+        }.onFailure { Log.e(TAG, "could not persist publication failure", it) }
+    }
+
+    /** SHA-256 of the published payload — config provenance, comparable across UI / log / probe. */
+    private fun fingerprint(json: String): String = PublishedConfig.fingerprint(json)
 
     private fun Cursor.strOrNull(col: String): String? {
         val i = getColumnIndex(col); return if (i >= 0 && !isNull(i)) getString(i) else null

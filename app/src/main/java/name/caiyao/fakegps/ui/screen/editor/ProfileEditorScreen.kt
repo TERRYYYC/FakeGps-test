@@ -31,6 +31,7 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,6 +48,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import name.caiyao.fakegps.data.model.FieldSpec
 import name.caiyao.fakegps.data.model.FieldType
+import name.caiyao.fakegps.config.UnavailableSpec
+import name.caiyao.fakegps.verify.ObservationScope
+import name.caiyao.fakegps.verify.VerificationEngine
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,7 +63,10 @@ fun ProfileEditorScreen(
 ) {
     val isNew = profileId == -1L || profileId == 0L
     val fieldValues by vm.fieldValues.collectAsState()
+    val reference by vm.reference.collectAsState()
     val saved by vm.saved.collectAsState()
+    val fieldErrors by vm.fieldErrors.collectAsState()
+    val notice by vm.notice.collectAsState()
 
     LaunchedEffect(profileId) {
         vm.load(if (isNew) -1L else profileId, lat, lon)
@@ -97,6 +104,13 @@ fun ProfileEditorScreen(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            notice?.let {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
             for ((category, fields) in categories) {
                 val expanded = expandedState[category] ?: (category == "定位")
                 val activeCount = fields.count { fieldValues.containsKey(it.dbColumn) }
@@ -114,11 +128,16 @@ fun ProfileEditorScreen(
                             FieldType.BOOLEAN -> BooleanField(
                                 spec = spec,
                                 value = value,
+                                reference = reference[spec.dbColumn],
+                                scope = vm.scope,
                                 onValueChange = { vm.updateField(spec.dbColumn, it) },
                             )
                             else -> TextField(
                                 spec = spec,
                                 value = value,
+                                reference = reference[spec.dbColumn],
+                                validationError = fieldErrors[spec.dbColumn],
+                                scope = vm.scope,
                                 onValueChange = { vm.updateField(spec.dbColumn, it) },
                             )
                         }
@@ -186,6 +205,9 @@ private fun CategoryCard(
 private fun TextField(
     spec: FieldSpec,
     value: String,
+    reference: String?,
+    validationError: String?,
+    scope: ObservationScope,
     onValueChange: (String) -> Unit,
 ) {
     val keyboardType = when (spec.type) {
@@ -199,15 +221,66 @@ private fun TextField(
         if (spec.unit != null) append(" (${spec.unit})")
     }
 
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label) },
-        placeholder = { Text(spec.hint) },
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
+    // A spoofed value is only provable if it differs from what the device already reports. Flagging
+    // the collision at input time is the only point where the user can still act on it.
+    //
+    // Only meaningful against a REAL baseline: a debug build hooks itself, so there "reference" is
+    // already the spoofed value and a match means the hook WORKS — warning about it would be
+    // exactly backwards.
+    val unavailable = value == ProfileFieldDraft.UNAVAILABLE_TOKEN
+    val supportsUnavailable = UnavailableSpec.supportsUnavailable(spec.dbColumn)
+    val collides = !unavailable && scope == ObservationScope.REAL_BASELINE && value.isNotBlank() &&
+        reference != null && VerificationEngine.valuesMatch(value, reference)
+
+    val referenceLabel = when (scope) {
+        ObservationScope.REAL_BASELINE -> "本机真实值"
+        ObservationScope.SELF_HOOKED -> "本机当前读到（调试构建已自我 hook，可能已是伪造值）"
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            // Empty means passthrough — the project's core invariant, previously stated only on the
+            // boolean dropdown, so text fields gave no hint that blank was a meaningful choice.
+            placeholder = { Text(if (spec.hint.isBlank()) "留空 = 透传真实值" else "${spec.hint}（留空 = 透传）") },
+            isError = collides || validationError != null,
+            supportingText = {
+                when {
+                    validationError != null -> Text(validationError)
+                    unavailable -> Text("不上报：目标 App 将看到该 API 的“无数据”值")
+                    collides -> Text("与$referenceLabel 相同 — 即使生效也无法区分，建议换一个明显不同的值")
+                    supportsUnavailable -> Text("留空 = 透传真实值；不上报 = 该 API 返回无数据")
+                    else -> Text("留空 = 透传真实值；此字段不支持不上报")
+                }
+            },
+            trailingIcon = if (supportsUnavailable) {
+                {
+                    TextButton(
+                        onClick = {
+                            onValueChange(
+                                if (unavailable) "" else ProfileFieldDraft.UNAVAILABLE_TOKEN,
+                            )
+                        },
+                    ) {
+                        Text(if (unavailable) "透传" else "不上报")
+                    }
+                }
+            } else null,
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (reference != null) {
+            Text(
+                text = "$referenceLabel：$reference",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp, top = 2.dp),
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -215,11 +288,24 @@ private fun TextField(
 private fun BooleanField(
     spec: FieldSpec,
     value: String,
+    reference: String?,
+    scope: ObservationScope,
     onValueChange: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val options = listOf("" to "透传", "1" to "是", "0" to "否")
     val selectedLabel = options.firstOrNull { it.first == value }?.second ?: "透传"
+
+    // Booleans need the same reference and collision treatment as text fields: with only two
+    // possible values a collision with reality is far MORE likely here, not less.
+    val collides = scope == ObservationScope.REAL_BASELINE && value.isNotBlank() &&
+        reference != null && VerificationEngine.valuesMatch(value, reference)
+
+    val referenceLabel = when (scope) {
+        ObservationScope.REAL_BASELINE -> "本机真实值"
+        ObservationScope.SELF_HOOKED -> "本机当前读到（调试构建已自我 hook，可能已是伪造值）"
+    }
+    val referenceText = reference?.let { if (it.equals("true", true) || it == "1") "是" else "否" }
 
     ExposedDropdownMenuBox(
         expanded = expanded,
@@ -230,6 +316,14 @@ private fun BooleanField(
             onValueChange = {},
             readOnly = true,
             label = { Text(spec.displayName) },
+            isError = collides,
+            supportingText = {
+                when {
+                    collides -> Text("与$referenceLabel 相同 — 即使生效也无法区分，建议改成相反的值")
+                    referenceText != null -> Text("$referenceLabel：$referenceText")
+                    else -> Text("透传 = 保持真实值")
+                }
+            },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier
                 .fillMaxWidth()

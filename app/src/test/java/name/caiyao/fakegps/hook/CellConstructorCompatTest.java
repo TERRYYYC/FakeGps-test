@@ -105,6 +105,46 @@ public class CellConstructorCompatTest {
     }
 
     @Test
+    public void configuredOperatorReplacesIdentityAlphaWithoutDiscardingRealMetadata()
+            throws Exception {
+        int[] bands = {3, 7};
+        Set<String> additionalPlmns =
+                new LinkedHashSet<>(Arrays.asList("02503", "02504"));
+        Object csgInfo = new Object();
+        Method from = CellIdentityMetadata.class.getDeclaredMethod("from", Object.class);
+        from.setAccessible(true);
+        CellIdentityMetadata real = (CellIdentityMetadata) from.invoke(
+                null,
+                new FakeIdentityMetadataSource(
+                        bands, "Real Carrier", "RC", additionalPlmns, csgInfo));
+
+        CellIdentityMetadata configured = real.withOperatorName("Configured Carrier");
+        FakeLteIdentityModern identity = (FakeLteIdentityModern)
+                CellConstructorCompat.newLteIdentity(
+                        FakeLteIdentityModern.class,
+                        "025", "03", 28378431, 53, 26999, 39300, 20000,
+                        configured);
+
+        assertEquals("Configured Carrier", identity.alphaLong);
+        assertEquals("Configured Carrier", identity.alphaShort);
+        assertArrayEquals(bands, identity.bands);
+        assertSame(additionalPlmns, identity.additionalPlmns);
+        assertSame(csgInfo, identity.csgInfo);
+    }
+
+    @Test
+    public void absentOperatorProjectionPreservesRealAlphaAndEmptyProjectionStaysExplicit() {
+        CellIdentityMetadata real = CellIdentityMetadata.from(
+                new FakeIdentityMetadataSource(
+                        null, "Real Carrier", "RC", null, null));
+
+        assertSame(real, real.withOperatorName(null));
+        CellIdentityMetadata unavailable = real.withOperatorName("");
+        assertNull(unavailable.alphaLong);
+        assertNull(unavailable.alphaShort);
+    }
+
+    @Test
     public void stringConstructorFactoriesPreserveLeadingZeroPlmn() throws Exception {
         Method lteFactory;
         Method gsmFactory;
@@ -192,6 +232,25 @@ public class CellConstructorCompatTest {
         assertEquals(28378431, value.ci);
         assertEquals(53, value.pci);
         assertEquals(26999, value.tac);
+    }
+
+    @Test
+    public void unavailablePlmnWorksOnModernAndLegacyConstructorShapes() throws Exception {
+        FakeLteIdentityModern modern = (FakeLteIdentityModern)
+                CellConstructorCompat.newLteIdentity(
+                        FakeLteIdentityModern.class,
+                        null, null, 28378431, 53, 26999, 39300, 20000,
+                        CellIdentityMetadata.EMPTY);
+        assertNull(modern.mcc);
+        assertNull(modern.mnc);
+
+        FakeLteIdentityLegacy legacy = (FakeLteIdentityLegacy)
+                CellConstructorCompat.newLteIdentity(
+                        FakeLteIdentityLegacy.class,
+                        null, null, 28378431, 53, 26999, 39300, 20000,
+                        CellIdentityMetadata.EMPTY);
+        assertEquals(Integer.MAX_VALUE, legacy.mcc);
+        assertEquals(Integer.MAX_VALUE, legacy.mnc);
     }
 
     @Test
