@@ -19,8 +19,8 @@ Spec: `feature-specs/2026-08-02-profile-import-csv-excel.md`
 
 ## Outcome
 
-Implementation Tasks 1–4 are complete and the isolated acceptance journey is green. The feature is
-ready for fresh-context scanning and independent review. Stable-device acceptance and merge remain
+Implementation Tasks 1–4, the fresh-context finding sweep and the isolated acceptance journey are
+complete. The feature is ready for independent review. Stable-device acceptance and merge remain
 intentionally outside this gate: the mission sequences them after review authorization.
 
 ## Vision and acceptance check
@@ -51,11 +51,11 @@ intentionally outside this gate: the mission sequences them after review authori
 
 | Gate | Command / environment | Result |
 |---|---|---|
-| JVM regression | `./gradlew :app:testDebugUnitTest --rerun-tasks` | 345/345 pass |
+| JVM regression | `./gradlew :app:testDebugUnitTest --rerun-tasks` | 351/351 pass |
 | Android test compile | `./gradlew :app:compileDebugAndroidTestKotlin` | pass |
-| Debug APK | `./gradlew :app:assembleDebug` | pass |
+| Debug APK | `./gradlew :app:assembleDebug` | pass; final Debug/JVM/Android-test compile gate executed 59/59 tasks |
 | Release + R8 | `./gradlew :app:assembleRelease` | pass; `minifyReleaseWithR8` executed |
-| Release lint | `./gradlew :app:lintVitalRelease` | pass; combined final gate executed 110/110 tasks |
+| Release lint | `./gradlew :app:lintVitalRelease` | pass; final Release/R8 gate executed 51/51 tasks |
 | Repository scripts | `python3 -m unittest discover -s scripts -p 'test*.py'` | 44/44 pass |
 | Shell syntax | `bash -n scripts/test-hook.sh` | pass |
 | Diff hygiene | `git diff --check` | pass |
@@ -65,14 +65,22 @@ intentionally outside this gate: the mission sequences them after review authori
 The debug lint failure is not classified as a feature regression. Its first error is the unchanged
 `HookProbe.kt:117` API-level call. Release lint, which is the repository's shipping gate, passes.
 
+One diagnostic invocation that forced Debug and Release KSP to rerun concurrently reported a
+transient `AppDatabase` `MissingType` from both workers. Immediate isolated `kspDebugKotlin` and
+`kspReleaseKotlin` reruns passed. The final gates therefore execute variants sequentially; both
+fresh Debug and Release chains are green without a source workaround.
+
 ## TDD evidence
 
 - Importer fixture tests first failed on missing parser types, then passed 11 cases.
-- Two protocol tests proved non-canonical OOXML content types and unsupported cell types were
-  initially accepted; both now fail closed and the importer suite passes 13 cases.
+- Protocol tests proved non-canonical OOXML content types, unsupported cell types and an
+  EBCDIC-encoded DOCTYPE were initially accepted; all now fail closed and the importer suite passes
+  14 cases. External XML entity resolution is independently blocked by the DOM resolver.
 - Shared field validation boundary tests were red before extraction and green afterward.
 - A discrete GSM BER test proved the reserved 8–98 gap was initially accepted; the shared
   validator now accepts only `0..7` or the platform's `99` unknown sentinel.
+- Fresh-context RED tests cover significant text whitespace, custom imported names after editor
+  save, and published-payload badge matching after an empty-database import.
 - Duplicate planner tests were red before the repository boundary and green afterward.
 - UI generation/single-confirm tests and compiled action-ownership contract were red before the
   Compose journey and green afterward.
@@ -89,13 +97,33 @@ stable profile database were not installed to, cleared or mutated.
 - CSV re-import: 0 additions, 3 duplicates; summary explicitly said the effective profile did not
   change.
 - Unicode names rendered correctly in the collection list.
+- After the XML hardening change, a fresh empty-database XLSX import still parsed and added 2 rows
+  on Android. The list displayed no effective badge and explicitly said imports do not auto-apply.
+- Opening and saving the imported Unicode profile preserved its custom name; only that explicit
+  save/publish caused the matching row to receive the effective badge.
 
 Evidence (temporary, deliberately outside the Git tree):
 
-- `/tmp/cat-cafe-evidence/profile-import/profile-import-preview.png`
-- `/tmp/cat-cafe-evidence/profile-import/profile-import-list.png`
-- `/tmp/cat-cafe-evidence/profile-import/profile-import-dedup-success.png`
+- `/tmp/cat-cafe-evidence/profile-import/profile-import-unpublished-success.png`
+- `/tmp/cat-cafe-evidence/profile-import/profile-import-unpublished-list.png`
+- `/tmp/cat-cafe-evidence/profile-import/profile-import-after-explicit-save.png`
 - `/tmp/cat-cafe-evidence/profile-import/profile-import-journey.mp4`
+
+## Fresh-context findings
+
+Finding generator: `[砚砚/GPT-5.6-Sol🐾]` in a new, read-only session
+SHA scanned: `96bbb2cc71136e4057ed178c48742e0ad1d3f90b`
+Disposition commit: `f395d6c`
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| FC-1: byte-pattern-only XML declaration defense could miss another XML encoding | P1 | fixed: encoding-aware DOM DOCTYPE rejection plus external-entity resolver and EBCDIC regression |
+| FC-2: editor save could replace an imported custom `addname` | P2 | fixed: distinguish generated labels from preserved archive-name overrides |
+| FC-3: global trim changed meaningful text/SSID whitespace | P2 | fixed: preserve text bytes while still trimming numeric/boolean/token syntax |
+| FC-4: empty-database import could show an unpublished row as effective | P2 | fixed: badge resolves exact canonical profile from published payload bytes |
+
+Fresh-context is finding generation only and does not constitute approval. DeepSeek must annotate
+formal findings as `FC:covered`, `FC:new` or `FC:N/A`.
 
 ## Scope and artifact audit
 
@@ -109,11 +137,10 @@ Evidence (temporary, deliberately outside the Git tree):
 
 ## Remaining sequenced work
 
-1. Fresh-context finding-only scan of the committed diff.
-2. DeepSeek V4 Flash independent review against the exact pushed HEAD, including its own malformed
+1. DeepSeek V4 Flash independent review against the exact pushed HEAD, including its own malformed
    and boundary fixtures.
-3. After approval, stable-device acceptance without uninstalling or clearing existing data.
-4. Opus Feature Doc Truth and merge-gate supervision.
+2. After approval, stable-device acceptance without uninstalling or clearing existing data.
+3. Opus Feature Doc Truth and merge-gate supervision.
 
 ---
 
