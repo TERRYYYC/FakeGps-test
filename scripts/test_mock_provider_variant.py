@@ -57,6 +57,17 @@ class MockProviderVariantContractTest(unittest.TestCase):
         self.assertIn('appops set "$REFERENCE_PACKAGE" android:mock_location allow', harness)
         self.assertNotIn("uninstall name.caiyao.fakegps", harness)
 
+    def test_device_harness_starts_and_stops_through_the_foreground_activity(self) -> None:
+        harness = (ROOT / "scripts/mock_provider_acceptance.sh").read_text()
+
+        self.assertIn("MockProviderActivity", harness)
+        self.assertIn('tap_text "Start"', harness)
+        self.assertIn('tap_text "Stop"', harness)
+        self.assertNotIn(
+            'run-as "$LAB_PACKAGE" am start-foreground-service',
+            harness,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
