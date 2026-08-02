@@ -165,7 +165,8 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private Snapshot loadSnapshot() {
         try {
-            XSharedPreferences prefs = new XSharedPreferences("name.caiyao.fakegps", PREFS_NAME);
+            XSharedPreferences prefs = new XSharedPreferences(
+                    name.caiyao.fakegps.BuildConfig.APPLICATION_ID, PREFS_NAME);
             prefs.makeWorldReadable();
             prefs.reload();
 

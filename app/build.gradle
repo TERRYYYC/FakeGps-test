@@ -40,6 +40,15 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Bench variant: installs as a SEPARATE app alongside the release (production) build.
+            // Release = "name.caiyao.fakegps" (千网游), stays on the phone untouched.
+            // Debug  = "name.caiyao.fakegps.bench" (千网游·测试), independent installation.
+            //
+            // This lets us develop and test without ever disturbing the production module or its
+            // saved profiles. The Xposed framework sees them as two distinct modules.
+            applicationIdSuffix ".bench"
+        }
         release {
             signingConfig signingConfigs.release
             minifyEnabled true

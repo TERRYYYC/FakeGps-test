@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+import name.caiyao.fakegps.BuildConfig
 import name.caiyao.fakegps.data.db.AppDatabase
 import name.caiyao.fakegps.data.SpoofSettings
 
@@ -49,8 +50,8 @@ object ConfigPrefsSync {
     const val LEGACY_SCHEMA_VERSION = 2
 
 
-    private val APP_URI: Uri = Uri.parse("content://name.caiyao.fakegps.data.AppInfoProvider/app")
-    private val SETTINGS_URI: Uri = Uri.parse("content://name.caiyao.fakegps.data.AppInfoProvider/settings")
+    private val APP_URI: Uri = Uri.parse("content://${BuildConfig.APPLICATION_ID}.data.AppInfoProvider/app")
+    private val SETTINGS_URI: Uri = Uri.parse("content://${BuildConfig.APPLICATION_ID}.data.AppInfoProvider/settings")
 
     /**
      * Publish the effective profile as a FLAT field map mirroring the profile table.
