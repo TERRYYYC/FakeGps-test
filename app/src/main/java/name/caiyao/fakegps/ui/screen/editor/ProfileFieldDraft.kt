@@ -2,8 +2,7 @@ package name.caiyao.fakegps.ui.screen.editor
 
 import name.caiyao.fakegps.config.UnavailablePayloadContract
 import name.caiyao.fakegps.config.UnavailableSpec
-import name.caiyao.fakegps.data.model.FieldSpec
-import name.caiyao.fakegps.data.model.FieldType
+import name.caiyao.fakegps.data.model.ProfileFieldValueValidator
 
 /** Pure three-state editor reducer: blank = passthrough, "--" = unavailable, value = spoof. */
 object ProfileFieldDraft {
@@ -41,26 +40,10 @@ object ProfileFieldDraft {
     }
 
     fun validationErrors(draft: Map<String, String>): Map<String, String> {
-        val specs = FieldSpec.allCategories().values.flatten().associateBy { it.dbColumn }
         return buildMap {
             for ((column, raw) in draft) {
-                val spec = specs[column] ?: run {
-                    put(column, "未知字段")
-                    continue
-                }
-                if (raw == UNAVAILABLE_TOKEN) {
-                    if (!UnavailableSpec.supportsUnavailable(column)) {
-                        put(column, "此字段不支持不上报；请留空以透传真实值")
-                    }
-                    continue
-                }
-                val valid = when (spec.type) {
-                    FieldType.TEXT -> true
-                    FieldType.INTEGER, FieldType.BOOLEAN -> raw.toIntOrNull() != null
-                    FieldType.DOUBLE -> raw.toDoubleOrNull() != null
-                    FieldType.FLOAT -> raw.toFloatOrNull() != null
-                }
-                if (!valid) put(column, "${spec.displayName}格式无效，不能保存为透传")
+                val error = ProfileFieldValueValidator.normalize(column, raw).error
+                if (error != null) put(column, error)
             }
         }
     }
@@ -72,8 +55,13 @@ object ProfileFieldDraft {
 
     fun split(draft: Map<String, String>): Split {
         requireValid(draft)
-        val unavailable = draft.filterValues { it == UNAVAILABLE_TOKEN }.keys.toList()
-        val values = draft.filterValues { it != UNAVAILABLE_TOKEN }
+        val normalized = buildMap {
+            for ((column, raw) in draft) {
+                ProfileFieldValueValidator.normalize(column, raw).value?.let { put(column, it) }
+            }
+        }
+        val unavailable = normalized.filterValues { it == UNAVAILABLE_TOKEN }.keys.toList()
+        val values = normalized.filterValues { it != UNAVAILABLE_TOKEN }
         val validated = UnavailablePayloadContract.validate(values.keys, unavailable)
         return Split(values, validated.asSet())
     }

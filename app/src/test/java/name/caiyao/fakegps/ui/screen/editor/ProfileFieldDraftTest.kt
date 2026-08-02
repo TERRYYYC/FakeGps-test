@@ -2,9 +2,11 @@ package name.caiyao.fakegps.ui.screen.editor
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import name.caiyao.fakegps.data.db.ProfileEntity
+import name.caiyao.fakegps.data.db.ProfileEntityCodec
 
 class ProfileFieldDraftTest {
 
@@ -42,6 +44,59 @@ class ProfileFieldDraftTest {
     fun `invalid numeric text blocks save instead of degrading to passthrough`() {
         val draft = ProfileFieldDraft.update(emptyMap(), "latitude", "-")
         assertTrue(ProfileFieldDraft.validationErrors(draft).containsKey("latitude"))
+    }
+
+    @Test
+    fun `editor and importer share range boolean JSON and 36-bit NCI validation`() {
+        val errors = ProfileFieldDraft.validationErrors(
+            mapOf(
+                "latitude" to "91",
+                "wifi_hidden" to "2",
+                "neighbor_cells_json" to "{}",
+                "nci" to "68719476735",
+            ),
+        )
+
+        assertTrue(errors.containsKey("latitude"))
+        assertTrue(errors.containsKey("wifi_hidden"))
+        assertTrue(errors.containsKey("neighbor_cells_json"))
+        assertFalse(errors.containsKey("nci"))
+        assertEquals(68_719_476_735L, mapToEntity(mapOf("nci" to "68719476735"), 0L).nci)
+    }
+
+    @Test
+    fun `GSM BER accepts measured values and unknown sentinel but rejects reserved gap`() {
+        assertFalse(ProfileFieldDraft.validationErrors(mapOf("gsm_ber" to "7")).containsKey("gsm_ber"))
+        assertFalse(ProfileFieldDraft.validationErrors(mapOf("gsm_ber" to "99")).containsKey("gsm_ber"))
+        assertTrue(ProfileFieldDraft.validationErrors(mapOf("gsm_ber" to "8")).containsKey("gsm_ber"))
+    }
+
+    @Test
+    fun `text fields preserve significant leading and trailing whitespace`() {
+        val entity = mapToEntity(
+            mapOf("wifi_ssid" to "  cafe network  ", "operator_name" to " Carrier "),
+            0L,
+        )
+
+        assertEquals("  cafe network  ", entity.wifiSsid)
+        assertEquals(" Carrier ", entity.operatorName)
+    }
+
+    @Test
+    fun `editing an imported profile preserves its custom archive name`() {
+        val entity = mapToEntity(
+            draft = mapOf("latitude" to "51", "longitude" to "31"),
+            id = 17L,
+            addname = "Imported favorite",
+        )
+
+        assertEquals("Imported favorite", entity.addname)
+        assertEquals("Imported favorite", profileNameOverride(entity))
+        assertNull(
+            profileNameOverride(
+                entity.copy(addname = ProfileEntityCodec.generatedName(entity.latitude, entity.longitude)),
+            ),
+        )
     }
 
     @Test
