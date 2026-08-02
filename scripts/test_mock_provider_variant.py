@@ -69,6 +69,15 @@ class MockProviderVariantContractTest(unittest.TestCase):
         )
         self.assertNotIn("| head -", harness)
 
+    def test_service_reads_the_numeric_coordinate_type_written_by_the_activity(self) -> None:
+        service = (
+            ROOT
+            / "app/src/mockProvider/java/name/caiyao/fakegps/mockprovider/MockProviderService.kt"
+        ).read_text()
+
+        self.assertNotIn("getStringExtra(name)", service)
+        self.assertIn("getDoubleExtra(name, Double.NaN)", service)
+
 
 if __name__ == "__main__":
     unittest.main()
