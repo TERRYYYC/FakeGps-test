@@ -100,10 +100,10 @@ echo "ACTIVE package=$LAB_PACKAGE pid=$lab_pid"
 "${ADB[@]}" shell cmd appops query-op android:mock_location allow | sed 's/^/MOCK_APP /'
 "${ADB[@]}" shell dumpsys activity services "$LAB_PACKAGE" \
     | rg -i 'ServiceRecord|MockProviderService|foreground' \
-    | head -30
+    | sed -n '1,30p'
 "${ADB[@]}" shell dumpsys location \
     | rg -i -C 2 'mock|gps provider|name\.caiyao\.fakegps\.mockprovider' \
-    | head -100
+    | sed -n '1,100p'
 "${ADB[@]}" logcat --pid="$lab_pid" -d -v threadtime \
     | rg 'MockProviderLab' \
     | tail -30
@@ -112,7 +112,8 @@ echo "ACTIVE package=$LAB_PACKAGE pid=$lab_pid"
 sleep "$OBSERVE_SECONDS"
 echo "MAPS_FOREGROUND"
 "${ADB[@]}" shell dumpsys activity activities \
-    | rg -m 2 'mResumedActivity|topResumedActivity'
+    | rg 'mResumedActivity|topResumedActivity' \
+    | sed -n '1,2p'
 if [[ -n "$SCREENSHOT_PATH" ]]; then
     "${ADB[@]}" exec-out screencap -p >"$SCREENSHOT_PATH"
     echo "MAPS_SCREENSHOT path=$SCREENSHOT_PATH"

@@ -67,6 +67,7 @@ class MockProviderVariantContractTest(unittest.TestCase):
             'run-as "$LAB_PACKAGE" am start-foreground-service',
             harness,
         )
+        self.assertNotIn("| head -", harness)
 
 
 if __name__ == "__main__":

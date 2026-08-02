@@ -62,3 +62,12 @@ the production security boundary and exercises the user-visible control path.
 - After the fix, all structural/JVM/build tests must pass.
 - On the device, the lab PID/service/provider must become active, Maps must be
   launched for observation, and the EXIT trap must restore the reference app.
+
+The first device run after the fix confirmed the core hypothesis: Android
+reported the lab UID as `TOP`, the service as foreground, and `gps provider
+[mock]` at `40.712800,-74.006000`. The run then exposed a separate harness bug:
+under `set -o pipefail`, `head -100` closed a verbose `dumpsys location`
+pipeline early, so the upstream process exited on SIGPIPE before the Maps step.
+Replacing early-closing truncation with a full-reading filter preserves the
+evidence cap without turning successful collection into a failure. The restore
+trap still completed with status 0.
