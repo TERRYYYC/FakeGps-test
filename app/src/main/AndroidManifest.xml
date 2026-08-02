@@ -65,7 +65,7 @@
 
         <provider
             android:name=".data.AppInfoProvider"
-            android:authorities="name.caiyao.fakegps.data.AppInfoProvider"
+            android:authorities="${applicationId}.data.AppInfoProvider"
             android:exported="false" />
 
         <!--
