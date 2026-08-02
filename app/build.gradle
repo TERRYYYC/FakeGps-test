@@ -73,9 +73,16 @@ android {
 
     sourceSets {
         androidTest.assets.srcDirs += files("$projectDir/schemas")
-        // The lab must not inherit debug self-hooking. Reuse the release no-op probe controller
-        // while keeping variant-only Mock Provider code under src/mockProvider.
-        mockProvider.java.srcDirs += files("$projectDir/src/release/java")
+        // Common JVM tests exercise debug-only acceptance classes. Compile those classes into the
+        // lab, but keep the lab non-hooking by removing every Xposed manifest marker and launching
+        // only MockProviderActivity. No debug acceptance component is exported in this build type.
+        mockProvider.java.srcDirs += files("$projectDir/src/debug/java")
+    }
+}
+
+androidComponents {
+    beforeVariants(selector().withBuildType("mockProvider")) { variantBuilder ->
+        variantBuilder.enableUnitTest = true
     }
 }
 
