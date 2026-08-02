@@ -14,7 +14,7 @@ created: 2026-08-02
 # Quality Gate: 收藏档案 CSV / Excel 导入
 
 Branch: `feat/profile-import-csv-excel`
-Base: `origin/master` at `c34bf666983da3634dfba5f2b4c3ce0147cde019`
+Base: `origin/master` at `5dab712ff4119b421076b5034c3fea859ad2b29a`
 Spec: `feature-specs/2026-08-02-profile-import-csv-excel.md`
 
 ## Outcome
@@ -92,6 +92,10 @@ fresh Debug and Release chains are green without a source workaround.
 Environment: headless `f001_ui_test` AVD on emulator-5556. The operator's attached Moto G54 and its
 stable profile database were not installed to, cleared or mutated.
 
+After rebasing onto `5dab712`, the journey was repeated with the new isolated debug package
+`name.caiyao.fakegps.bench`: XLSX preview reported 2 rows / 2 additions, confirmation inserted both,
+and the empty-database list still showed no effective badge.
+
 - CSV preview: 3 data rows, 2 additions, 1 file duplicate; confirmation added 2 and skipped 1.
 - XLSX preview: 2 data rows, 2 additions, 0 duplicates; confirmation added both.
 - CSV re-import: 0 additions, 3 duplicates; summary explicitly said the effective profile did not
@@ -108,12 +112,19 @@ Evidence (temporary, deliberately outside the Git tree):
 - `/tmp/cat-cafe-evidence/profile-import/profile-import-unpublished-list.png`
 - `/tmp/cat-cafe-evidence/profile-import/profile-import-after-explicit-save.png`
 - `/tmp/cat-cafe-evidence/profile-import/profile-import-journey.mp4`
+- `/tmp/cat-cafe-evidence/profile-import/profile-import-rebased-bench-preview.png`
+- `/tmp/cat-cafe-evidence/profile-import/profile-import-rebased-bench-success.png`
+- `/tmp/cat-cafe-evidence/profile-import/profile-import-rebased-bench-unpublished-list.png`
 
 ## Fresh-context findings
 
 Finding generator: `[砚砚/GPT-5.6-Sol🐾]` in a new, read-only session
 SHA scanned: `96bbb2cc71136e4057ed178c48742e0ad1d3f90b`
-Disposition commit: `f395d6c`
+Equivalent rebased implementation SHA: `6d0e1d47cc8f16c63912d4f39b805fe73ab99501`
+Disposition commit: `e6481c1`
+
+The rebase onto `5dab712` was conflict-free and changed none of the feature paths scanned by the
+fresh session; the old scan SHA is retained as provenance rather than rewritten after the fact.
 
 | Finding | Severity | Disposition |
 |---|---|---|

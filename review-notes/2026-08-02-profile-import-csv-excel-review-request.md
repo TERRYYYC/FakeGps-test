@@ -15,8 +15,8 @@ created: 2026-08-02
 
 Review-Target-ID: profile-import-csv-excel
 Branch: `feat/profile-import-csv-excel`
-Code SHA: `f395d6cd45ba40343e676eda4cd169ce6b1a6b73`
-Base: `origin/master` at `c34bf666983da3634dfba5f2b4c3ce0147cde019`
+Code SHA: `e6481c13439d394a94e674644271ddd0820e158b`
+Base: `origin/master` at `5dab712ff4119b421076b5034c3fea859ad2b29a`
 
 ## What
 
@@ -85,14 +85,18 @@ Dispatcher、Binding 或跨进程契约。
 
 Agent: `[砚砚/GPT-5.6-Sol🐾]`（全新只读 session；finding generator only）
 SHA scanned: `96bbb2cc71136e4057ed178c48742e0ad1d3f90b`
+Equivalent rebased implementation SHA: `6d0e1d47cc8f16c63912d4f39b805fe73ab99501`
 Total findings: 4（1 P1、3 P2、0 P3）
 
 | # | Finding | Author 处置 | 状态 |
 |---|---|---|---|
-| FC-1 | XML 声明防线依赖字节扫描，另一编码可能绕过 | fixed in `f395d6c`: DOM DOCTYPE gate + rejecting EntityResolver + EBCDIC red test | closed |
-| FC-2 | 编辑保存会丢失导入的自定义 `addname` | fixed in `f395d6c`: generated/custom name override contract | closed |
-| FC-3 | 全局 `trim()` 会改变 SSID/文本语义 | fixed in `f395d6c`: text bytes preserved; syntax types still trim | closed |
-| FC-4 | 空库导入会把未发布首行显示为“生效中” | fixed in `f395d6c`: exact published-payload matcher + AVD evidence | closed |
+| FC-1 | XML 声明防线依赖字节扫描，另一编码可能绕过 | fixed in `e6481c1`: DOM DOCTYPE gate + rejecting EntityResolver + EBCDIC red test | closed |
+| FC-2 | 编辑保存会丢失导入的自定义 `addname` | fixed in `e6481c1`: generated/custom name override contract | closed |
+| FC-3 | 全局 `trim()` 会改变 SSID/文本语义 | fixed in `e6481c1`: text bytes preserved; syntax types still trim | closed |
+| FC-4 | 空库导入会把未发布首行显示为“生效中” | fixed in `e6481c1`: exact published-payload matcher + AVD evidence | closed |
+
+The rebase onto `5dab712` was conflict-free and touched no feature path covered by the scan. The
+pre-rebase SHA remains recorded for provenance; formal review must cover the exact remote HEAD.
 
 正式 reviewer 请给每个相关结论标注 `FC:covered`、`FC:new` 或 `FC:N/A`；fresh-context 不产生
 approval provenance。
