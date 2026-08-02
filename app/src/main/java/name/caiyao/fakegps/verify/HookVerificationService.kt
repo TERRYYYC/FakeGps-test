@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Process
 import android.os.ResultReceiver
+import android.util.Log
 import java.util.concurrent.Executors
 import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.config.PublishedConfig
@@ -29,10 +30,12 @@ class HookVerificationService : Service() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
+        val request = ProbeRequest(requestId, expectedFingerprint)
+        Log.i(RuntimeEvidence.PROBE_TAG, RuntimeEvidence.probeStarted(request))
 
         executor.execute {
             runCatching {
-                runProbe(requestId, expectedFingerprint)
+                runProbe(request.requestId, request.fingerprint)
             }.fold(
                 onSuccess = { observation ->
                     receiver.send(

@@ -64,11 +64,13 @@ data class VerifyUiState(
 class VerifyViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(VerifyUiState())
+    private val refreshGate = VerificationRefreshGate()
     val state: StateFlow<VerifyUiState> = _state
 
     fun refresh() {
+        if (!refreshGate.tryStart()) return
+        _state.value = _state.value.copy(loading = true)
         viewModelScope.launch(Dispatchers.IO) {
-            _state.value = _state.value.copy(loading = true)
             try {
                 collect()
             } catch (c: CancellationException) {
@@ -94,6 +96,7 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                     notes = listOf("读取设备信息时出错，结果无法刷新：${t.javaClass.simpleName}: ${t.message}"),
                 )
             } finally {
+                refreshGate.finish()
                 if (_state.value.loading) _state.value = _state.value.copy(loading = false)
             }
         }

@@ -24,6 +24,11 @@ class RuntimeVerifyFlowContractTest(unittest.TestCase):
         self.assertEqual(7, delivered.fields)
         self.assertEqual((30000, 5000), (changed.from_ms, changed.to_ms))
 
+        started = runtime_flow.parse_line(
+            f"I/FakeGPS-Probe( 4321): event=started requestId=r1 fp={FP1}"
+        )
+        self.assertEqual(("started", 4321), (started.event, started.pid))
+
     def test_parser_rejects_malformed_ids_fingerprints_and_intervals(self):
         malformed = (
             "FakeGPS-Probe: event=requested requestId=has spaces fp=sha256:1111111111111111",
@@ -220,6 +225,117 @@ class RuntimeVerifyFlowContractTest(unittest.TestCase):
 
         self.assertFalse(verdict.passed)
         self.assertIn(f"missing delivered fingerprint {FP1}", verdict.errors)
+
+    def test_required_scheduler_belongs_to_latest_probe_process_lifetime(self):
+        unrelated = [
+            "I/LSPosed-Bridge( 90): FakeGPS-Hook: event=scheduler_owned "
+            "process=name.caiyao.fakegps:hook_verify intervalMs=30000",
+            f"I/FakeGPS-Probe( 10): event=requested requestId=current fp={FP1}",
+            f"I/FakeGPS-Probe( 100): event=started requestId=current fp={FP1}",
+            f"I/FakeGPS-Probe( 10): event=delivered requestId=current fp={FP1} fields=1",
+        ]
+
+        verdict = runtime_flow.verify_trace(
+            unrelated,
+            require_probe=True,
+            require_scheduler=True,
+            expected_scheduler_process="name.caiyao.fakegps:hook_verify",
+        )
+
+        self.assertFalse(verdict.passed)
+        self.assertIn("no scheduler owner for latest probe process", verdict.errors)
+
+        current = [
+            "I/LSPosed-Bridge( 100): FakeGPS-Hook: event=scheduler_owned "
+            "process=name.caiyao.fakegps:hook_verify intervalMs=30000",
+            f"I/FakeGPS-Probe( 10): event=requested requestId=current fp={FP1}",
+            f"I/FakeGPS-Probe( 100): event=started requestId=current fp={FP1}",
+            f"I/FakeGPS-Probe( 10): event=delivered requestId=current fp={FP1} fields=1",
+        ]
+        self.assertTrue(
+            runtime_flow.verify_trace(
+                current,
+                require_probe=True,
+                require_scheduler=True,
+                expected_scheduler_process="name.caiyao.fakegps:hook_verify",
+            ).passed
+        )
+
+    def test_required_scheduler_rejects_ambiguous_or_pidless_probe_start(self):
+        owner = (
+            "I/LSPosed-Bridge( 100): FakeGPS-Hook: event=scheduler_owned "
+            "process=name.caiyao.fakegps:hook_verify intervalMs=30000"
+        )
+        requested = f"I/FakeGPS-Probe( 10): event=requested requestId=current fp={FP1}"
+        delivered = (
+            f"I/FakeGPS-Probe( 10): event=delivered requestId=current fp={FP1} fields=1"
+        )
+        kwargs = {
+            "require_probe": True,
+            "require_scheduler": True,
+            "expected_scheduler_process": "name.caiyao.fakegps:hook_verify",
+        }
+
+        pidless = runtime_flow.verify_trace(
+            [
+                owner,
+                requested,
+                f"FakeGPS-Probe: event=started requestId=current fp={FP1}",
+                delivered,
+            ],
+            **kwargs,
+        )
+        self.assertFalse(pidless.passed)
+        self.assertIn("no scheduler owner for latest probe process", pidless.errors)
+
+        duplicate = runtime_flow.verify_trace(
+            [
+                owner,
+                requested,
+                f"I/FakeGPS-Probe( 100): event=started requestId=current fp={FP1}",
+                f"I/FakeGPS-Probe( 100): event=started requestId=current fp={FP1}",
+                delivered,
+            ],
+            **kwargs,
+        )
+        self.assertFalse(duplicate.passed)
+        self.assertIn("multiple process starts for latest probe", duplicate.errors)
+
+    def test_expected_interval_uses_latest_probe_scheduler_state(self):
+        lines = [
+            "I/LSPosed-Bridge( 90): FakeGPS-Hook: event=scheduler_owned "
+            "process=com.example intervalMs=5000",
+            "I/LSPosed-Bridge( 100): FakeGPS-Hook: event=scheduler_owned "
+            "process=name.caiyao.fakegps:hook_verify intervalMs=30000",
+            f"I/FakeGPS-Probe( 10): event=requested requestId=current fp={FP1}",
+            f"I/FakeGPS-Probe( 100): event=started requestId=current fp={FP1}",
+            f"I/FakeGPS-Probe( 10): event=delivered requestId=current fp={FP1} fields=1",
+        ]
+
+        verdict = runtime_flow.verify_trace(
+            lines,
+            expected_intervals=(5000,),
+            require_probe=True,
+            require_scheduler=True,
+            expected_scheduler_process="name.caiyao.fakegps:hook_verify",
+        )
+
+        self.assertFalse(verdict.passed)
+        self.assertIn("latest probe scheduler interval is 30000, expected 5000", verdict.errors)
+
+        changed = lines[:2] + [
+            "I/LSPosed-Bridge( 100): FakeGPS-Hook: event=interval_changed "
+            "process=name.caiyao.fakegps:hook_verify fromMs=30000 toMs=5000",
+        ] + lines[2:]
+        self.assertTrue(
+            runtime_flow.verify_trace(
+                changed,
+                expected_intervals=(5000,),
+                require_probe=True,
+                require_scheduler=True,
+                expected_scheduler_process="name.caiyao.fakegps:hook_verify",
+            ).passed
+        )
 
 
 if __name__ == "__main__":

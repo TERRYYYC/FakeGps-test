@@ -10,6 +10,10 @@ object RuntimeEvidence {
         "event=requested requestId=${request.requestId} fp=${request.fingerprint}"
 
     @JvmStatic
+    fun probeStarted(request: ProbeRequest): String =
+        "event=started requestId=${request.requestId} fp=${request.fingerprint}"
+
+    @JvmStatic
     fun probeDelivered(request: ProbeRequest, fields: Int): String =
         "event=delivered requestId=${request.requestId} fp=${request.fingerprint} fields=$fields"
 

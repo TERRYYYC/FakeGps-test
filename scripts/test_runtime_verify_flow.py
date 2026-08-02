@@ -19,7 +19,7 @@ from typing import Iterable, Optional, Sequence, Tuple
 TOKEN = r"[A-Za-z0-9._:-]+"
 FINGERPRINT = r"sha256:[0-9a-f]{16}"
 PROBE_RE = re.compile(
-    rf"FakeGPS-Probe(?:\(\s*[0-9]+\))?:\s+event=(requested|delivered|failed|ignored) "
+    rf"FakeGPS-Probe(?:\(\s*[0-9]+\))?:\s+event=(requested|started|delivered|failed|ignored) "
     rf"requestId=({TOKEN}) fp=({FINGERPRINT})"
     rf"(?: fields=([0-9]+)| reason=([A-Z_]+))?\s*$"
 )
@@ -68,7 +68,7 @@ def parse_line(line: str) -> Optional[RuntimeEvent]:
             return None
         if event in {"failed", "ignored"} and reason is None:
             return None
-        if event == "requested" and (fields is not None or reason is not None):
+        if event in {"requested", "started"} and (fields is not None or reason is not None):
             return None
         return RuntimeEvent(
             event=event,
@@ -109,6 +109,7 @@ def verify_trace(
     expected_intervals: Sequence[int] = (),
     expected_fingerprint: Optional[str] = None,
     expected_probe_failure: Optional[str] = None,
+    expected_scheduler_process: Optional[str] = None,
     require_timeout_retry: bool = False,
     probe_process_gone: Optional[bool] = None,
     require_probe: bool = False,
@@ -120,6 +121,12 @@ def verify_trace(
     for index, event in enumerate(events):
         if event.event == "requested":
             requested.setdefault((event.request_id, event.fingerprint), []).append(index)
+    for started_index, event in enumerate(events):
+        if event.event != "started":
+            continue
+        request_indexes = requested.get((event.request_id, event.fingerprint), ())
+        if not any(index < started_index for index in request_indexes):
+            errors.append("unmatched started")
     for terminal_index, event in enumerate(events):
         if event.event != "delivered":
             continue
@@ -174,15 +181,6 @@ def verify_trace(
             if count > 1:
                 errors.append(f"duplicate scheduler owner for {process} pid={pid}")
 
-    observed_intervals = {
-        event.to_ms for event in events if event.event == "interval_changed"
-    } | {
-        event.interval_ms for event in events if event.event == "scheduler_owned"
-    }
-    for expected in expected_intervals:
-        if expected not in observed_intervals:
-            errors.append(f"missing interval {expected}")
-
     latest_request = next(
         (
             (index, event)
@@ -191,12 +189,12 @@ def verify_trace(
         ),
         None,
     )
-    latest_terminal = None
+    latest_terminal_entry = None
     if latest_request is not None:
         request_index, request = latest_request
-        latest_terminal = next(
+        latest_terminal_entry = next(
             (
-                event
+                (index, event)
                 for index, event in enumerate(events)
                 if index > request_index
                 and event.event in {"delivered", "failed"}
@@ -205,14 +203,66 @@ def verify_trace(
             ),
             None,
         )
+    latest_terminal = latest_terminal_entry[1] if latest_terminal_entry is not None else None
+
+    current_scheduler_interval = None
+    current_scheduler_bound = False
+    if latest_request is not None and latest_terminal_entry is not None:
+        request_index, request = latest_request
+        terminal_index, _ = latest_terminal_entry
+        starts = [
+            (index, event)
+            for index, event in enumerate(events)
+            if request_index < index < terminal_index
+            and event.event == "started"
+            and event.request_id == request.request_id
+            and event.fingerprint == request.fingerprint
+        ]
+        if len(starts) > 1:
+            errors.append("multiple process starts for latest probe")
+        if len(starts) == 1 and starts[0][1].pid is not None:
+            _, started = starts[0]
+            scheduler_events = [
+                event
+                for index, event in enumerate(events)
+                if index < terminal_index
+                and event.pid == started.pid
+                and event.process == expected_scheduler_process
+                and event.event in {"scheduler_owned", "interval_changed"}
+            ]
+            current_scheduler_bound = any(
+                event.event == "scheduler_owned" for event in scheduler_events
+            )
+            for event in scheduler_events:
+                if event.event == "scheduler_owned":
+                    current_scheduler_interval = event.interval_ms
+                elif current_scheduler_interval is not None:
+                    current_scheduler_interval = event.to_ms
+
+    if require_scheduler and not current_scheduler_bound:
+        errors.append("no scheduler owner for latest probe process")
+
+    if require_scheduler:
+        for expected in expected_intervals:
+            if current_scheduler_interval != expected:
+                errors.append(
+                    f"latest probe scheduler interval is {current_scheduler_interval}, "
+                    f"expected {expected}"
+                )
+    else:
+        observed_intervals = {
+            event.to_ms for event in events if event.event == "interval_changed"
+        } | {
+            event.interval_ms for event in events if event.event == "scheduler_owned"
+        }
+        for expected in expected_intervals:
+            if expected not in observed_intervals:
+                errors.append(f"missing interval {expected}")
 
     if require_probe and (
         latest_terminal is None or latest_terminal.event != "delivered"
     ):
         errors.append("latest probe was not delivered")
-    if require_scheduler and not owners_by_process:
-        errors.append("no scheduler owner evidence")
-
     if expected_probe_failure is not None:
         if not (
             latest_request is not None
@@ -319,6 +369,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         expected_intervals=args.expected_interval_ms,
         expected_fingerprint=args.expected_fingerprint,
         expected_probe_failure=args.expected_probe_failure,
+        expected_scheduler_process=f"{args.package}:hook_verify",
         require_timeout_retry=args.require_timeout_retry,
         probe_process_gone=gone,
         require_probe=args.require_probe,

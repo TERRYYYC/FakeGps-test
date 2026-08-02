@@ -14,6 +14,10 @@ class RuntimeEvidenceTest {
             RuntimeEvidence.probeRequested(request),
         )
         assertEquals(
+            "event=started requestId=request-1 fp=sha256:1111111111111111",
+            RuntimeEvidence.probeStarted(request),
+        )
+        assertEquals(
             "event=delivered requestId=request-1 fp=sha256:1111111111111111 fields=3",
             RuntimeEvidence.probeDelivered(request, 3),
         )

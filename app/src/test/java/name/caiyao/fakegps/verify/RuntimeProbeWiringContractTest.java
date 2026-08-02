@@ -52,10 +52,15 @@ public class RuntimeProbeWiringContractTest {
     @Test
     public void verifyViewModelOnlyBuildsRuntimeVerdictsThroughProbeDecision() throws Exception {
         String viewModel = classBytecode(
-                "name.caiyao.fakegps.ui.screen.verify.VerifyViewModel");
+                "name.caiyao.fakegps.ui.screen.verify.VerifyViewModel")
+                + classBytecode(
+                        "name.caiyao.fakegps.ui.screen.verify.VerifyViewModel$refresh$1");
         assertTrue(viewModel.contains("HookVerificationClient"));
         assertTrue(viewModel.contains("VerificationRequestCoordinator"));
         assertTrue(viewModel.contains("ProbeVerificationDecision"));
+        assertTrue(viewModel.contains("VerificationRefreshGate"));
+        assertTrue(viewModel.contains("tryStart"));
+        assertTrue(viewModel.contains("finish"));
         assertTrue(viewModel.contains("HOOK_PROBE"));
         assertTrue(viewModel.contains("probeDelivered"));
         assertTrue(viewModel.contains("probeFailed"));

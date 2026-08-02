@@ -81,6 +81,30 @@ print("sha256:" + hashlib.sha256(payload).hexdigest()[:16])
 '
 }
 
+prefs_payload_refresh_interval_ms() {
+    PREFS_XML=$1 "$PY" -c '
+import html, json, os, re, sys
+values = {
+    html.unescape(match.group(1))
+    for line in os.environ["PREFS_XML"].splitlines()
+    for match in [re.search(r"<string name=\"json\">(.*)</string>", line)]
+    if match
+}
+if len(values) != 1:
+    sys.exit(1)
+payload = json.loads(next(iter(values)))
+raw = payload.get("refreshIntervalSec")
+if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+    try:
+        seconds = int(raw)
+    except (OverflowError, ValueError):
+        seconds = 30
+else:
+    seconds = 30
+print(max(5, min(60, seconds)) * 1000)
+'
+}
+
 wait_for_profile_schema() {
     attempt=0
     while [ "$attempt" -lt 12 ]; do
@@ -541,10 +565,15 @@ run_runtime_verify() {
         echo "HARNESS_ERROR could not fingerprint current transport payload" >&2
         return 2
     }
+    interval_ms=$(prefs_payload_refresh_interval_ms "$prefs") || {
+        echo "HARNESS_ERROR could not read current transport refresh interval" >&2
+        return 2
+    }
     "$PY" "$RUNTIME_VERIFY_TOOL" \
         --from-adb \
         --require-probe \
         --require-scheduler \
+        --expected-interval-ms "$interval_ms" \
         --expected-fingerprint "$fingerprint"
 }
 
