@@ -68,6 +68,8 @@ public class MainHook implements IXposedHookLoadPackage {
     /** One owner per module classloader/process, even if LSPosed repeats the callback. */
     private static final HookRuntimeOwnership RUNTIME_OWNERSHIP = new HookRuntimeOwnership();
     private static final HookRefreshScheduler REFRESH_SCHEDULER = new HookRefreshScheduler();
+    /** Strong reference prevents GC from silently dropping the inotify watch. */
+    private static PrefsDirectoryObserver prefsObserver;
 
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -110,6 +112,42 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         XposedBridge.log(RuntimeEvidence.schedulerOwned(
                 lpparam.processName, REFRESH_SCHEDULER.currentDelayMs()));
+
+        // Phase B: event-driven observer (primary) + timer heartbeat (safety net).
+        // Observer delivers near-instant reload on prefs change via inotify.
+        // Timer always runs as safety net; fingerprint skip makes ticks near-free.
+        boolean observerArmed = false;
+        try {
+            XSharedPreferences probePrefs = new XSharedPreferences(
+                    name.caiyao.fakegps.BuildConfig.APPLICATION_ID, PREFS_NAME);
+            java.io.File prefsFile = probePrefs.getFile();
+            String dirPath = prefsFile.getParent();
+            String fileName = prefsFile.getName();
+
+            prefsObserver = new PrefsDirectoryObserver(
+                    dirPath, fileName, () -> reloadSnapshot(lpparam.processName));
+            observerArmed = prefsObserver.arm();
+
+            if (observerArmed) {
+                XposedBridge.log(RuntimeEvidence.observerArmed(
+                        lpparam.processName, dirPath));
+            } else {
+                XposedBridge.log(RuntimeEvidence.observerArmFailed(
+                        lpparam.processName, "arm() returned false"));
+            }
+        } catch (Throwable t) {
+            XposedBridge.log(RuntimeEvidence.observerArmFailed(
+                    lpparam.processName,
+                    t.getClass().getSimpleName() + ": " + t.getMessage()));
+        }
+
+        // Timer always runs: as heartbeat when observer is primary, or as sole
+        // refresh mechanism when observer failed. Fingerprint-based skip in
+        // loadSnapshot() makes heartbeat ticks near-free (~one SHA-256 compare).
+        if (!observerArmed) {
+            XposedBridge.log(RuntimeEvidence.timerFallback(
+                    lpparam.processName, REFRESH_SCHEDULER.currentDelayMs()));
+        }
         final Handler handler = new Handler(Looper.getMainLooper()) {
             @Override
             public void handleMessage(Message msg) {
@@ -185,6 +223,16 @@ public class MainHook implements IXposedHookLoadPackage {
                 return resolved;
             }
 
+            // Fingerprint-based skip: if the payload hasn't changed since the last accepted
+            // load, skip the full JSON parse. This makes observer-triggered reloads and
+            // timer heartbeats near-free when no config change occurred.
+            String fingerprint = PublishedConfig.Companion.fingerprint(jsonStr);
+            String previousFingerprint = CURRENT_FINGERPRINT.get();
+            if (fingerprint.equals(previousFingerprint)) {
+                debug("fingerprint unchanged (" + fingerprint + ") -> skip parse");
+                return CURRENT.get();
+            }
+
             org.json.JSONObject root = new org.json.JSONObject(jsonStr);
 
             Integer refreshIntervalSec = null;
@@ -197,7 +245,6 @@ public class MainHook implements IXposedHookLoadPackage {
             // rather than silently mis-reading it. Keep last-known-good (never revert to real data
             // mid-test) instead of falling back to passthrough.
             int version = root.optInt("schemaVersion", -1);
-            String fingerprint = PublishedConfig.Companion.fingerprint(jsonStr);
             boolean legacyV2 = version == LEGACY_TRANSPORT_SCHEMA_VERSION;
             if (!TransportSchemaContract.supports(version)) {
                 XposedBridge.log(TAG + ": transport rejected schema=" + version

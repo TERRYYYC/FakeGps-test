@@ -32,4 +32,18 @@ object RuntimeEvidence {
     @JvmStatic
     fun intervalChanged(process: String, fromMs: Long, toMs: Long): String =
         "$HOOK_PREFIX event=interval_changed process=$process fromMs=$fromMs toMs=$toMs"
+
+    // ---- Phase B: event-driven refresh evidence ----
+
+    @JvmStatic
+    fun observerArmed(process: String, dirPath: String): String =
+        "$HOOK_PREFIX event=observer_armed process=$process dir=$dirPath"
+
+    @JvmStatic
+    fun observerArmFailed(process: String, error: String): String =
+        "$HOOK_PREFIX event=observer_arm_failed process=$process error=$error"
+
+    @JvmStatic
+    fun timerFallback(process: String, intervalMs: Long): String =
+        "$HOOK_PREFIX event=timer_fallback process=$process intervalMs=$intervalMs"
 }

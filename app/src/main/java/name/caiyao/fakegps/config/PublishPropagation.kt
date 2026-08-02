@@ -50,11 +50,11 @@ object PublishPropagation {
     /**
      * The intervals a user may pick, ascending. Fixed by the plan: `5 / 10 / 30 / 60`.
      *
-     * Bounded on both ends on purpose: below ~5 s the periodic prefs re-read stops being free
-     * (the runtime currently re-reads more than once per cycle per process — see the duplicate
-     * scheduler finding), and beyond a minute the "did my change apply?" feedback loop becomes
-     * indistinguishable from a broken hook, which is exactly the confusion this setting exists
-     * to remove.
+     * Bounded on both ends on purpose: below ~5 s the periodic prefs re-read and SHA-256
+     * fingerprint comparison stop being negligible, and beyond a minute the "did my change
+     * apply?" feedback loop becomes indistinguishable from a broken hook, which is exactly the
+     * confusion this setting exists to remove. (The timer now serves as a safety-net heartbeat
+     * behind the event-driven FileObserver — Phase B.)
      */
     val REFRESH_INTERVAL_CHOICES_SEC: List<Int> = listOf(5, 10, 30, 60)
 

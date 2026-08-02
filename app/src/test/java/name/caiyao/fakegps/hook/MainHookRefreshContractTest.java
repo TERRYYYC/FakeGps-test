@@ -70,6 +70,39 @@ public class MainHookRefreshContractTest {
         assertTrue(timerCallback.contains("currentDelayMs"));
     }
 
+    /**
+     * Phase B plumbing: MainHook must wire PrefsDirectoryObserver (event-driven primary)
+     * and emit all three observer lifecycle evidence events. The fingerprint-based skip
+     * must call PublishedConfig.fingerprint() before the JSON parse path.
+     */
+    @Test
+    public void phaseBObserverAndFingerprintWiringPresent() throws Exception {
+        String hook = classBytecode("name.caiyao.fakegps.hook.MainHook");
+
+        // Observer lifecycle evidence wiring
+        assertTrue("observerArmed evidence missing", hook.contains("observerArmed"));
+        assertTrue("observerArmFailed evidence missing", hook.contains("observerArmFailed"));
+        assertTrue("timerFallback evidence missing", hook.contains("timerFallback"));
+
+        // Observer class reference
+        assertTrue("PrefsDirectoryObserver not referenced",
+                hook.contains("PrefsDirectoryObserver"));
+
+        // Fingerprint skip must invoke the fingerprint method
+        assertTrue("fingerprint method not referenced", hook.contains("fingerprint"));
+    }
+
+    /** PrefsDirectoryObserver must expose arm/isArmed and override onEvent. */
+    @Test
+    public void prefsDirectoryObserverStructure() throws Exception {
+        String observer = classBytecode("name.caiyao.fakegps.hook.PrefsDirectoryObserver");
+
+        assertTrue("arm() missing", observer.contains("arm"));
+        assertTrue("isArmed() missing", observer.contains("isArmed"));
+        assertTrue("onEvent override missing", observer.contains("onEvent"));
+        assertTrue("startWatching call missing", observer.contains("startWatching"));
+    }
+
     private static String classBytecode(String className) throws Exception {
         String resource = className.replace('.', '/') + ".class";
         try (InputStream input = MainHookRefreshContractTest.class

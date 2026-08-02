@@ -33,6 +33,22 @@ class RuntimeEvidenceTest {
     }
 
     @Test
+    fun `observer evidence records arm success, failure, and fallback`() {
+        assertEquals(
+            "FakeGPS-Hook: event=observer_armed process=com.example dir=/data/misc/uuid/prefs/pkg",
+            RuntimeEvidence.observerArmed("com.example", "/data/misc/uuid/prefs/pkg"),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=observer_arm_failed process=com.example error=SecurityException",
+            RuntimeEvidence.observerArmFailed("com.example", "SecurityException"),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=timer_fallback process=com.example intervalMs=30000",
+            RuntimeEvidence.timerFallback("com.example", 30_000L),
+        )
+    }
+
+    @Test
     fun `scheduler grammar records owner and real transitions only`() {
         assertEquals(
             "FakeGPS-Hook: event=scheduler_owned process=com.example intervalMs=30000",
