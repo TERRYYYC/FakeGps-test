@@ -103,6 +103,30 @@ public class MainHookRefreshContractTest {
         assertTrue("startWatching call missing", observer.contains("startWatching"));
     }
 
+    /**
+     * Review finding #1 (Sol): fingerprint skip must include hour-of-day so that
+     * time_based mode re-evaluates on hour boundaries even when config text is identical.
+     * Without this, crossing an active-hours boundary silently freezes the stale Snapshot.
+     */
+    @Test
+    public void fingerprintSkipIncludesHourCheck() throws Exception {
+        String hook = classBytecode("name.caiyao.fakegps.hook.MainHook");
+        assertTrue("LAST_EVALUATED_HOUR field missing — fingerprint skip must include hour check",
+                hook.contains("LAST_EVALUATED_HOUR"));
+    }
+
+    /**
+     * Review finding #2 (Sol): arm() must verify directory existence before claiming
+     * success. FileObserver.startWatching() silently succeeds on non-existent directories
+     * but never delivers events, producing a false observer_armed evidence log.
+     */
+    @Test
+    public void observerArmVerifiesDirectoryExists() throws Exception {
+        String observer = classBytecode("name.caiyao.fakegps.hook.PrefsDirectoryObserver");
+        assertTrue("isDirectory check missing — arm() must verify target dir exists",
+                observer.contains("isDirectory"));
+    }
+
     private static String classBytecode(String className) throws Exception {
         String resource = className.replace('.', '/') + ".class";
         try (InputStream input = MainHookRefreshContractTest.class

@@ -4,6 +4,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -62,6 +63,10 @@ public class MainHook implements IXposedHookLoadPackage {
     static final AtomicReference<Snapshot> CURRENT = new AtomicReference<>(Snapshot.PASSTHROUGH);
     /** Fingerprint paired with the last structurally accepted Snapshot. */
     private static final AtomicReference<String> CURRENT_FINGERPRINT = new AtomicReference<>();
+    /** Hour-of-day when the last fingerprint-accepted Snapshot was evaluated.
+     *  Ensures time_based mode re-evaluates on hour boundaries even when fingerprint matches.
+     *  (Review finding #1, Sol) */
+    private static final AtomicInteger LAST_EVALUATED_HOUR = new AtomicInteger(-1);
     /** Serializes timer and verification-triggered reloads into one coherent publish order. */
     private static final Object SNAPSHOT_LOCK = new Object();
 
@@ -223,13 +228,17 @@ public class MainHook implements IXposedHookLoadPackage {
                 return resolved;
             }
 
-            // Fingerprint-based skip: if the payload hasn't changed since the last accepted
-            // load, skip the full JSON parse. This makes observer-triggered reloads and
-            // timer heartbeats near-free when no config change occurred.
+            // Fingerprint-based skip: if the payload AND the hour haven't changed since the
+            // last accepted load, skip the full JSON parse. The hour check is required because
+            // time_based mode depends on wall-clock time, not config content: same fingerprint
+            // across an active-hours boundary must re-evaluate the time window, not return
+            // the stale Snapshot. (Review finding #1, Sol)
             String fingerprint = PublishedConfig.Companion.fingerprint(jsonStr);
             String previousFingerprint = CURRENT_FINGERPRINT.get();
-            if (fingerprint.equals(previousFingerprint)) {
-                debug("fingerprint unchanged (" + fingerprint + ") -> skip parse");
+            int currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+            if (fingerprint.equals(previousFingerprint)
+                    && currentHour == LAST_EVALUATED_HOUR.get()) {
+                debug("fingerprint and hour unchanged (" + fingerprint + ") -> skip parse");
                 return CURRENT.get();
             }
 
@@ -334,6 +343,8 @@ public class MainHook implements IXposedHookLoadPackage {
             String fingerprint) {
         REFRESH_SCHEDULER.acceptPayloadInterval(refreshIntervalSec, true);
         CURRENT_FINGERPRINT.set(fingerprint);
+        LAST_EVALUATED_HOUR.set(
+                java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY));
         return snapshot;
     }
 

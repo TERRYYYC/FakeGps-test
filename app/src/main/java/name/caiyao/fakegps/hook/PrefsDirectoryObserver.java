@@ -33,6 +33,7 @@ final class PrefsDirectoryObserver extends FileObserver {
     private static final String TAG = "FakeGPS";
     private static final int MASK = MOVED_TO | CLOSE_WRITE | CREATE;
 
+    private final String watchedDirPath;
     private final String targetFilename;
     private final Runnable onChanged;
     private volatile boolean armed;
@@ -46,6 +47,7 @@ final class PrefsDirectoryObserver extends FileObserver {
     @SuppressWarnings("deprecation") // FileObserver(String, int) is the only API-24-safe ctor
     PrefsDirectoryObserver(String dirPath, String targetFilename, Runnable onChanged) {
         super(dirPath, MASK);
+        this.watchedDirPath = dirPath;
         this.targetFilename = targetFilename;
         this.onChanged = onChanged;
     }
@@ -56,6 +58,14 @@ final class PrefsDirectoryObserver extends FileObserver {
      */
     boolean arm() {
         try {
+            // Pre-flight: verify target directory exists. FileObserver.startWatching()
+            // silently succeeds on non-existent directories but never delivers events,
+            // producing a false observer_armed evidence log. (Review finding #2, Sol)
+            if (!new java.io.File(watchedDirPath).isDirectory()) {
+                XposedBridge.log(TAG + ": observer dir does not exist: " + watchedDirPath);
+                armed = false;
+                return false;
+            }
             startWatching();
             armed = true;
             return true;
