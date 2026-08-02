@@ -88,7 +88,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         // 1. Load initial config (XSharedPreferences works here — it's a file read, no app context needed)
-        Snapshot initial = reloadSnapshot();
+        Snapshot initial = reloadSnapshot(null);
         XposedBridge.log(TAG + ": Loaded config for " + lpparam.packageName
                 + " | location=" + initial.hasLocation()
                 + " | cellRebuild=" + initial.hasCellReconstructionDecision());
@@ -99,7 +99,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 ? lpparam.classLoader
                 : MainHook.class.getClassLoader();
         if (RUNTIME_OWNERSHIP.claimHooks(targetClassLoader)) {
-            installProbeSentinelIfPresent(targetClassLoader);
+            installProbeSentinelIfPresent(targetClassLoader, lpparam.processName);
             HookUtils.registerAllHooks(targetClassLoader);
         }
 
@@ -114,13 +114,7 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             public void handleMessage(Message msg) {
                 if (msg.what == 1) {
-                    long previousDelayMs = REFRESH_SCHEDULER.currentDelayMs();
-                    Snapshot refreshed = reloadSnapshot();
-                    long nextDelayMs = REFRESH_SCHEDULER.currentDelayMs();
-                    if (previousDelayMs != nextDelayMs) {
-                        XposedBridge.log(RuntimeEvidence.intervalChanged(
-                                lpparam.processName, previousDelayMs, nextDelayMs));
-                    }
+                    Snapshot refreshed = reloadSnapshot(lpparam.processName);
                     debug("timer refresh -> hasLocation=" + refreshed.hasLocation());
                 }
                 sendEmptyMessageDelayed(1, REFRESH_SCHEDULER.currentDelayMs());
@@ -137,16 +131,16 @@ public class MainHook implements IXposedHookLoadPackage {
      * NULL/absent field == passthrough (real device value). On read/parse failure we keep the
      * last-known-good CURRENT rather than reverting to real data mid-test.
      */
-    private Snapshot reloadSnapshot() {
+    private Snapshot reloadSnapshot(String evidenceProcess) {
         synchronized (SNAPSHOT_LOCK) {
-            return reloadSnapshotLocked();
+            return reloadSnapshotLocked(evidenceProcess);
         }
     }
 
     /** Target-classloader bridge used by the private verification process before observation. */
-    private String reloadSnapshotForProbe(String expectedFingerprint) {
+    private String reloadSnapshotForProbe(String expectedFingerprint, String processName) {
         synchronized (SNAPSHOT_LOCK) {
-            reloadSnapshotLocked();
+            reloadSnapshotLocked(processName);
             String activeFingerprint = CURRENT_FINGERPRINT.get();
             if (expectedFingerprint != null && !expectedFingerprint.equals(activeFingerprint)) {
                 XposedBridge.log(TAG + ": probe snapshot mismatch expected="
@@ -156,9 +150,16 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    private Snapshot reloadSnapshotLocked() {
+    /** Commit one reload and its interval evidence under the same process-wide ordering lock. */
+    private Snapshot reloadSnapshotLocked(String evidenceProcess) {
+        long previousDelayMs = REFRESH_SCHEDULER.currentDelayMs();
         Snapshot refreshed = loadSnapshot();
         CURRENT.set(refreshed);
+        long nextDelayMs = REFRESH_SCHEDULER.currentDelayMs();
+        if (evidenceProcess != null && previousDelayMs != nextDelayMs) {
+            XposedBridge.log(RuntimeEvidence.intervalChanged(
+                    evidenceProcess, previousDelayMs, nextDelayMs));
+        }
         return refreshed;
     }
 
@@ -292,7 +293,9 @@ public class MainHook implements IXposedHookLoadPackage {
      * copies of the same class. Hooking the Method object from the target classloader makes the
      * probe's own call return true only when LSPosed really installed this module in that process.
      */
-    private void installProbeSentinelIfPresent(ClassLoader targetClassLoader) {
+    private void installProbeSentinelIfPresent(
+            ClassLoader targetClassLoader,
+            String processName) {
         Class<?> sentinel = XposedHelpers.findClassIfExists(
                 RuntimeHookSentinel.class.getName(),
                 targetClassLoader);
@@ -308,7 +311,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 new XC_MethodReplacement() {
                     @Override
                     protected Object replaceHookedMethod(MethodHookParam param) {
-                        return reloadSnapshotForProbe((String) param.args[0]);
+                        return reloadSnapshotForProbe((String) param.args[0], processName);
                     }
                 });
     }

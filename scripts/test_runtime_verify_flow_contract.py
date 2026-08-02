@@ -55,6 +55,50 @@ class RuntimeVerifyFlowContractTest(unittest.TestCase):
         self.assertFalse(verdict.passed)
         self.assertIn("unmatched delivered", verdict.errors)
 
+    def test_truncated_historical_prefix_does_not_poison_latest_complete_probe(self):
+        lines = [
+            f"I/FakeGPS-Probe( 90): event=started requestId=rolled-out fp={FP2}",
+            f"I/FakeGPS-Probe( 10): event=delivered requestId=rolled-out fp={FP2} fields=1",
+            "I/LSPosed-Bridge( 100): FakeGPS-Hook: event=scheduler_owned "
+            "process=name.caiyao.fakegps:hook_verify intervalMs=30000",
+            f"I/FakeGPS-Probe( 10): event=requested requestId=current fp={FP1}",
+            f"I/FakeGPS-Probe( 100): event=started requestId=current fp={FP1}",
+            f"I/FakeGPS-Probe( 10): event=delivered requestId=current fp={FP1} fields=1",
+        ]
+
+        verdict = runtime_flow.verify_trace(
+            lines,
+            expected_intervals=(30000,),
+            expected_fingerprint=FP1,
+            require_probe=True,
+            require_scheduler=True,
+            expected_scheduler_process="name.caiyao.fakegps:hook_verify",
+        )
+
+        self.assertTrue(verdict.passed, verdict.errors)
+
+    def test_unmatched_terminal_after_first_retained_request_still_fails(self):
+        lines = [
+            "I/LSPosed-Bridge( 100): FakeGPS-Hook: event=scheduler_owned "
+            "process=name.caiyao.fakegps:hook_verify intervalMs=30000",
+            f"I/FakeGPS-Probe( 10): event=requested requestId=current fp={FP1}",
+            f"I/FakeGPS-Probe( 90): event=delivered requestId=alien fp={FP2} fields=1",
+            f"I/FakeGPS-Probe( 100): event=started requestId=current fp={FP1}",
+            f"I/FakeGPS-Probe( 10): event=delivered requestId=current fp={FP1} fields=1",
+        ]
+
+        verdict = runtime_flow.verify_trace(
+            lines,
+            expected_intervals=(30000,),
+            expected_fingerprint=FP1,
+            require_probe=True,
+            require_scheduler=True,
+            expected_scheduler_process="name.caiyao.fakegps:hook_verify",
+        )
+
+        self.assertFalse(verdict.passed)
+        self.assertIn("unmatched delivered", verdict.errors)
+
     def test_ignored_stale_callback_is_evidence_but_not_a_terminal_delivery(self):
         valid = [
             f"FakeGPS-Probe: event=requested requestId=old fp={FP2}",

@@ -264,8 +264,9 @@ private fun VerdictCard(state: VerifyUiState) {
             }
             VerificationStatus.PENDING_PROPAGATION -> {
                 headline = "配置刚保存，尚未生效"
-                detail = "hook 每 ${PublishPropagation.HOOK_REFRESH_INTERVAL_MS / 1000} 秒才重新读取一次配置，" +
-                    "刚保存的改动可能还没被读到。请等一会儿再点右上角重新验证 —— " +
+                detail = "hook 最长可能仍按之前的 " +
+                    "${PublishPropagation.MAX_PROPAGATION_DELAY_MS / 1000} 秒周期等待刷新，" +
+                    "刚保存的改动可能还没被读到。请稍后再点右上角重新验证 —— " +
                     "现在读到旧值是正常的，不代表失败。"
                 tone = MaterialTheme.colorScheme.onSurfaceVariant
             }

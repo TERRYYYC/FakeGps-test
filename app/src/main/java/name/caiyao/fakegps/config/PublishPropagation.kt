@@ -26,6 +26,13 @@ object PublishPropagation {
      */
     const val HOOK_REFRESH_INTERVAL_MS = DEFAULT_REFRESH_INTERVAL_SEC * 1000L
 
+    /**
+     * Conservative UI window for a hook that may still be sleeping on the previous cadence.
+     * The current payload cannot reveal that previous delay, so the maximum supported cadence is
+     * the smallest bound that never turns a legitimate 60s handoff into a false failure.
+     */
+    const val MAX_PROPAGATION_DELAY_MS = MAX_RUNTIME_REFRESH_INTERVAL_SEC * 1000L
+
     // ---------------------------------------------------------------------------------------
     // Refresh interval policy
     //
@@ -104,10 +111,10 @@ object PublishPropagation {
         if (publishedAtMs == null) return false
         val elapsed = nowMs - publishedAtMs
         if (elapsed < 0) return false
-        return elapsed < HOOK_REFRESH_INTERVAL_MS
+        return elapsed < MAX_PROPAGATION_DELAY_MS
     }
 
-    // NOTE — deliberately NOT parameterised by the configured interval yet.
+    // NOTE — deliberately NOT parameterised by only the newly configured interval.
     //
     // A "use the newly chosen interval" overload looks like the obvious completion of this policy,
     // and it is wrong on the transition: a hook process that is mid-sleep on the OLD 60 s timer
@@ -115,8 +122,7 @@ object PublishPropagation {
     // after 5 s would report a false red for the following 55 s — inventing exactly the failure
     // mode this window exists to suppress.
     //
-    // Correctly bounding it needs BOTH the old and the new cadence (and the scheduler's own
-    // handoff semantics), which live in the refresh-scheduler task, not here. Until then the
-    // window stays on the default and the Settings copy warns that the first cycle after a change
-    // may still take the previous interval.
+    // Correctly narrowing it needs BOTH the old and the new cadence (and the scheduler's own
+    // handoff semantics), which the UI does not persist as a pair. Until then the maximum allowed
+    // cadence is conservative but bounded: it cannot hide a real mismatch beyond 60 seconds.
 }

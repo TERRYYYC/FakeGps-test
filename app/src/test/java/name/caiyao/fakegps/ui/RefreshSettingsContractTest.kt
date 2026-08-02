@@ -89,7 +89,7 @@ class RefreshSettingsContractTest {
         assertEquals(chosen, PublishPropagation.sanitizeInterval(chosen))
     }
 
-    // --- 4. The pending window stays on the default cadence (see the NOTE in PublishPropagation) ---
+    // --- 4. Pending stays conservative across an old-cadence → new-cadence transition ---
 
     /** The plan fixes the offered set; an extra option must not creep in unreviewed. */
     @Test
@@ -98,9 +98,10 @@ class RefreshSettingsContractTest {
     }
 
     @Test
-    fun pendingWindowUsesTheDefaultInterval() {
+    fun pendingWindowCoversTheLongestSupportedPreviousInterval() {
         val publishedAt = 1_000_000L
-        assertTrue(PublishPropagation.isPending(publishedAt, publishedAt + 29_999))
-        assertFalse(PublishPropagation.isPending(publishedAt, publishedAt + 30_000))
+        val maxDelay = PublishPropagation.MAX_PROPAGATION_DELAY_MS
+        assertTrue(PublishPropagation.isPending(publishedAt, publishedAt + maxDelay - 1))
+        assertFalse(PublishPropagation.isPending(publishedAt, publishedAt + maxDelay))
     }
 }

@@ -121,27 +121,64 @@ def verify_trace(
     for index, event in enumerate(events):
         if event.event == "requested":
             requested.setdefault((event.request_id, event.fingerprint), []).append(index)
+
+    latest_request = next(
+        (
+            (index, event)
+            for index, event in reversed(tuple(enumerate(events)))
+            if event.event == "requested"
+        ),
+        None,
+    )
+    latest_terminal_entry = None
+    if latest_request is not None:
+        request_index, request = latest_request
+        latest_terminal_entry = next(
+            (
+                (index, event)
+                for index, event in enumerate(events)
+                if index > request_index
+                and event.event in {"delivered", "failed"}
+                and event.request_id == request.request_id
+                and event.fingerprint == request.fingerprint
+            ),
+            None,
+        )
+    latest_terminal = latest_terminal_entry[1] if latest_terminal_entry is not None else None
+
+    # `--from-adb` reads an uncleared finite ring buffer. If the latest attempt is complete, events
+    # before the first retained request form an unprovable truncated prefix: their request lines may
+    # already have rolled out. Keep strict validation when the latest attempt is incomplete, and for
+    # every event from the first retained request onward, so a stale/current terminal cannot pass.
+    first_request_index = min(
+        (index for indexes in requested.values() for index in indexes),
+        default=0,
+    )
+    validation_start = first_request_index if latest_terminal_entry is not None else 0
+
     for started_index, event in enumerate(events):
-        if event.event != "started":
+        if event.event != "started" or started_index < validation_start:
             continue
         request_indexes = requested.get((event.request_id, event.fingerprint), ())
         if not any(index < started_index for index in request_indexes):
             errors.append("unmatched started")
     for terminal_index, event in enumerate(events):
-        if event.event != "delivered":
+        if event.event != "delivered" or terminal_index < validation_start:
             continue
         request_indexes = requested.get((event.request_id, event.fingerprint), ())
         if not any(index < terminal_index for index in request_indexes):
             errors.append("unmatched delivered")
     for terminal_index, event in enumerate(events):
-        if event.event != "failed":
+        if event.event != "failed" or terminal_index < validation_start:
             continue
         request_indexes = requested.get((event.request_id, event.fingerprint), ())
         if not any(index < terminal_index for index in request_indexes):
             errors.append("unmatched failed")
 
     terminal_counts = {}
-    for event in events:
+    for index, event in enumerate(events):
+        if index < validation_start:
+            continue
         if event.event in {"delivered", "failed"}:
             key = (event.request_id, event.fingerprint)
             terminal_counts[key] = terminal_counts.get(key, 0) + 1
@@ -149,7 +186,7 @@ def verify_trace(
         errors.append("multiple terminal events for request")
 
     for ignored_index, ignored in enumerate(events):
-        if ignored.event != "ignored":
+        if ignored.event != "ignored" or ignored_index < validation_start:
             continue
         if ignored.reason != "STALE_RESULT":
             errors.append("invalid ignored reason")
@@ -180,30 +217,6 @@ def verify_trace(
         for pid, count in pid_counts.items():
             if count > 1:
                 errors.append(f"duplicate scheduler owner for {process} pid={pid}")
-
-    latest_request = next(
-        (
-            (index, event)
-            for index, event in reversed(tuple(enumerate(events)))
-            if event.event == "requested"
-        ),
-        None,
-    )
-    latest_terminal_entry = None
-    if latest_request is not None:
-        request_index, request = latest_request
-        latest_terminal_entry = next(
-            (
-                (index, event)
-                for index, event in enumerate(events)
-                if index > request_index
-                and event.event in {"delivered", "failed"}
-                and event.request_id == request.request_id
-                and event.fingerprint == request.fingerprint
-            ),
-            None,
-        )
-    latest_terminal = latest_terminal_entry[1] if latest_terminal_entry is not None else None
 
     current_scheduler_interval = None
     current_scheduler_bound = False
