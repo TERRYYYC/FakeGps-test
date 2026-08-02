@@ -145,8 +145,11 @@ class MockProviderService : Service() {
         )
         .build()
 
-    private fun Intent.optionalDouble(name: String): Double? =
-        if (hasExtra(name)) getDoubleExtra(name, 0.0) else null
+    private fun Intent.optionalDouble(name: String): Double? {
+        if (!hasExtra(name)) return null
+        getStringExtra(name)?.toDoubleOrNull()?.let { return it }
+        return getDoubleExtra(name, Double.NaN).takeIf(Double::isFinite)
+    }
 
     companion object {
         private const val TAG = "MockProviderLab"

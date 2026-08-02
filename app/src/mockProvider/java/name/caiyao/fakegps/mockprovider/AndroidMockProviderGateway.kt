@@ -1,23 +1,25 @@
 package name.caiyao.fakegps.mockprovider
 
 import android.location.Location
+import android.location.Criteria
 import android.location.LocationManager
 import android.location.provider.ProviderProperties
 import android.os.Build
 import android.os.SystemClock
+import androidx.annotation.RequiresApi
 
 class AndroidMockProviderGateway(
     private val locationManager: LocationManager,
-    private val sdkInt: Int = Build.VERSION.SDK_INT,
     private val sampleFactory: MockLocationSampleFactory = MockLocationSampleFactory(
         elapsedRealtimeNanos = SystemClock::elapsedRealtimeNanos,
     ),
 ) : MockProviderGateway {
 
     override fun replaceGpsProvider() {
-        when (ProviderApiFamily.forSdk(sdkInt)) {
-            ProviderApiFamily.Modern -> addModernGpsProvider()
-            ProviderApiFamily.Legacy -> addLegacyGpsProvider()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            addModernGpsProvider()
+        } else {
+            addLegacyGpsProvider()
         }
         locationManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, true)
     }
@@ -33,7 +35,7 @@ class AndroidMockProviderGateway(
             elapsedRealtimeNanos = sample.elapsedRealtimeNanos
             speed = 0f
             bearing = 0f
-            if (sdkInt >= Build.VERSION_CODES.O) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 verticalAccuracyMeters = 1f
                 speedAccuracyMetersPerSecond = 0.1f
                 bearingAccuracyDegrees = 0.1f
@@ -46,6 +48,7 @@ class AndroidMockProviderGateway(
         locationManager.removeTestProvider(LocationManager.GPS_PROVIDER)
     }
 
+    @RequiresApi(Build.VERSION_CODES.S)
     private fun addModernGpsProvider() {
         val properties = ProviderProperties.Builder()
             .setHasNetworkRequirement(false)
@@ -72,8 +75,8 @@ class AndroidMockProviderGateway(
             true,
             true,
             true,
-            ProviderProperties.POWER_USAGE_HIGH,
-            ProviderProperties.ACCURACY_FINE,
+            Criteria.POWER_HIGH,
+            Criteria.ACCURACY_FINE,
         )
     }
 }

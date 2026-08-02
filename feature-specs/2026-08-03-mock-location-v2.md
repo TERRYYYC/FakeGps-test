@@ -134,7 +134,7 @@ interface MockProviderGateway {
 
 1. Write a failing structural test that requires the lab applicationId suffix, unique label, dynamic `${applicationId}` provider authority/permission, and Xposed metadata removal.
 2. Run `python3 scripts/test_mock_provider_variant.py`; expect failure before the variant exists.
-3. Add the `mockProvider` build type and manifest/resource overlay. Reuse the release no-op `DebugHookProbeController` source so the custom build type compiles without inheriting debug self-hook behavior.
+3. Add the `mockProvider` build type and manifest/resource overlay. Compile the debug acceptance classes required by common JVM tests, but keep them dormant: the lab removes all Xposed metadata, does not merge the debug acceptance manifest, and launches only `MockProviderActivity`.
 4. Run the structural test, `assembleDebug`, and `assembleMockProvider`; expect all green.
 5. Inspect both APKs with `aapt`; assert INV-1, INV-2, and INV-3.
 6. Commit build identity separately.
@@ -171,7 +171,7 @@ interface MockProviderGateway {
 **Files:**
 - Create: `app/src/mockProvider/java/name/caiyao/fakegps/mockprovider/MockProviderActivity.kt`
 - Create: `app/src/mockProvider/java/name/caiyao/fakegps/mockprovider/MockProviderScreen.kt`
-- Create: `app/src/mockProvider/java/name/caiyao/fakegps/mockprovider/MockProviderViewModel.kt`
+- Create: `app/src/mockProvider/java/name/caiyao/fakegps/mockprovider/MockProviderUiContract.kt`
 - Test: `app/src/testMockProvider/java/name/caiyao/fakegps/mockprovider/MockProviderUiContractTest.kt`
 
 1. Write a failing UI-contract test for unique title, coordinate validation, explicit permission guidance, Start/Stop actions, and visible lifecycle/error state.

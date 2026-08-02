@@ -47,6 +47,16 @@ class MockProviderVariantContractTest(unittest.TestCase):
         self.assertIn('android:name=".mockprovider.MockProviderActivity"', overlay)
         self.assertIn("FakeGPS Mock Provider Lab", strings)
 
+    def test_device_harness_restores_the_original_mock_app_on_every_exit(self) -> None:
+        harness = (ROOT / "scripts/mock_provider_acceptance.sh").read_text()
+
+        self.assertIn("trap restore EXIT", harness)
+        self.assertIn("com.hopefactory2021.fakegpslocation", harness)
+        self.assertIn("name.caiyao.fakegps.mockprovider", harness)
+        self.assertIn('appops set "$LAB_PACKAGE" android:mock_location deny', harness)
+        self.assertIn('appops set "$REFERENCE_PACKAGE" android:mock_location allow', harness)
+        self.assertNotIn("uninstall name.caiyao.fakegps", harness)
+
 
 if __name__ == "__main__":
     unittest.main()
