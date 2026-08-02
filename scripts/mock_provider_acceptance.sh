@@ -4,6 +4,7 @@ set -euo pipefail
 SERIAL="${1:-ZY22JHW9M4}"
 REFERENCE_PACKAGE="com.hopefactory2021.fakegpslocation"
 PRODUCT_PACKAGE="name.caiyao.fakegps"
+BENCH_PACKAGE="name.caiyao.fakegps.bench"
 LAB_PACKAGE="name.caiyao.fakegps.mockprovider"
 LAB_ACTIVITY="$LAB_PACKAGE/.MockProviderActivity"
 LAB_APK="${LAB_APK:-app/build/outputs/apk/mockProvider/app-mockProvider.apk}"
@@ -78,7 +79,11 @@ fi
 trap restore EXIT
 
 "${ADB[@]}" install -r "$LAB_APK"
-for package_name in "$REFERENCE_PACKAGE" "$PRODUCT_PACKAGE" "$LAB_PACKAGE"; do
+for package_name in \
+    "$REFERENCE_PACKAGE" \
+    "$PRODUCT_PACKAGE" \
+    "$BENCH_PACKAGE" \
+    "$LAB_PACKAGE"; do
     "${ADB[@]}" shell pm path "$package_name" | sed "s/^/INSTALLED $package_name /"
 done
 
