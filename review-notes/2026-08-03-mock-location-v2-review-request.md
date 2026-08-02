@@ -24,6 +24,8 @@ that APK, owns a pure lifecycle controller plus a non-sticky foreground service,
 and replaces the Android system `gps` test provider with fresh complete mock
 locations. A fail-safe device harness drives the real UI, observes Google Maps,
 then restores and launches the operator's original Fake GPS Location app.
+The branch also integrates latest master `5dab712`, where upstream debug is the
+independent `name.caiyao.fakegps.bench` package and release remains unchanged.
 
 ## Why
 
@@ -107,7 +109,7 @@ python3 scripts/test_mock_provider_variant.py
 
 Before the device command, independently confirm the sole allowed mock app is
 `com.hopefactory2021.fakegpslocation`. Do not copy/read app data or uninstall
-any of the three packages.
+any of the four packages.
 
 ## Self-check evidence
 
@@ -140,7 +142,7 @@ initially added two `WrongConstant` errors; current report has zero issue under
 - Worktree clean before request.
 - No media/design artifact in repository root or committed diff.
 - Lab APK SHA-256:
-  `0bae0ca0f2d4ffaada1482d363b1dd6e77491567a9e3e1f3c2e4cebe4873dff5`.
+  `a98341b9b87420851eba9b32d27ed1f746b0d0cde031a37acd590c83936a2542`.
 - Private Maps screenshot and hashes are listed in the evidence manifest; the
   image stays outside Git because it came from the operator's device.
 

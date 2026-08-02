@@ -16,18 +16,19 @@ created: 2026-08-03
 
 - Repository: `https://github.com/TERRYYYC/FakeGps-test.git`
 - Branch: `feat/mock-location-v2`
-- Base: `c34bf666983da3634dfba5f2b4c3ce0147cde019`
-- Implementation and acceptance-script HEAD: `8a5255d`
+- Initial development base: `c34bf666983da3634dfba5f2b4c3ce0147cde019`
+- Latest-master review base: `5dab712ff4119b421076b5034c3fea859ad2b29a`
+- Latest-master implementation and acceptance-script HEAD: `2145122`
 - Device: moto g54 5G, serial `ZY22JHW9M4`, Android 15
 - Lab APK: `app/build/outputs/apk/mockProvider/app-mockProvider.apk`
 - Lab APK SHA-256:
-  `0bae0ca0f2d4ffaada1482d363b1dd6e77491567a9e3e1f3c2e4cebe4873dff5`
+  `a98341b9b87420851eba9b32d27ed1f746b0d0cde031a37acd590c83936a2542`
 - Installed-app backup:
   `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/README.md`
 - Private device screenshot:
-  `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/maps-8a5255d.png`
+  `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/maps-2145122.png`
 - Screenshot SHA-256:
-  `83c715050852cd4d21af4a04d8da33c43ddac90e528febfffb6143507b6d7d3a`
+  `b7e3e6e87118f928cf1933ffa52c282cbb2e20888c9a8e5aa2354737925f8cef`
 
 The screenshot is intentionally outside Git because it came from the
 operator's device. It shows the Google Maps blue dot at City Hall, Lower
@@ -39,7 +40,7 @@ Manhattan, matching `40.7128,-74.0060`.
 |---|---|---|---|
 | 1 | Analyze whether the installed Fake GPS Location app uses System Mock Provider | Evidence established / finish-line boundary | APK inspection found `addTestProvider("gps")`, enable/publish/remove calls, plus a separate optional GMS mock path. No source was copied. |
 | 2 | Back up the current apps before testing | AC 1 | Complete base + split APK backup with SHA-256; no app data copied. |
-| 3 | Derive the lab from the original product while preserving the installed original | AC 2–3 | Lab is a build variant of FakeGPS master, with a distinct package/label/data/authority; all three packages coexist. |
+| 3 | Derive the lab from the original product while preserving the installed original | AC 2–3 | Lab is a build variant of latest FakeGPS master, with a distinct package/label/data/authority; reference, release, debug bench, and Lab all coexist. |
 | 4 | Test Google Maps through方案 C, not GMS/Xposed internals | AC 4–6 | System `gps` test provider moved both GPS and fused last locations and the Maps blue dot. |
 | 5 | Restore original operation after every test | AC 5 | EXIT trap stops/removes the Lab provider, restores the original app-op, verifies Lab PID absence, and launches the reference app. |
 | 6 | Kimi independently reviews/tests; Opus joins only at merge | Task 6 | Author gate prepares exact-HEAD handoff to Kimi; no merge is attempted here. |
@@ -49,7 +50,7 @@ Manhattan, matching `40.7128,-74.0060`.
 | Requirement / invariant | Evidence |
 |---|---|
 | INV-1 isolated identity | APK package `name.caiyao.fakegps.mockprovider`, label `FakeGPS Mock Provider Lab`, authority `name.caiyao.fakegps.mockprovider.data.AppInfoProvider`. |
-| INV-2 original compatibility | Original debug package remains `name.caiyao.fakegps`, version `3.0.0`; debug and release builds pass. |
+| INV-2 original compatibility | Latest master intentionally keeps release as `name.caiyao.fakegps` and installs debug as `name.caiyao.fakegps.bench`; both build alongside the Lab. |
 | INV-3 no second Xposed module | Lab manifest has no `xposedmodule` metadata; original debug manifest retains it. |
 | INV-4 complete fresh samples | Unit tests cover sample completeness; device emitted one sample per second with time, elapsed realtime, altitude, accuracy, speed and bearing fields. |
 | INV-5 idempotent cleanup | Controller tests cover repeated stop and failed-start cleanup; device script restores on every EXIT. |
@@ -75,7 +76,7 @@ install coexisting Lab APK
 → restore original app-op and launch Fake GPS Location
 ```
 
-Key runtime evidence from the successful `8a5255d` run:
+Key runtime evidence from the successful latest-master `2145122` run:
 
 ```text
 ACTIVE package=name.caiyao.fakegps.mockprovider pid=5501
@@ -105,6 +106,9 @@ Dogfood defects found and fixed before review:
   annotation (`be58a68`).
 - Restore proved app-op state but not original usability → launch and verify the
   restored reference app (`8a5255d`).
+- Master advanced during development with an independent `.bench` debug package
+  → merge `5dab712`, verify all four identities, and rerun the full/device gate
+  (`2145122`).
 
 ## Fresh verification
 

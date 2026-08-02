@@ -21,10 +21,11 @@ created: 2026-08-03
 
 ## Finish line
 
-The device can keep all three packages installed without shared state or signature replacement:
+The device can keep all four packages installed without shared state or signature replacement:
 
 - Play Store reference: `com.hopefactory2021.fakegpslocation` (`Fake GPS Location`)
-- Original product: `name.caiyao.fakegps` (`FakeGps`)
+- Original release product: `name.caiyao.fakegps` (`千网游`)
+- Upstream debug bench: `name.caiyao.fakegps.bench` (`千网游·测试`)
 - Lab variant: `name.caiyao.fakegps.mockprovider` (`FakeGPS Mock Provider Lab`)
 
 Selecting the lab in Developer options and pressing Start publishes a complete mock location through the system `gps` provider once per second. Pressing Stop removes the test provider. The acceptance script restores `com.hopefactory2021.fakegpslocation` as the selected mock app and proves the original still launches.
@@ -43,7 +44,8 @@ Selecting the lab in Developer options and pressing Start publishes a complete m
 - Backup manifest: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/README.md`.
 - The installed reference APK contains calls to `addTestProvider("gps", ...)`, `setTestProviderEnabled("gps", true)`, repeated `setTestProviderLocation("gps", ...)`, and cleanup via `removeTestProvider("gps")`.
 - The same reference APK also contains the separate Google Play Services `setMockMode` / `setMockLocation` path, selected by an internal provider-choice preference. The system-provider experiment must therefore be evaluated independently rather than assuming the reference app is system-only.
-- Baseline `c34bf666983da3634dfba5f2b4c3ce0147cde019`: `testDebugUnitTest` and `assembleDebug` pass.
+- Initial development baseline `c34bf666983da3634dfba5f2b4c3ce0147cde019`: `testDebugUnitTest` and `assembleDebug` pass.
+- Review baseline `5dab712ff4119b421076b5034c3fea859ad2b29a`: upstream debug now installs independently as `.bench`; release remains `name.caiyao.fakegps`. The feature branch merges this baseline before review.
 
 ## Terminal contracts
 
@@ -103,7 +105,7 @@ interface MockProviderGateway {
 ## Invariants
 
 - **INV-1 Identity isolation:** lab applicationId, label, data directory, manifest provider authority, and signature permission names do not equal the original package's values. Verified by merged-manifest/APK inspection and simultaneous `pm list packages` output.
-- **INV-2 Original compatibility:** `assembleDebug`, `assembleRelease`, original package ID, Xposed metadata, and original provider authority remain intact. Verified by builds plus `aapt dump badging/xmltree`.
+- **INV-2 Original compatibility:** `assembleDebug`, `assembleRelease`, release package `name.caiyao.fakegps`, debug bench package `name.caiyao.fakegps.bench`, Xposed metadata, and variant-owned provider authorities remain intact. Verified by builds plus `aapt dump badging/xmltree`.
 - **INV-3 No second Xposed module:** the lab APK contains no `xposedmodule=true` metadata. Verified by `aapt dump xmltree`.
 - **INV-4 Complete sample:** every published location has provider `gps`, valid coordinates, positive finite accuracy, non-zero `time`, and non-zero `elapsedRealtimeNanos`. Verified by controller tests plus device observation.
 - **INV-5 Idempotent cleanup:** Stop and start-failure paths call provider removal safely even if no provider exists. Verified by fake-gateway call sequence tests.
