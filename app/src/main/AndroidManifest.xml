@@ -67,6 +67,17 @@
             android:name=".data.AppInfoProvider"
             android:authorities="name.caiyao.fakegps.data.AppInfoProvider"
             android:exported="false" />
+
+        <!--
+            Stable-release verification runs here, never in the configuration process. The service
+            receives only request correlation metadata; it reads the published payload itself and
+            returns public-API observations. Non-exported prevents another app from driving it.
+        -->
+        <service
+            android:name=".verify.HookVerificationService"
+            android:exported="false"
+            android:process=":hook_verify"
+            android:stopWithTask="true" />
         <!--
             exported=false (review FC-6): this provider was world-readable with no permission, so
             ANY app on the device could read the full spoof profile — including the app under test,

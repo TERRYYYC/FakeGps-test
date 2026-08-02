@@ -15,8 +15,8 @@ import org.junit.Test
  *  - PR #4 owns publication success: [ConfigPublicationContract] — true only when the write is
  *    cross-process readable AND committed. Its durable-restore transaction depends on
  *    "false == cross-process publication failed" being a fact.
- *  - PR #3 owns the propagation window: a mismatch seen within ~30s of a publish is staleness,
- *    not failure, because the hook re-reads on a timer.
+ *  - PR #3 owns the propagation window: a mismatch seen within the longest supported cadence is
+ *    staleness, not failure, because the hook may still be sleeping on the previous timer.
  *
  * Composed, they must satisfy: **a failed publication can never soften a mismatch into "pending"**.
  * Otherwise a permanently broken transport (MODE_PRIVATE fallback — commits fine, unreadable from
@@ -74,7 +74,7 @@ class PublicationPendingSeamTest {
     @Test
     fun `a successful publish stops softening once the window elapses`() {
         val ts = timestampAfterSync(worldReadable = true, committed = true, nowMs = 1_000)
-        val afterWindow = 1_000L + PublishPropagation.HOOK_REFRESH_INTERVAL_MS
+        val afterWindow = 1_000L + PublishPropagation.MAX_PROPAGATION_DELAY_MS
         assertEquals(VerificationStatus.FAILING, statusFor(ts, afterWindow))
     }
 

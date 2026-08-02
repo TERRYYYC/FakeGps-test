@@ -1,0 +1,46 @@
+package name.caiyao.fakegps.verify
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Test
+
+class RuntimeEvidenceTest {
+    private val request = ProbeRequest("request-1", "sha256:1111111111111111")
+
+    @Test
+    fun `probe lifecycle grammar carries correlation without field values`() {
+        assertEquals(
+            "event=requested requestId=request-1 fp=sha256:1111111111111111",
+            RuntimeEvidence.probeRequested(request),
+        )
+        assertEquals(
+            "event=started requestId=request-1 fp=sha256:1111111111111111",
+            RuntimeEvidence.probeStarted(request),
+        )
+        assertEquals(
+            "event=delivered requestId=request-1 fp=sha256:1111111111111111 fields=3",
+            RuntimeEvidence.probeDelivered(request, 3),
+        )
+        assertEquals(
+            "event=failed requestId=request-1 fp=sha256:1111111111111111 reason=TIMEOUT",
+            RuntimeEvidence.probeFailed(request, ProbeFailure.TIMEOUT),
+        )
+        assertEquals(
+            "event=ignored requestId=request-1 fp=sha256:1111111111111111 reason=STALE_RESULT",
+            RuntimeEvidence.probeIgnored(request),
+        )
+        assertFalse(RuntimeEvidence.probeDelivered(request, 3).contains("22222"))
+    }
+
+    @Test
+    fun `scheduler grammar records owner and real transitions only`() {
+        assertEquals(
+            "FakeGPS-Hook: event=scheduler_owned process=com.example intervalMs=30000",
+            RuntimeEvidence.schedulerOwned("com.example", 30_000L),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=interval_changed process=com.example fromMs=30000 toMs=5000",
+            RuntimeEvidence.intervalChanged("com.example", 30_000L, 5_000L),
+        )
+    }
+}

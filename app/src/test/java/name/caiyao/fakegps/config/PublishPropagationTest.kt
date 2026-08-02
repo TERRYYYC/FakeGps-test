@@ -26,8 +26,14 @@ class PublishPropagationTest {
     }
 
     @Test
-    fun `no longer pending once a full refresh interval has passed`() {
-        val after = 1_000L + PublishPropagation.HOOK_REFRESH_INTERVAL_MS
+    fun `a previous sixty second cadence stays pending beyond the thirty second default`() {
+        val afterDefault = 1_000L + PublishPropagation.HOOK_REFRESH_INTERVAL_MS
+        assertEquals(true, PublishPropagation.isPending(1_000, afterDefault))
+    }
+
+    @Test
+    fun `no longer pending once the longest supported cadence has passed`() {
+        val after = 1_000L + PublishPropagation.MAX_PROPAGATION_DELAY_MS
         assertEquals(false, PublishPropagation.isPending(1_000, after))
     }
 

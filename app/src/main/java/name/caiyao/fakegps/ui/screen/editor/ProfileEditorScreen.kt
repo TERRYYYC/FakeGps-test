@@ -13,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Save
@@ -23,6 +24,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -59,12 +62,14 @@ fun ProfileEditorScreen(
     lat: Double,
     lon: Double,
     onBack: () -> Unit,
+    onVerify: () -> Unit = {},
     vm: ProfileEditorViewModel = viewModel(),
 ) {
     val isNew = profileId == -1L || profileId == 0L
     val fieldValues by vm.fieldValues.collectAsState()
     val reference by vm.reference.collectAsState()
     val saved by vm.saved.collectAsState()
+    val saving by vm.saving.collectAsState()
     val fieldErrors by vm.fieldErrors.collectAsState()
     val notice by vm.notice.collectAsState()
 
@@ -72,8 +77,16 @@ fun ProfileEditorScreen(
         vm.load(if (isNew) -1L else profileId, lat, lon)
     }
 
+    val verifyRequested by vm.verifyRequested.collectAsState()
+
     LaunchedEffect(saved) {
         if (saved) onBack()
+    }
+
+    // Only ever set after a SUCCESSFUL publish (see postSaveAction) — a failed publish keeps the
+    // user here with the notice instead of sending them to verify a payload the hook never got.
+    LaunchedEffect(verifyRequested) {
+        if (verifyRequested) onVerify()
     }
 
     Scaffold(
@@ -88,8 +101,25 @@ fun ProfileEditorScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { vm.save() }) {
-                Icon(Icons.Default.Save, contentDescription = "保存")
+            Column(horizontalAlignment = Alignment.End) {
+                // Saves first and only then navigates, and only if the payload actually reached
+                // the hook — verifying an unpublished draft would report every changed field as
+                // wrong and blame the spoof for a publish failure.
+                ExtendedFloatingActionButton(
+                    onClick = { if (!saving) vm.saveAndVerify() },
+                    icon = { Icon(Icons.AutoMirrored.Filled.FactCheck, contentDescription = null) },
+                    text = { Text("保存并验证") },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier
+                        .padding(bottom = 12.dp)
+                        .alpha(if (saving) 0.5f else 1f),
+                )
+                FloatingActionButton(
+                    onClick = { if (!saving) vm.save() },
+                    modifier = Modifier.alpha(if (saving) 0.5f else 1f),
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = "保存")
+                }
             }
         },
     ) { innerPadding ->
@@ -235,6 +265,7 @@ private fun TextField(
     val referenceLabel = when (scope) {
         ObservationScope.REAL_BASELINE -> "本机真实值"
         ObservationScope.SELF_HOOKED -> "本机当前读到（调试构建已自我 hook，可能已是伪造值）"
+        ObservationScope.HOOK_PROBE -> "验证探针读到（已被 hook）"
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -304,6 +335,7 @@ private fun BooleanField(
     val referenceLabel = when (scope) {
         ObservationScope.REAL_BASELINE -> "本机真实值"
         ObservationScope.SELF_HOOKED -> "本机当前读到（调试构建已自我 hook，可能已是伪造值）"
+        ObservationScope.HOOK_PROBE -> "验证探针读到（已被 hook）"
     }
     val referenceText = reference?.let { if (it.equals("true", true) || it == "1") "是" else "否" }
 

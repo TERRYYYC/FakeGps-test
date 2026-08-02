@@ -7,8 +7,11 @@ import android.os.Message;
 import java.util.concurrent.atomic.AtomicReference;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.XC_MethodHook.MethodHookParam;
 import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
+import de.robv.android.xposed.XC_MethodReplacement;
+import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import name.caiyao.fakegps.config.ConfigCodec;
@@ -16,6 +19,9 @@ import name.caiyao.fakegps.config.SpoofConfig;
 import name.caiyao.fakegps.config.ConfigPrefsSync;
 import name.caiyao.fakegps.config.PublishedConfig;
 import name.caiyao.fakegps.config.TransportSchemaContract;
+import name.caiyao.fakegps.verify.RuntimeSelfHookPolicy;
+import name.caiyao.fakegps.verify.RuntimeHookSentinel;
+import name.caiyao.fakegps.verify.RuntimeEvidence;
 
 /**
  * Xposed module entry point.
@@ -54,44 +60,67 @@ public class MainHook implements IXposedHookLoadPackage {
 
     /** Current spoofing config. Hooks read this atomically via CURRENT.get(). */
     static final AtomicReference<Snapshot> CURRENT = new AtomicReference<>(Snapshot.PASSTHROUGH);
+    /** Fingerprint paired with the last structurally accepted Snapshot. */
+    private static final AtomicReference<String> CURRENT_FINGERPRINT = new AtomicReference<>();
+    /** Serializes timer and verification-triggered reloads into one coherent publish order. */
+    private static final Object SNAPSHOT_LOCK = new Object();
+
+    /** One owner per module classloader/process, even if LSPosed repeats the callback. */
+    private static final HookRuntimeOwnership RUNTIME_OWNERSHIP = new HookRuntimeOwnership();
+    private static final HookRefreshScheduler REFRESH_SCHEDULER = new HookRefreshScheduler();
 
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // Self-hooking is a DEBUG-ONLY capability, not a shipped behaviour.
+        // The configuration process is never self-hooked in release. The sole shipped exception
+        // is the private one-shot :hook_verify process, selected by the shared policy below.
         //
         // A debug build hooks its own process so it can act as a controlled probe: it reads plain
         // LocationManager (MapScreen/VerifyViewModel, no GMS fused path), which is what lets
         // scripts/test-hook.sh tell "the hook machinery is broken" apart from "the target app uses
         // an API we don't cover". A release build must never spoof its own UI — that would make the
-        // configuration screen display the fake values back to the user as if they were real.
-        if (!name.caiyao.fakegps.BuildConfig.DEBUG
-                && "name.caiyao.fakegps".equals(lpparam.packageName)) {
+        // configuration screen display the fake values back to the user as if they were real. The
+        // release probe keeps that isolation while providing a deliberately hook-enabled reader.
+        if (!RuntimeSelfHookPolicy.shouldHook(
+                name.caiyao.fakegps.BuildConfig.DEBUG,
+                lpparam.packageName,
+                lpparam.processName)) {
             return;
         }
 
         // 1. Load initial config (XSharedPreferences works here — it's a file read, no app context needed)
-        Snapshot initial = loadSnapshot();
-        CURRENT.set(initial);
+        Snapshot initial = reloadSnapshot(null);
         XposedBridge.log(TAG + ": Loaded config for " + lpparam.packageName
                 + " | location=" + initial.hasLocation()
                 + " | cellRebuild=" + initial.hasCellReconstructionDecision());
 
-        // 2. Register hooks ONCE — they read CURRENT.get() at invocation time
-        HookUtils.registerAllHooks(lpparam.classLoader);
+        // 2. Register once per target classloader. LSPosed may repeat handleLoadPackage in the
+        // same process; without this gate every getter receives duplicate hooks.
+        ClassLoader targetClassLoader = lpparam.classLoader != null
+                ? lpparam.classLoader
+                : MainHook.class.getClassLoader();
+        if (RUNTIME_OWNERSHIP.claimHooks(targetClassLoader)) {
+            installProbeSentinelIfPresent(targetClassLoader, lpparam.processName);
+            HookUtils.registerAllHooks(targetClassLoader);
+        }
 
-        // 3. Background refresh: re-read prefs periodically, do NOT re-register hooks
+        // 3. One background refresh per process. Duplicate callbacks must not multiply timers.
+        if (!RUNTIME_OWNERSHIP.claimScheduler()) {
+            debug("duplicate load-package callback; refresh scheduler already owned");
+            return;
+        }
+        XposedBridge.log(RuntimeEvidence.schedulerOwned(
+                lpparam.processName, REFRESH_SCHEDULER.currentDelayMs()));
         final Handler handler = new Handler(Looper.getMainLooper()) {
             @Override
             public void handleMessage(Message msg) {
                 if (msg.what == 1) {
-                    Snapshot refreshed = loadSnapshot();
-                    CURRENT.set(refreshed);
+                    Snapshot refreshed = reloadSnapshot(lpparam.processName);
                     debug("timer refresh -> hasLocation=" + refreshed.hasLocation());
                 }
-                sendEmptyMessageDelayed(1, 30 * 1000);
+                sendEmptyMessageDelayed(1, REFRESH_SCHEDULER.currentDelayMs());
             }
         };
-        handler.sendEmptyMessageDelayed(1, 3 * 1000);
+        handler.sendEmptyMessageDelayed(1, HookRefreshScheduler.INITIAL_DELAY_MS);
     }
 
     /**
@@ -102,6 +131,38 @@ public class MainHook implements IXposedHookLoadPackage {
      * NULL/absent field == passthrough (real device value). On read/parse failure we keep the
      * last-known-good CURRENT rather than reverting to real data mid-test.
      */
+    private Snapshot reloadSnapshot(String evidenceProcess) {
+        synchronized (SNAPSHOT_LOCK) {
+            return reloadSnapshotLocked(evidenceProcess);
+        }
+    }
+
+    /** Target-classloader bridge used by the private verification process before observation. */
+    private String reloadSnapshotForProbe(String expectedFingerprint, String processName) {
+        synchronized (SNAPSHOT_LOCK) {
+            reloadSnapshotLocked(processName);
+            String activeFingerprint = CURRENT_FINGERPRINT.get();
+            if (expectedFingerprint != null && !expectedFingerprint.equals(activeFingerprint)) {
+                XposedBridge.log(TAG + ": probe snapshot mismatch expected="
+                        + expectedFingerprint + " actual=" + activeFingerprint);
+            }
+            return activeFingerprint;
+        }
+    }
+
+    /** Commit one reload and its interval evidence under the same process-wide ordering lock. */
+    private Snapshot reloadSnapshotLocked(String evidenceProcess) {
+        long previousDelayMs = REFRESH_SCHEDULER.currentDelayMs();
+        Snapshot refreshed = loadSnapshot();
+        CURRENT.set(refreshed);
+        long nextDelayMs = REFRESH_SCHEDULER.currentDelayMs();
+        if (evidenceProcess != null && previousDelayMs != nextDelayMs) {
+            XposedBridge.log(RuntimeEvidence.intervalChanged(
+                    evidenceProcess, previousDelayMs, nextDelayMs));
+        }
+        return refreshed;
+    }
+
     private Snapshot loadSnapshot() {
         try {
             XSharedPreferences prefs = new XSharedPreferences("name.caiyao.fakegps", PREFS_NAME);
@@ -125,6 +186,12 @@ public class MainHook implements IXposedHookLoadPackage {
 
             org.json.JSONObject root = new org.json.JSONObject(jsonStr);
 
+            Integer refreshIntervalSec = null;
+            Object rawRefreshInterval = root.opt("refreshIntervalSec");
+            if (rawRefreshInterval instanceof Number) {
+                refreshIntervalSec = ((Number) rawRefreshInterval).intValue();
+            }
+
             // schemaVersion gate: refuse to interpret a payload written by an incompatible build
             // rather than silently mis-reading it. Keep last-known-good (never revert to real data
             // mid-test) instead of falling back to passthrough.
@@ -142,7 +209,8 @@ public class MainHook implements IXposedHookLoadPackage {
             String mode = root.optString("mode", "always_on");
             if ("off".equals(mode)) {
                 debug("mode=off -> passthrough");
-                return Snapshot.PASSTHROUGH;
+                return acceptLoadedSnapshot(
+                        Snapshot.PASSTHROUGH, refreshIntervalSec, fingerprint);
             }
             if ("time_based".equals(mode)) {
                 org.json.JSONObject hours = root.optJSONObject("activeHours");
@@ -154,7 +222,8 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (!inRange) {
                         debug("outside active hours (" + start + "-" + end
                                 + ") current=" + h + " -> passthrough");
-                        return Snapshot.PASSTHROUGH;
+                        return acceptLoadedSnapshot(
+                                Snapshot.PASSTHROUGH, refreshIntervalSec, fingerprint);
                     }
                 }
             }
@@ -199,12 +268,52 @@ public class MainHook implements IXposedHookLoadPackage {
                     + " unavailable=" + unavailable.asList().size()
                     + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude
                     + " rebuildCells=" + s.hasCellReconstructionDecision());
-            return s;
+            return acceptLoadedSnapshot(s, refreshIntervalSec, fingerprint);
         } catch (Throwable t) {
             // Read/parse failure: keep last-known-good (do NOT revert to real device data mid-test).
             debug("loadSnapshot prefs error: " + t);
             return CURRENT.get();
         }
+    }
+
+    /** Commit Snapshot and delay as one accepted last-known-good transport decision. */
+    private Snapshot acceptLoadedSnapshot(
+            Snapshot snapshot,
+            Integer refreshIntervalSec,
+            String fingerprint) {
+        REFRESH_SCHEDULER.acceptPayloadInterval(refreshIntervalSec, true);
+        CURRENT_FINGERPRINT.set(fingerprint);
+        return snapshot;
+    }
+
+    /**
+     * Replace the app-classloader sentinel only when this target actually contains it.
+     *
+     * A module-classloader static cannot prove injection because the app and Xposed may load two
+     * copies of the same class. Hooking the Method object from the target classloader makes the
+     * probe's own call return true only when LSPosed really installed this module in that process.
+     */
+    private void installProbeSentinelIfPresent(
+            ClassLoader targetClassLoader,
+            String processName) {
+        Class<?> sentinel = XposedHelpers.findClassIfExists(
+                RuntimeHookSentinel.class.getName(),
+                targetClassLoader);
+        if (sentinel == null) return;
+        XposedHelpers.findAndHookMethod(
+                sentinel,
+                "isHookActive",
+                XC_MethodReplacement.returnConstant(true));
+        XposedHelpers.findAndHookMethod(
+                sentinel,
+                "reloadHookSnapshot",
+                String.class,
+                new XC_MethodReplacement() {
+                    @Override
+                    protected Object replaceHookedMethod(MethodHookParam param) {
+                        return reloadSnapshotForProbe((String) param.args[0], processName);
+                    }
+                });
     }
 
 }

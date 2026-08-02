@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -263,6 +266,47 @@ class CellularAcceptanceMatrixTest(unittest.TestCase):
         self.assertIn('name="json"', snapshot)
         self.assertNotIn("sha256sum", snapshot)
         self.assertNotIn("published_at", snapshot)
+
+    def test_runtime_verify_forwards_sanitized_payload_refresh_interval(self):
+        script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")
+        helper_match = re.search(
+            r"^prefs_payload_refresh_interval_ms\(\) \{\n(.*?^'\n)^\}\n",
+            script,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(helper_match)
+        helper = helper_match.group(1)
+        runtime_verify = self._shell_function(script, "run_runtime_verify")
+        command = (
+            "prefs_payload_refresh_interval_ms() {\n"
+            + helper
+            + "}\n"
+            + 'prefs_payload_refresh_interval_ms "$PREFS_XML"\n'
+        )
+        cases = (
+            ('{"schemaVersion":3}', "30000"),
+            ('{"schemaVersion":3,"refreshIntervalSec":5}', "5000"),
+            ('{"schemaVersion":3,"refreshIntervalSec":90}', "60000"),
+            ('{"schemaVersion":3,"refreshIntervalSec":"bad"}', "30000"),
+        )
+        for payload, expected in cases:
+            with self.subTest(payload=payload):
+                xml = '<string name="json">{}</string>'.format(
+                    payload.replace('"', "&quot;"),
+                )
+                completed = subprocess.run(
+                    ["sh"],
+                    input=command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "PY": sys.executable, "PREFS_XML": xml},
+                )
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                self.assertEqual(expected, completed.stdout.strip())
+
+        self.assertIn('interval_ms=$(prefs_payload_refresh_interval_ms "$prefs")', runtime_verify)
+        self.assertIn('--expected-interval-ms "$interval_ms"', runtime_verify)
 
     def test_matrix_preflight_waits_for_room_migration_before_protection_snapshot(self):
         script = Path(__file__).with_name("test-hook.sh").read_text(encoding="utf-8")

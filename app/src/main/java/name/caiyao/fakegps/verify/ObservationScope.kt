@@ -19,6 +19,12 @@ enum class ObservationScope {
     SELF_HOOKED,
 
     /**
+     * Stable release: observations came from the private `:hook_verify` process after its sentinel
+     * proved that Xposed installed the module in that target classloader.
+     */
+    HOOK_PROBE,
+
+    /**
      * Release build: MainHook deliberately skips its own package so the configuration UI can never
      * display fake values back as though they were real. Readings prove nothing about the hook, but
      * they ARE the genuine device baseline — which is what the user needs in order to pick a value

@@ -2,8 +2,10 @@ package name.caiyao.fakegps.ui.screen.settings
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import name.caiyao.fakegps.config.ConfigPrefsSync
+import name.caiyao.fakegps.config.PublishPropagation
 import name.caiyao.fakegps.data.SpoofSettings
 
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
@@ -13,6 +15,12 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val spoofMode: StateFlow<String> = settings.spoofMode
     val activeHourStart: StateFlow<Int> = settings.activeHourStart
     val activeHourEnd: StateFlow<Int> = settings.activeHourEnd
+
+    /** Hook refresh cadence, in seconds. Always a value [PublishPropagation] sanctions. */
+    val refreshIntervalSec: StateFlow<Int> = settings.refreshIntervalSec
+
+    /** The choices the picker may offer — from the policy, never from the screen. */
+    val refreshIntervalChoicesSec: List<Int> = PublishPropagation.REFRESH_INTERVAL_CHOICES_SEC
 
     /**
      * Every setting mutation must re-publish the transport payload (review FC-1).
@@ -35,5 +43,44 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         publish()
     }
 
-    private fun publish() = ConfigPrefsSync.sync(getApplication())
+    /**
+     * Non-null when the last settings change was persisted but NOT delivered to the hook.
+     *
+     * The preference is deliberately kept (the user's intent is not discarded), but the screen
+     * must not present it as in effect: the hook is still running the previous payload, so a
+     * silently-accepted change would read exactly like the "I changed it and nothing happened"
+     * failure this feature exists to eliminate.
+     */
+    private val _publishFailure = MutableStateFlow<String?>(null)
+    val publishFailure: StateFlow<String?> = _publishFailure
+
+    fun dismissPublishFailure() {
+        _publishFailure.value = null
+    }
+
+    /**
+     * Changing the cadence must re-publish like any other setting: the interval is part of the
+     * payload the hook reads, so persisting it without publishing would leave the hook running the
+     * OLD cadence — the setting would appear to apply while changing nothing.
+     */
+    fun setRefreshIntervalSec(seconds: Int) {
+        // Goes through the same seam the JVM test pins, so the tested sequence IS the shipped one.
+        val result = RefreshIntervalUpdate.apply(
+            requestedSec = seconds,
+            persist = settings::setRefreshIntervalSec,
+            publish = { ConfigPrefsSync.sync(getApplication()) },
+        )
+        _publishFailure.value =
+            if (result.published) null
+            else "刷新间隔已保存为 ${result.storedSec} 秒，但未发布给 Hook —— " +
+                "目标 App 仍在使用上一份配置"
+    }
+
+    /** Publishes and records the outcome; a `false` from [ConfigPrefsSync.sync] must never be dropped. */
+    private fun publish() {
+        val published = ConfigPrefsSync.sync(getApplication())
+        _publishFailure.value =
+            if (published) null
+            else "设置已保存，但未发布给 Hook —— 目标 App 仍在使用上一份配置"
+    }
 }

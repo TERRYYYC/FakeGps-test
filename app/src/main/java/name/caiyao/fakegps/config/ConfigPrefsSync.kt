@@ -7,6 +7,7 @@ import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import name.caiyao.fakegps.data.db.AppDatabase
+import name.caiyao.fakegps.data.SpoofSettings
 
 /**
  * WRITE side of the XSharedPreferences config transport.
@@ -148,6 +149,10 @@ object ConfigPrefsSync {
         val cr = context.contentResolver
         val root = JSONObject()
         root.put("schemaVersion", SCHEMA_VERSION)
+        root.put(
+            "refreshIntervalSec",
+            SpoofSettings.getInstance(context).readRefreshIntervalSec(),
+        )
 
         // settings (mode / active hours) — small, fixed shape
         var mode = "always_on"

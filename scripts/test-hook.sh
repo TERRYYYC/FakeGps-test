@@ -7,6 +7,8 @@
 #                       debug-only exact and behavioral schema-v3 payloads,
 #                       verifies every supported cellular field, and restores the
 #                       database-backed payload.
+#   --runtime-verify    Read-only validation of release probe/scheduler evidence already present
+#                       in logcat. Never installs, clears logs, or changes the profile.
 set -u
 
 PKG="name.caiyao.fakegps"
@@ -18,12 +20,13 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 APK="$REPO_ROOT/app/build/outputs/apk/debug/app-debug.apk"
 MATRIX_TOOL="$SCRIPT_DIR/cellular_acceptance_matrix.py"
 VERDICT_TOOL="$SCRIPT_DIR/hook_verdict.py"
+RUNTIME_VERIFY_TOOL="$SCRIPT_DIR/test_runtime_verify_flow.py"
 
 MODE=${1:---current-profile}
 case "$MODE" in
-    --current-profile|--cellular-matrix) ;;
+    --current-profile|--cellular-matrix|--runtime-verify) ;;
     *)
-        echo "usage: $0 [--current-profile|--cellular-matrix]" >&2
+        echo "usage: $0 [--current-profile|--cellular-matrix|--runtime-verify]" >&2
         exit 2
         ;;
 esac
@@ -75,6 +78,30 @@ if len(values) != 1:
     sys.exit(1)
 payload = next(iter(values)).encode()
 print("sha256:" + hashlib.sha256(payload).hexdigest()[:16])
+'
+}
+
+prefs_payload_refresh_interval_ms() {
+    PREFS_XML=$1 "$PY" -c '
+import html, json, os, re, sys
+values = {
+    html.unescape(match.group(1))
+    for line in os.environ["PREFS_XML"].splitlines()
+    for match in [re.search(r"<string name=\"json\">(.*)</string>", line)]
+    if match
+}
+if len(values) != 1:
+    sys.exit(1)
+payload = json.loads(next(iter(values)))
+raw = payload.get("refreshIntervalSec")
+if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+    try:
+        seconds = int(raw)
+    except (OverflowError, ValueError):
+        seconds = 30
+else:
+    seconds = 30
+print(max(5, min(60, seconds)) * 1000)
 '
 }
 
@@ -519,12 +546,43 @@ run_cellular_matrix() {
     run_scenario unavailable || return $?
 }
 
+run_runtime_verify() {
+    count=$(device_count)
+    [ "$count" -eq 1 ] || {
+        echo "HARNESS_ERROR expected exactly one adb device, found $count" >&2
+        return 2
+    }
+    [ -f "$RUNTIME_VERIFY_TOOL" ] || {
+        echo "HARNESS_ERROR runtime verification tool missing" >&2
+        return 2
+    }
+    prefs=$(snapshot_prefs)
+    [ -n "$prefs" ] || {
+        echo "HARNESS_ERROR schema-v3 safe-zone prefs not found" >&2
+        return 2
+    }
+    fingerprint=$(prefs_payload_fingerprint "$prefs") || {
+        echo "HARNESS_ERROR could not fingerprint current transport payload" >&2
+        return 2
+    }
+    interval_ms=$(prefs_payload_refresh_interval_ms "$prefs") || {
+        echo "HARNESS_ERROR could not read current transport refresh interval" >&2
+        return 2
+    }
+    "$PY" "$RUNTIME_VERIFY_TOOL" \
+        --from-adb \
+        --require-probe \
+        --require-scheduler \
+        --expected-interval-ms "$interval_ms" \
+        --expected-fingerprint "$fingerprint"
+}
+
 echo "════════════════════════════════════════════════════════════════"
 echo " FakeGps hook verification: $MODE"
 echo "════════════════════════════════════════════════════════════════"
 
-if [ "$MODE" = "--current-profile" ]; then
-    run_current_profile
-else
-    run_cellular_matrix
-fi
+case "$MODE" in
+    --current-profile) run_current_profile ;;
+    --cellular-matrix) run_cellular_matrix ;;
+    --runtime-verify) run_runtime_verify ;;
+esac
