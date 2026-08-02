@@ -11,6 +11,7 @@ import android.os.Process
 import android.os.ResultReceiver
 import android.util.Log
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
 import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.config.PublishedConfig
 import name.caiyao.fakegps.config.TransportSchemaContract
@@ -18,25 +19,39 @@ import name.caiyao.fakegps.config.TransportSchemaContract
 /** Non-exported one-shot service running in `:hook_verify`. */
 class HookVerificationService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val executions = ProbeExecutionRegistry()
+    private var latestStartId = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        latestStartId = maxOf(latestStartId, startId)
+        if (intent?.action == ACTION_CANCEL) {
+            intent.getStringExtra(EXTRA_REQUEST_ID)?.let(executions::cancel)
+            stopIfIdle()
+            return START_NOT_STICKY
+        }
         processTermination.cancelPending()
         val receiver = intent?.resultReceiver(EXTRA_RECEIVER)
         val requestId = intent?.getStringExtra(EXTRA_REQUEST_ID)
         val expectedFingerprint = intent?.getStringExtra(EXTRA_FINGERPRINT)
         if (receiver == null || requestId.isNullOrBlank() || expectedFingerprint.isNullOrBlank()) {
-            stopSelf(startId)
+            // An invalid start owns no execution. It may not stop the component while a valid,
+            // older start is still registered on this shared Service instance.
+            stopIfIdle()
             return START_NOT_STICKY
         }
         val request = ProbeRequest(requestId, expectedFingerprint)
         Log.i(RuntimeEvidence.PROBE_TAG, RuntimeEvidence.probeStarted(request))
 
-        executor.execute {
-            runCatching {
+        lateinit var task: FutureTask<Unit>
+        task = object : FutureTask<Unit>(Runnable {
+            val outcome = runCatching {
                 runProbe(request.requestId, request.fingerprint)
-            }.fold(
+            }
+            if (!executions.isActive(request.requestId, task)) return@Runnable
+            outcome.fold(
                 onSuccess = { observation ->
                     receiver.send(
                         RESULT_OK,
@@ -54,15 +69,35 @@ class HookVerificationService : Service() {
                     )
                 },
             )
-            stopSelf(startId)
+        }, Unit) {
+            override fun done() {
+                mainHandler.post {
+                    executions.complete(request.requestId, this)
+                    stopIfIdle()
+                }
+            }
         }
+        if (!executions.register(request.requestId, task)) {
+            receiver.send(
+                RESULT_FAILED,
+                Bundle().apply { putString(EXTRA_FAILURE, ProbeFailure.START_FAILED.name) },
+            )
+            stopIfIdle()
+            return START_NOT_STICKY
+        }
+        executor.execute(task)
         return START_NOT_STICKY
     }
 
+    private fun stopIfIdle() {
+        if (executions.isIdle()) stopSelf(latestStartId)
+    }
+
     override fun onDestroy() {
+        executions.cancelAll()
         executor.shutdownNow()
-        // A main-process timeout stops the service before its worker reports. The probe process is
-        // otherwise still alive with a hook scheduler, so every exit path must converge here.
+        // Once every request has completed or been cancelled, retain a short warm retry window;
+        // the probe process is otherwise still alive with a hook scheduler.
         processTermination.schedule(PROCESS_TERMINATION_DELAY_MS)
         super.onDestroy()
     }
@@ -109,6 +144,7 @@ class HookVerificationService : Service() {
         const val EXTRA_FAILURE = "probe.failure"
         const val RESULT_OK = 1
         const val RESULT_FAILED = 2
+        private const val ACTION_CANCEL = "name.caiyao.fakegps.verify.CANCEL_PROBE"
         private const val PROCESS_TERMINATION_DELAY_MS = 500L
         private val processTermination by lazy {
             val handler = Handler(Looper.getMainLooper())
@@ -123,6 +159,11 @@ class HookVerificationService : Service() {
             Intent(context, HookVerificationService::class.java)
                 .putExtra(EXTRA_REQUEST_ID, request.requestId)
                 .putExtra(EXTRA_FINGERPRINT, request.fingerprint)
+
+        fun cancelIntent(context: Context, request: ProbeRequest): Intent =
+            Intent(context, HookVerificationService::class.java)
+                .setAction(ACTION_CANCEL)
+                .putExtra(EXTRA_REQUEST_ID, request.requestId)
     }
 }
 

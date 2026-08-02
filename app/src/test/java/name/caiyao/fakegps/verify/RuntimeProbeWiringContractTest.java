@@ -30,6 +30,8 @@ public class RuntimeProbeWiringContractTest {
         assertTrue(client.contains("HookVerificationService"));
         assertTrue(client.contains("probe.receiver"));
         assertTrue(client.contains("startService"));
+        assertTrue(client.contains("cancelIntent"));
+        assertFalse(client.contains("stopService"));
         assertTrue(client.contains("probeRequested"));
         assertTrue(client.contains("ProbeResultCorrelation"));
     }
@@ -44,6 +46,7 @@ public class RuntimeProbeWiringContractTest {
         assertTrue(service.contains("ProbeObservationCodec"));
         assertTrue(service.contains("killProcess"));
         assertTrue(service.contains("DeferredProcessTermination"));
+        assertTrue(service.contains("ProbeExecutionRegistry"));
         assertTrue(service.contains("cancelPending"));
         assertTrue(service.contains("schedule"));
         assertFalse(service.contains("probeDelivered"));
@@ -54,13 +57,16 @@ public class RuntimeProbeWiringContractTest {
         String viewModel = classBytecode(
                 "name.caiyao.fakegps.ui.screen.verify.VerifyViewModel")
                 + classBytecode(
-                        "name.caiyao.fakegps.ui.screen.verify.VerifyViewModel$refresh$1");
+                        "name.caiyao.fakegps.ui.screen.verify.VerifyViewModel$refresh$1")
+                + classBytecode(
+                        "name.caiyao.fakegps.ui.screen.verify.VerifyViewModel$refresh$1$1");
         assertTrue(viewModel.contains("HookVerificationClient"));
         assertTrue(viewModel.contains("VerificationRequestCoordinator"));
         assertTrue(viewModel.contains("ProbeVerificationDecision"));
-        assertTrue(viewModel.contains("VerificationRefreshGate"));
+        assertTrue(viewModel.contains("SingleFlightGate"));
         assertTrue(viewModel.contains("tryStart"));
         assertTrue(viewModel.contains("finish"));
+        assertTrue(viewModel.contains("getImmediate"));
         assertTrue(viewModel.contains("HOOK_PROBE"));
         assertTrue(viewModel.contains("probeDelivered"));
         assertTrue(viewModel.contains("probeFailed"));

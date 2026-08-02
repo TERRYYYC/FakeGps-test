@@ -12,6 +12,7 @@ import name.caiyao.fakegps.data.db.AppDatabase
 import name.caiyao.fakegps.data.db.ProfileEntity
 import name.caiyao.fakegps.data.repository.ProfileRepository
 import name.caiyao.fakegps.hook.BaselineExtractionGuard
+import name.caiyao.fakegps.ui.SingleFlightGate
 import name.caiyao.fakegps.verify.DeviceObserver
 import name.caiyao.fakegps.verify.ObservationScope
 
@@ -24,6 +25,11 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _saved = MutableStateFlow(false)
     val saved: StateFlow<Boolean> = _saved
+
+    // Per-ViewModel ownership; a cleared scope and its claim cannot leak into another editor.
+    private val saveGate = SingleFlightGate()
+    private val _saving = MutableStateFlow(false)
+    val saving: StateFlow<Boolean> = _saving
 
     private val _fieldErrors = MutableStateFlow<Map<String, String>>(emptyMap())
     val fieldErrors: StateFlow<Map<String, String>> = _fieldErrors
@@ -97,27 +103,36 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
     fun saveAndVerify() = save(thenVerify = true)
 
     fun save(thenVerify: Boolean = false) {
+        if (!saveGate.tryStart()) return
+        _saving.value = true
         viewModelScope.launch {
-            val values = _fieldValues.value
-            val errors = ProfileFieldDraft.validationErrors(values)
-            _fieldErrors.value = errors
-            if (errors.isNotEmpty()) {
-                _notice.value = "有 ${errors.size} 个字段格式无效，尚未保存"
-                return@launch
-            }
-            runCatching {
-                val entity = mapToEntity(values, editingId)
-                val result = repo.save(entity)
-                editingId = result.id
-                when (postSaveAction(result.published, thenVerify)) {
-                    PostSaveAction.VERIFY -> _verifyRequested.value = true
-                    PostSaveAction.BACK -> _saved.value = true
-                    PostSaveAction.STAY ->
-                        _notice.value =
-                            "档案已写入数据库，但未发布给 Hook；当前目标 App 仍使用上一份配置"
+            try {
+                val values = _fieldValues.value
+                val errors = ProfileFieldDraft.validationErrors(values)
+                _fieldErrors.value = errors
+                if (errors.isNotEmpty()) {
+                    _notice.value = "有 ${errors.size} 个字段格式无效，尚未保存"
+                    return@launch
                 }
-            }.onFailure { failure ->
-                _notice.value = "保存失败：${failure.message ?: failure.javaClass.simpleName}"
+                runCatching {
+                    val entity = mapToEntity(values, editingId)
+                    val result = repo.save(entity)
+                    editingId = result.id
+                    when (postSaveAction(result.published, thenVerify)) {
+                        PostSaveAction.VERIFY -> _verifyRequested.value = true
+                        PostSaveAction.BACK -> _saved.value = true
+                        PostSaveAction.STAY ->
+                            _notice.value =
+                                "档案已写入数据库，但未发布给 Hook；当前目标 App 仍使用上一份配置"
+                    }
+                }.onFailure { failure ->
+                    _notice.value = "保存失败：${failure.message ?: failure.javaClass.simpleName}"
+                }
+            } finally {
+                // This gate belongs to this ViewModel. The default viewModelScope dispatcher is
+                // main, so saving=false and release are one non-suspending UI transition.
+                _saving.value = false
+                saveGate.finish()
             }
         }
     }

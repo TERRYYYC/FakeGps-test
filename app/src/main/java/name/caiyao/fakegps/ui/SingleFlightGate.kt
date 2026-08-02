@@ -1,9 +1,9 @@
-package name.caiyao.fakegps.ui.screen.verify
+package name.caiyao.fakegps.ui
 
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Owns the single verification attempt allowed to update one VerifyViewModel. */
-internal class VerificationRefreshGate {
+/** Allows one user-triggered asynchronous mutation to own its state at a time. */
+internal class SingleFlightGate {
     private val active = AtomicBoolean(false)
 
     fun tryStart(): Boolean = active.compareAndSet(false, true)

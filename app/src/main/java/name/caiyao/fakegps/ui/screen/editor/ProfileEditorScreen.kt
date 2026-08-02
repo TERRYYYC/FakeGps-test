@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -68,6 +69,7 @@ fun ProfileEditorScreen(
     val fieldValues by vm.fieldValues.collectAsState()
     val reference by vm.reference.collectAsState()
     val saved by vm.saved.collectAsState()
+    val saving by vm.saving.collectAsState()
     val fieldErrors by vm.fieldErrors.collectAsState()
     val notice by vm.notice.collectAsState()
 
@@ -104,13 +106,18 @@ fun ProfileEditorScreen(
                 // the hook — verifying an unpublished draft would report every changed field as
                 // wrong and blame the spoof for a publish failure.
                 ExtendedFloatingActionButton(
-                    onClick = { vm.saveAndVerify() },
+                    onClick = { if (!saving) vm.saveAndVerify() },
                     icon = { Icon(Icons.AutoMirrored.Filled.FactCheck, contentDescription = null) },
                     text = { Text("保存并验证") },
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    modifier = Modifier.padding(bottom = 12.dp),
+                    modifier = Modifier
+                        .padding(bottom = 12.dp)
+                        .alpha(if (saving) 0.5f else 1f),
                 )
-                FloatingActionButton(onClick = { vm.save() }) {
+                FloatingActionButton(
+                    onClick = { if (!saving) vm.save() },
+                    modifier = Modifier.alpha(if (saving) 0.5f else 1f),
+                ) {
                     Icon(Icons.Default.Save, contentDescription = "保存")
                 }
             }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.config.PayloadRead
 import name.caiyao.fakegps.config.PublishPropagation
@@ -29,6 +30,7 @@ import name.caiyao.fakegps.verify.VerificationRequestState
 import name.caiyao.fakegps.verify.VerificationEngine
 import name.caiyao.fakegps.verify.VerificationReport
 import name.caiyao.fakegps.hook.BaselineExtractionGuard
+import name.caiyao.fakegps.ui.SingleFlightGate
 import java.util.Calendar
 import java.util.UUID
 
@@ -64,7 +66,9 @@ data class VerifyUiState(
 class VerifyViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(VerifyUiState())
-    private val refreshGate = VerificationRefreshGate()
+    // Per-ViewModel ownership: if the scope is already cancelled, this instance is already
+    // unreachable from the UI, so an unobserved claim cannot block a later screen instance.
+    private val refreshGate = SingleFlightGate()
     val state: StateFlow<VerifyUiState> = _state
 
     fun refresh() {
@@ -89,15 +93,19 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
                 // "伪装生效" on screen after the refresh that was meant to re-check it failed would
                 // present an unverified claim as a current one.
                 _state.value = _state.value.copy(
-                    loading = false,
                     scope = ObservationScope.REAL_BASELINE,
                     report = null,
                     probeStatus = ProbeUiStatus.NotRequested,
                     notes = listOf("读取设备信息时出错，结果无法刷新：${t.javaClass.simpleName}: ${t.message}"),
                 )
             } finally {
-                refreshGate.finish()
-                if (_state.value.loading) _state.value = _state.value.copy(loading = false)
+                // Both the visible loading bit and the ownership claim are released on the main
+                // dispatcher without a suspension point between them. A new click therefore
+                // cannot be accepted and then have its loading state cleared by this old attempt.
+                withContext(Dispatchers.Main.immediate) {
+                    if (_state.value.loading) _state.value = _state.value.copy(loading = false)
+                    refreshGate.finish()
+                }
             }
         }
     }
@@ -182,7 +190,9 @@ class VerifyViewModel(app: Application) : AndroidViewModel(app) {
             } else null
 
             _state.value = VerifyUiState(
-                loading = false,
+                // The finally block releases this together with the single-flight claim. Keeping
+                // it true here prevents the UI becoming clickable before ownership is released.
+                loading = true,
                 scope = scope,
                 payload = payloadStatus,
                 mode = parsed?.mode ?: "always_on",

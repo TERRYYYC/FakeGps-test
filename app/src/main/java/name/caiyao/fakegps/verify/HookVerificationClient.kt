@@ -57,13 +57,16 @@ object HookVerificationClient {
                 }
                 continuation.invokeOnCancellation {
                     completed.set(true)
-                    app.stopService(intent)
+                    cancelRequest(app, request)
                 }
             }
         }
         if (result != null) return result
-        app.stopService(intent)
         return ProbeClientResult.Failed(ProbeFailure.TIMEOUT)
+    }
+
+    private fun cancelRequest(context: Context, request: ProbeRequest) {
+        runCatching { context.startService(HookVerificationService.cancelIntent(context, request)) }
     }
 
     private fun decodeResult(resultCode: Int, data: Bundle?): ProbeClientResult {

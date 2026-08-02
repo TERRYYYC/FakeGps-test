@@ -1,13 +1,13 @@
-package name.caiyao.fakegps.ui.screen.verify
+package name.caiyao.fakegps.ui
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class VerificationRefreshGateTest {
+class SingleFlightGateTest {
     @Test
-    fun `only one refresh attempt owns the view model at a time`() {
-        val gate = VerificationRefreshGate()
+    fun `only one asynchronous action owns the state at a time`() {
+        val gate = SingleFlightGate()
 
         assertTrue(gate.tryStart())
         assertFalse(gate.tryStart())

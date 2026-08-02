@@ -56,6 +56,7 @@ Therefore the reported refresh incident is closed as bounded propagation plus ta
 1. **Refresh preference** — owner: `SpoofSettings`; persisted once, projected into the transport payload, never independently persisted by the hook.
 2. **Per-process refresh scheduler** — owner: one `MainHook` scheduler guard per module classloader/process; the current snapshot supplies the next delay.
 3. **Verification request** — owner: `VerifyViewModel` for the request lifecycle and `HookVerificationService` for one probe execution; every result carries a request ID and published fingerprint.
+4. **Profile save attempt** — owner: `ProfileEditorViewModel`; “保存” and “保存并验证” share one single-flight claim so only one Room/publication/navigation outcome can win.
 
 ### State × event transitions
 
@@ -74,6 +75,11 @@ Therefore the reported refresh incident is closed as bounded propagation plus ta
 | Probe request | starting/observing | timeout/process death | visible `PROBE_UNAVAILABLE`; main UI stays alive and retryable |
 | Probe request | observing | stale result for older requestId/fingerprint | ignore result; keep current request active |
 | Probe request | delivered/failed | retry | new requestId; no stale report retained |
+| Probe request A + B | A is cancelled/times out after B starts | client cancels A | send request-scoped cancellation for A; B remains registered and its Service/executor stays alive |
+| Probe service | one or more requests registered | one request completes/cancels | remove only that request; stop the Service only after the registry becomes empty |
+| Profile save | idle | either save action is tapped | atomically claim one attempt, disable/no-op both save actions, then persist and publish once |
+| Profile save | saving | either save action is tapped | ignore the duplicate action; do not insert, publish or navigate again |
+| Profile save | saving | success/failure/cancellation | publish one terminal UI outcome, then release the single-flight claim |
 
 ### Invariants
 
@@ -86,6 +92,8 @@ Therefore the reported refresh incident is closed as bounded propagation plus ta
 - **INV-7:** Production probe is non-exported, never writes payload/Room, and release APK still excludes debug acceptance/recovery symbols. Manifest and APK scan.
 - **INV-8:** “保存并验证” cannot navigate on validation, database or publication failure. ViewModel/navigation test.
 - **INV-9:** `UNOBSERVABLE` means the probe invoked the relevant observation path but the platform exposed no value; probe unavailable/not scoped is a separate state. Verdict test.
+- **INV-10:** Probe cancellation is keyed by request ID; a cancelled/expired screen never calls component-wide `stopService` while another request may own the same `:hook_verify` Service. Registry and compiled wiring tests.
+- **INV-11:** The editor permits at most one active save across both save actions, so a new profile cannot be inserted twice and only one navigation outcome is emitted. Single-flight and compiled wiring tests.
 
 ### Adversarial scenarios
 
@@ -94,6 +102,8 @@ Therefore the reported refresh incident is closed as bounded propagation plus ta
 - Duplicate load-package callbacks in Cellular-Pro and NetworkStack do not multiply timers or getter hooks.
 - Probe package absent from Vector scope returns a scoped diagnostic, never a false `MISMATCH` roll-up.
 - Probe dies after request but before delivery; retry succeeds without stale-green UI.
+- An old Verify screen is cleared after a newer screen has started; cancelling the old request leaves the newer probe alive and deliverable.
+- Double-tap “保存” / “保存并验证” before Room returns; exactly one row is written and exactly one navigation outcome wins.
 - User saves a profile whose configured value equals the real baseline; result stays `AMBIGUOUS`.
 - A field has no public read surface; it remains `NOT_VERIFIABLE`, not probe failure.
 
