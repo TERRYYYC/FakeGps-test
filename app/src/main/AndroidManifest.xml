@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:icon="@drawable/ic_lan"
@@ -77,6 +80,12 @@
             android:name=".verify.HookVerificationService"
             android:exported="false"
             android:process=":hook_verify"
+            android:stopWithTask="true" />
+
+        <service
+            android:name=".mockprovider.MockProviderService"
+            android:exported="false"
+            android:foregroundServiceType="location"
             android:stopWithTask="true" />
         <!--
             exported=false (review FC-6): this provider was world-readable with no permission, so

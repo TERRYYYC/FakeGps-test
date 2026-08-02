@@ -7,6 +7,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import name.caiyao.fakegps.config.PublishPropagation
 
+enum class LocationDeliveryMode(val wireValue: String) {
+    HOOK("hook"),
+    SYSTEM_MOCK("system_mock");
+
+    companion object {
+        fun fromWireValue(value: String?): LocationDeliveryMode =
+            entries.firstOrNull { it.wireValue == value } ?: HOOK
+    }
+}
+
 /**
  * SharedPreferences wrapper for spoof configuration.
  * Read by UI (Compose) and exposed to hooks via AppInfoProvider.
@@ -19,6 +29,8 @@ class SpoofSettings private constructor(private val prefs: SharedPreferences) {
         const val KEY_SPOOF_MODE = "spoof_mode"
         const val KEY_ACTIVE_HOUR_START = "active_hour_start"
         const val KEY_ACTIVE_HOUR_END = "active_hour_end"
+        const val KEY_LOCATION_DELIVERY_MODE = "location_delivery_mode"
+        const val KEY_MOCK_PROVIDER_CLEANUP_REQUIRED = "mock_provider_cleanup_required"
 
         /**
          * How often the hook re-reads the published payload, in seconds.
@@ -58,6 +70,9 @@ class SpoofSettings private constructor(private val prefs: SharedPreferences) {
     private val _refreshIntervalSec = MutableStateFlow(readRefreshIntervalSec())
     val refreshIntervalSec: StateFlow<Int> = _refreshIntervalSec
 
+    private val _locationDeliveryMode = MutableStateFlow(readLocationDeliveryMode())
+    val locationDeliveryMode: StateFlow<LocationDeliveryMode> = _locationDeliveryMode
+
     fun setSpoofMode(mode: String) {
         prefs.edit().putString(KEY_SPOOF_MODE, mode).apply()
         _spoofMode.value = mode
@@ -84,6 +99,22 @@ class SpoofSettings private constructor(private val prefs: SharedPreferences) {
         prefs.edit { putInt(KEY_REFRESH_INTERVAL_SEC, sanitized) }
         _refreshIntervalSec.value = sanitized
     }
+
+    fun setLocationDeliveryMode(mode: LocationDeliveryMode): Boolean {
+        val committed = prefs.edit().putString(KEY_LOCATION_DELIVERY_MODE, mode.wireValue).commit()
+        if (committed) _locationDeliveryMode.value = mode
+        return committed
+    }
+
+    fun readLocationDeliveryMode(): LocationDeliveryMode = LocationDeliveryMode.fromWireValue(
+        prefs.getString(KEY_LOCATION_DELIVERY_MODE, LocationDeliveryMode.HOOK.wireValue),
+    )
+
+    fun setMockProviderCleanupRequired(required: Boolean): Boolean =
+        prefs.edit().putBoolean(KEY_MOCK_PROVIDER_CLEANUP_REQUIRED, required).commit()
+
+    fun isMockProviderCleanupRequired(): Boolean =
+        prefs.getBoolean(KEY_MOCK_PROVIDER_CLEANUP_REQUIRED, false)
 
     /**
      * Current cadence, always a value the hook can honour.

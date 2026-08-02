@@ -12,6 +12,6 @@ public class AppInfoProviderAuthorityTest {
     public void providerAuthorityTracksTheCurrentApplicationId() {
         assertEquals(
                 BuildConfig.APPLICATION_ID + ".data.AppInfoProvider",
-                AppInfoProvider.AUTHRITY);
+                AppInfoProvider.AUTHORITY);
     }
 }

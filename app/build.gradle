@@ -55,13 +55,6 @@ android {
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
-        mockProvider {
-            initWith debug
-            applicationIdSuffix ".mockprovider"
-            versionNameSuffix "-mock-provider"
-            signingConfig signingConfigs.debug
-            matchingFallbacks = ['debug']
-        }
     }
 
     compileOptions {
@@ -82,16 +75,6 @@ android {
 
     sourceSets {
         androidTest.assets.srcDirs += files("$projectDir/schemas")
-        // Common JVM tests exercise debug-only acceptance classes. Compile those classes into the
-        // lab, but keep the lab non-hooking by removing every Xposed manifest marker and launching
-        // only MockProviderActivity. No debug acceptance component is exported in this build type.
-        mockProvider.java.srcDirs += files("$projectDir/src/debug/java")
-    }
-}
-
-androidComponents {
-    beforeVariants(selector().withBuildType("mockProvider")) { variantBuilder ->
-        variantBuilder.enableUnitTest = true
     }
 }
 

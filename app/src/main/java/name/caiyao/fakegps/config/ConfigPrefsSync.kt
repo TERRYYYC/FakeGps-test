@@ -46,7 +46,9 @@ object ConfigPrefsSync {
      * The hook rejects a payload it cannot interpret rather than silently mis-reading it, and keeps
      * its last-known-good config instead of reverting to real device data mid-test.
      */
-    const val SCHEMA_VERSION = 3
+    const val SCHEMA_VERSION = 4
+    /** Losslessly readable predecessor: same flat fields/unavailable shape, without delivery mode. */
+    const val PREVIOUS_SCHEMA_VERSION = 3
     /** Losslessly readable predecessor: it has the same flat `fields` map and no unavailable set. */
     const val LEGACY_SCHEMA_VERSION = 2
 
@@ -188,6 +190,10 @@ object ConfigPrefsSync {
         root.put(
             "refreshIntervalSec",
             SpoofSettings.getInstance(context).readRefreshIntervalSec(),
+        )
+        root.put(
+            "locationDeliveryMode",
+            SpoofSettings.getInstance(context).readLocationDeliveryMode().wireValue,
         )
 
         // settings (mode / active hours) — small, fixed shape

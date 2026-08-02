@@ -6,6 +6,7 @@ public final class TransportSchemaContract {
 
     public static boolean supports(int version) {
         return version == ConfigPrefsSync.SCHEMA_VERSION
+                || version == ConfigPrefsSync.PREVIOUS_SCHEMA_VERSION
                 || version == ConfigPrefsSync.LEGACY_SCHEMA_VERSION;
     }
 }

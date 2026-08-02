@@ -1,5 +1,11 @@
 package name.caiyao.fakegps.ui.screen.settings
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -33,7 +40,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import name.caiyao.fakegps.data.SpoofSettings
 import kotlin.math.roundToInt
@@ -50,6 +59,41 @@ fun SettingsScreen(
 
     val refreshIntervalSec by vm.refreshIntervalSec.collectAsState()
     val publishFailure by vm.publishFailure.collectAsState()
+    val locationDeliveryMode by vm.locationDeliveryMode.collectAsState()
+    val mockProviderState by vm.mockProviderState.collectAsState()
+    val publishedConfig by vm.publishedConfig.collectAsState()
+    val locationModel = LocationDeliveryUiContract.model(
+        locationDeliveryMode,
+        mockProviderState,
+        publishedConfig,
+    )
+    val context = LocalContext.current
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        if (grants.values.any { it }) vm.setSystemMockEnabled(true)
+    }
+
+    fun requestSystemMock(enabled: Boolean) {
+        if (!enabled) {
+            vm.setSystemMockEnabled(false)
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            vm.setSystemMockEnabled(true)
+        } else {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                ),
+            )
+        }
+    }
 
     var showModeDialog by remember { mutableStateOf(false) }
     var showRefreshDialog by remember { mutableStateOf(false) }
@@ -92,6 +136,35 @@ fun SettingsScreen(
                 )
                 HorizontalDivider()
             }
+
+            // --- 位置注入 ---
+            SectionHeader("位置注入")
+            ListItem(
+                headlineContent = { Text("系统 Mock 位置") },
+                supportingContent = {
+                    Text(
+                        "${locationModel.status}\n" +
+                            "生效中档案：${locationModel.effectiveCoordinate}\n" +
+                            locationModel.detail,
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = locationModel.systemMockEnabled,
+                        onCheckedChange = ::requestSystemMock,
+                    )
+                },
+            )
+            ListItem(
+                headlineContent = { Text("选择模拟位置 App") },
+                supportingContent = {
+                    Text("System Mock 需要在开发者选项中选择当前安装的千网游版本")
+                },
+                modifier = Modifier.clickable {
+                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                },
+            )
+            HorizontalDivider()
 
             // --- Hook 配置 ---
             SectionHeader("Hook 配置")

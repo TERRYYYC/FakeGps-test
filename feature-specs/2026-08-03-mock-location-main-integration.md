@@ -1,0 +1,140 @@
+---
+feature_ids: [F001]
+topics: [android, location, mock-provider, xposed, profiles, lifecycle]
+doc_kind: plan
+created: 2026-08-03
+---
+
+# Mock Location 主 App 集成实施计划
+
+**Feature:** F001 — Google Maps 蓝点跨 GMS 进程缺口
+**Goal:** 把已验证的 System Mock Provider 从独立 Lab 合入千网游主 App，并用一个用户开关在 Hook 与 System Mock 之间选择位置注入方式。
+**Acceptance:** 使用主 App 生效中档案；位置只走一种注入路径；切回 Hook 后系统 `gps` test provider 确实消失；默认/验收地点为基辅；真机 Maps 蓝点与 Stop 均有可复核证据。
+
+## 完成定义
+
+1. `name.caiyao.fakegps` 主 App 的设置页提供“系统 Mock 位置”开关。
+2. 开关关闭时位置由现有 Xposed Hook 注入；开启时 Hook 只旁路位置字段，蜂窝、Wi-Fi 等其他档案字段继续 Hook。
+3. System Mock 不保存第二份坐标，也不保存第二个“当前档案”指针；每次都从 `ConfigPrefsSync` 已发布的第一条/生效中档案读取经纬度。
+4. 档案经纬度在 System Mock 运行中发生变化时，服务在下一次采样周期自动采用新值。
+5. 开启前校验有效经纬度；没有 mock-location app-op、缺定位权限或 provider 调用失败时，设置页显示实际失败，不能显示为已运行。
+6. 切回 Hook、通知栏 Stop，以及“清理标记尚未清除”的 Hook 启动恢复三条路径都执行 `removeTestProvider("gps")`。普通 Hook 启动不碰系统 provider。设备验收直接检查 `dumpsys location` 中 `gps` provider 已恢复 `GnssService`，不再用 PID/app-op 代理结果。
+7. 地图默认中心与坐标搜索示例为 Kyiv `50.4501, 30.5234`；隔离 debug bench 真机验收使用该档案，不读取或改动 release 用户数据。
+
+## 根因与边界
+
+PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop 后 `gps` 确实恢复为 `1000/android[GnssService]`。失败发生在另一个边界：系统 test provider 是 system_server 状态，App 被 force-stop/SIGKILL 时不保证执行 `Service.onDestroy()`，因此 provider 可以在进程消失后继续存在。
+
+旧验收脚本只证明了“Stop 节点被点击、Lab PID 消失、mock app-op 恢复”，没有证明 provider 被移除。这使生命周期缺口被错误判绿。本次不能承诺 Android 在 force-stop 后替已死亡进程执行清理；终态约束是：
+
+- 用户显式关闭时，App 在返回成功前完成真实 cleanup；
+- 若进程在切换窗口中死亡，持久化的用户意图驱动下次主 App 启动恢复；
+- 验收脚本始终以 provider 身份为真相，不再接受代理信号。
+
+## 状态对象与唯一所有者
+
+### 1. 位置注入方式
+
+- 值：`hook` / `system_mock`。
+- 唯一持久化所有者：`SpoofSettings`。
+- 含义：只选择位置数据的交付方式，不控制蜂窝/Wi-Fi Hook。
+- 默认：`hook`，保持升级兼容。
+
+### 2. 生效档案坐标
+
+- 唯一数据源：`ConfigPrefsSync` 发布的 `fields`，其来源仍是 `id ASC` 第一条档案。
+- System Mock 只解析 `latitude`、`longitude` 与可选 `accuracy`；不引入新表、新 preference 或 service extra 坐标。
+- 档案更新由既有 repository republish 收口；运行服务每秒读取已发布快照，所以不增加并行通知链。
+
+### 3. Hook 快照
+
+- `locationDeliveryMode=system_mock` 时，仅清除 Snapshot 的位置字段。
+- Snapshot 中的蜂窝、Wi-Fi、设备等字段保持不变。
+- transport schema 从 v3 升至 v4；新 Hook 兼容读取 v2/v3（缺字段默认 `hook`），旧 Hook 必须拒绝 v4，避免不认识开关却继续位置 Hook 造成双重注入。
+
+### 4. System GPS provider session
+
+- 唯一运行时所有者：主 App 内非导出的 `MockProviderService` + `MockProviderSessionController`。
+- `start`: 先用当前已发布档案建立 provider，成功后才持久化 `system_mock` 并发布 Hook 旁路；发布失败则清理 provider 并恢复 `hook`。
+- `stop`: 先持久化/发布 `hook` 用户意图，再无条件调用 cleanup；服务内存即使为 Idle，也不能跳过 `removeTestProvider`，以修复前次进程遗留。
+- `tick`: 重新解析当前已发布档案；坐标变化则 replace + immediate publish，否则发布新鲜时间戳样本。
+- `onDestroy`: best-effort cleanup；不把它当可靠 Stop 证明。
+- App 启动：持久意图为 `system_mock` 则恢复服务；为 `hook` 且 durable cleanup marker 为 true 时发送 recovery stop；普通 Hook 启动保持 no-op，避免没有 mock app-op 的用户看到伪失败。
+
+## 不变量
+
+- **INV-1 单位置通道：** System Mock 成功启用后，Hook Snapshot 的所有位置字段为空；其他字段不变。
+- **INV-2 单档案真相：** Mock 服务输出坐标等于已发布有效档案坐标，不接受 UI/Intent 中另一套坐标。
+- **INV-3 启用失败回滚：** provider 注册、首次发布或 Hook 配置发布任一失败，最终 intent 为 Hook，provider best-effort 清理，UI 为 Failed。
+- **INV-4 Stop 不信内存：** stop/reconcile 即使 controller 刚创建且 state=Idle，仍调用 `removeTestProvider`。
+- **INV-5 真 Stop：** Stop 验收必须看到 `gps` provider 非 `[mock]` 且 identity 为系统 GNSS；PID 与 app-op 只作辅助证据。恢复成功后清除 durable cleanup marker。
+- **INV-6 档案热更新：** System Mock 运行时修改生效档案，下一 tick 使用新坐标。
+- **INV-7 升级兼容：** 缺 `locationDeliveryMode` 的 v2/v3 payload 解释为 Hook；v4 的模式字段参与运行决策。
+- **INV-8 数据安全：** 真机开发只改 debug bench 数据；release App、参考 Fake GPS Location 的数据不读取、不迁移、不删除。
+
+## TDD 实施顺序
+
+### Task 1 — 先锁 transport 与 Hook 互斥
+
+**Tests:**
+- `app/src/test/java/name/caiyao/fakegps/config/PublishedConfigTest.kt`
+- `app/src/test/java/name/caiyao/fakegps/config/TransportSchemaContractTest.kt`
+- `app/src/test/java/name/caiyao/fakegps/hook/LocationDeliveryPolicyTest.java`
+
+**Implementation:**
+- `SpoofSettings.kt`: 新增 `LocationDeliveryMode` 持久状态。
+- `ConfigPrefsSync.kt` / `PublishedConfig.kt`: 发布与解析 `locationDeliveryMode`，schema v4。
+- `MainHook.java`: 构建 Snapshot 后应用位置交付策略。
+- 新增纯 `LocationDeliveryPolicy.java`: System Mock 清空位置组但保留其他字段。
+
+先写红测：v4 模式解析、v2/v3 默认 Hook、System Mock 清位置而保留 cell/Wi-Fi。绿后跑整个 debug JVM suite。
+
+### Task 2 — 从生效档案解析 Mock 配置
+
+**Tests:** 新增 `EffectiveMockLocationResolverTest.kt`，覆盖 Kyiv、缺字段、越界、非数值、accuracy 缺省及 delivery mode。
+**Implementation:** 新增 `EffectiveMockLocationResolver.kt`，输入 `PublishedConfig`，输出经验证的 `MockLocationConfig`。不得读取 DB 或 Intent extras。
+
+### Task 3 — 把 provider lifecycle 迁入主 source set
+
+**Tests:** 将 PR #8 controller/contract 测试迁入 `src/test`，增加：
+
+- fresh-controller Stop 仍 cleanup；
+- tick 坐标变化 replace provider；
+- start 后模式发布失败回滚 cleanup；
+- startup System Mock 恢复；Hook 仅在 durable cleanup marker 存在时规划 cleanup，普通 Hook no-op；
+- null restart 不自动开始未知坐标。
+
+**Implementation:**
+
+- 通用 config/gateway/controller/service/status 移到 `src/main/.../mockprovider`。
+- 服务只接受 `START_FROM_EFFECTIVE_PROFILE` / `STOP_AND_USE_HOOK`，移除坐标 extras。
+- main manifest 声明 FGS 权限和非导出 location service。
+- 删除独立 `mockProvider` build type、variant launcher/UI 与 variant-only测试；功能入口只留主 App 设置页。
+
+### Task 4 — 设置页开关与状态反馈
+
+**Tests:** 为显示文案、期望/实际状态映射、失败提示和按钮 gating 建纯 UI contract 测试。
+**Implementation:** 设置页新增 Material switch、当前生效档案坐标摘要、实际 Running/Failed 状态、开发者选项 guidance 与重试 Stop。开启调用 FGS，关闭调用 recovery stop；切换进行中禁用重复操作。
+
+### Task 5 — Kyiv 与验收脚本
+
+- `MapScreen.kt` 默认中心与 placeholder 改为 `50.4501,30.5234`。
+- 改写 `scripts/mock_provider_acceptance.sh`：目标为 `.bench` 主 App，trap 恢复参考 mock app；Start 后断言 gps/fused 坐标为 Kyiv；Stop 后断言 gps provider 不是 mock 且 owner 为 GNSS。
+- 新增结构测试，禁止脚本仅用 PID/app-op 判 Stop 成功。
+- 更新 evidence doc，旧 NYC Lab 证据保留为历史，不冒充本次主 App 证据。
+
+### Task 6 — 验证与交付
+
+1. `testDebugUnitTest --rerun-tasks`、结构契约、`assembleDebug`、`assembleRelease`。
+2. `aapt` 检查 main/debug 包名、Xposed metadata、service exported/type。
+3. 在 moto g54 上用 `.bench` 建立 Kyiv 生效档案；选择 `.bench` 为 mock app，验证服务、gps/fused/Maps 蓝点。
+4. UI 切回 Hook，直接检查系统 provider 已恢复；force-stop/reopen 场景验证 startup reconciliation。
+5. 每轮 trap 恢复 `com.hopefactory2021.fakegpslocation` 且再次确认真实 GNSS。
+6. quality-gate 后请求跨个体 exact-HEAD review；reviewer 独立构建与真机复跑，放行后再进入 merge gate。
+
+## 非目标
+
+- 不隐藏 `Location.isMock()`；System Mock 明确保留 mock marker。
+- 不修改/复制 release 用户档案，不自动替用户选择开发者选项 mock app。
+- 不承诺 force-stop 已死亡进程后仍能即时执行代码；通过用户意图持久化、下次启动恢复与真相验收封住该窗口。
+- 不把 System Mock 开关等同于全局“伪装模式”；蜂窝/Wi-Fi Hook 不受位置通道切换影响。

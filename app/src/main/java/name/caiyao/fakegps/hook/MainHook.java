@@ -265,8 +265,11 @@ public class MainHook implements IXposedHookLoadPackage {
                     name.caiyao.fakegps.config.UnavailablePayloadContract.validate(
                             configuredFields, requestedUnavailable);
             Snapshot s = Snapshot.fromJson(fields, unavailable.asSet());
+            String locationDeliveryMode = root.optString("locationDeliveryMode", "hook");
+            LocationDeliveryPolicy.apply(s, locationDeliveryMode);
             debug("prefs loaded fields=" + (fields == null ? 0 : fields.length())
                     + " unavailable=" + unavailable.asList().size()
+                    + " locationDelivery=" + locationDeliveryMode
                     + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude
                     + " rebuildCells=" + s.hasCellReconstructionDecision());
             return acceptLoadedSnapshot(s, refreshIntervalSec, fingerprint);

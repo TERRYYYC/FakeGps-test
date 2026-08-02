@@ -21,7 +21,7 @@ class MockProviderSessionController(
         state = MockProviderState.Starting(config)
         transition(
             sideEffect = {
-                // remove-before-add recovers a provider left behind by an interrupted prior run.
+                // System test providers can survive process death. Always repair stale state first.
                 gateway.removeGpsProvider()
                 gateway.replaceGpsProvider()
                 gateway.publish(config)
@@ -41,6 +41,7 @@ class MockProviderSessionController(
     fun stop() {
         state = MockProviderState.Stopping
         transition(
+            // Never short-circuit on in-memory Idle: a previous process may own the real residue.
             sideEffect = gateway::removeGpsProvider,
             success = MockProviderState.Idle,
         )

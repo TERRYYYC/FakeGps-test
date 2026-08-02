@@ -16,11 +16,8 @@ class AndroidMockProviderGateway(
 ) : MockProviderGateway {
 
     override fun replaceGpsProvider() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            addModernGpsProvider()
-        } else {
-            addLegacyGpsProvider()
-        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) addModernGpsProvider()
+        else addLegacyGpsProvider()
         locationManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, true)
     }
 
@@ -29,7 +26,7 @@ class AndroidMockProviderGateway(
         val location = Location(sample.provider).apply {
             latitude = sample.latitude
             longitude = sample.longitude
-            altitude = 3.0
+            altitude = 179.0
             accuracy = sample.accuracyMeters
             time = sample.timeMillis
             elapsedRealtimeNanos = sample.elapsedRealtimeNanos
