@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <permission
-        android:name="name.caiyao.fakegps.permission.RUN_HOOK_ACCEPTANCE"
+        android:name="${applicationId}.permission.RUN_HOOK_ACCEPTANCE"
         android:protectionLevel="signature" />
 
     <application android:name=".probe.HookAcceptanceApplication">
@@ -11,7 +11,7 @@
             android:excludeFromRecents="true"
             android:exported="true"
             android:noHistory="true"
-            android:permission="name.caiyao.fakegps.permission.RUN_HOOK_ACCEPTANCE"
+            android:permission="${applicationId}.permission.RUN_HOOK_ACCEPTANCE"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
     </application>
 

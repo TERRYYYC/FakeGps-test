@@ -46,6 +46,13 @@ android {
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
+        mockProvider {
+            initWith debug
+            applicationIdSuffix ".mockprovider"
+            versionNameSuffix "-mock-provider"
+            signingConfig signingConfigs.debug
+            matchingFallbacks = ['debug']
+        }
     }
 
     compileOptions {
@@ -66,6 +73,9 @@ android {
 
     sourceSets {
         androidTest.assets.srcDirs += files("$projectDir/schemas")
+        // The lab must not inherit debug self-hooking. Reuse the release no-op probe controller
+        // while keeping variant-only Mock Provider code under src/mockProvider.
+        mockProvider.java.srcDirs += files("$projectDir/src/release/java")
     }
 }
 
