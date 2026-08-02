@@ -109,6 +109,14 @@ class HookVerificationService : Service() {
         if (!RuntimeHookSentinel.isHookActive()) {
             throw ProbeException(ProbeFailure.NOT_SCOPED)
         }
+        // This process deliberately stays warm for fast retry. App-side prefs may already contain
+        // the request's payload while MainHook.CURRENT still owns the previous snapshot, so prefs
+        // alone cannot prove what the hooked public APIs below will return. The target-classloader
+        // sentinel is replaced by Xposed and synchronously reloads the module-classloader state.
+        val hookFingerprint = RuntimeHookSentinel.reloadHookSnapshot(expectedFingerprint)
+        if (hookFingerprint != expectedFingerprint) {
+            throw ProbeException(ProbeFailure.PAYLOAD_MISMATCH)
+        }
         val raw = ConfigPrefsSync.readPublished(applicationContext).textOrNull
             ?: throw ProbeException(ProbeFailure.INTERNAL_ERROR)
         val parsed = PublishedConfig.parse(raw)

@@ -75,6 +75,7 @@ Therefore the reported refresh incident is closed as bounded propagation plus ta
 | Probe request | starting/observing | timeout/process death | visible `PROBE_UNAVAILABLE`; main UI stays alive and retryable |
 | Probe request | observing | stale result for older requestId/fingerprint | ignore result; keep current request active |
 | Probe request | delivered/failed | retry | new requestId; no stale report retained |
+| Probe request | warm process + changed payload | verify(new fingerprint) | synchronously reload the hook-owned snapshot through the target-classloader sentinel; observe only after the active hook fingerprint matches |
 | Probe request A + B | A is cancelled/times out after B starts | client cancels A | send request-scoped cancellation for A; B remains registered and its Service/executor stays alive |
 | Probe service | one or more requests registered | one request completes/cancels | remove only that request; stop the Service only after the registry becomes empty |
 | Profile save | idle | either save action is tapped | atomically claim one attempt, disable/no-op both save actions, then persist and publish once |
@@ -94,6 +95,7 @@ Therefore the reported refresh incident is closed as bounded propagation plus ta
 - **INV-9:** `UNOBSERVABLE` means the probe invoked the relevant observation path but the platform exposed no value; probe unavailable/not scoped is a separate state. Verdict test.
 - **INV-10:** Probe cancellation is keyed by request ID; a cancelled/expired screen never calls component-wide `stopService` while another request may own the same `:hook_verify` Service. Registry and compiled wiring tests.
 - **INV-11:** The editor permits at most one active save across both save actions, so a new profile cannot be inserted twice and only one navigation outcome is emitted. Single-flight and compiled wiring tests.
+- **INV-12:** A warm `:hook_verify` process synchronously reloads the Xposed-owned snapshot before observation and proves that snapshot's fingerprint matches the active request; app-side prefs alone never stand in for hook state. Sentinel default-authority and compiled wiring tests plus exact-build device retry.
 
 ### Adversarial scenarios
 
@@ -103,6 +105,7 @@ Therefore the reported refresh incident is closed as bounded propagation plus ta
 - Probe package absent from Vector scope returns a scoped diagnostic, never a false `MISMATCH` roll-up.
 - Probe dies after request but before delivery; retry succeeds without stale-green UI.
 - An old Verify screen is cleared after a newer screen has started; cancelling the old request leaves the newer probe alive and deliverable.
+- Save a changed payload and verify again inside the 500ms warm-process grace window; the hook snapshot reloads to the new fingerprint before any public API observation.
 - Double-tap “保存” / “保存并验证” before Room returns; exactly one row is written and exactly one navigation outcome wins.
 - User saves a profile whose configured value equals the real baseline; result stays `AMBIGUOUS`.
 - A field has no public read surface; it remains `NOT_VERIFIABLE`, not probe failure.

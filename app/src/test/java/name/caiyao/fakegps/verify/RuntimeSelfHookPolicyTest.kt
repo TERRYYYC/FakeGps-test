@@ -1,6 +1,7 @@
 package name.caiyao.fakegps.verify
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,5 +54,10 @@ class RuntimeSelfHookPolicyTest {
     @Test
     fun `probe sentinel defaults false without an installed Xposed replacement`() {
         assertFalse(RuntimeHookSentinel.isHookActive())
+    }
+
+    @Test
+    fun `probe snapshot reload has no authority without an installed Xposed replacement`() {
+        assertNull(RuntimeHookSentinel.reloadHookSnapshot("sha256:expected"))
     }
 }

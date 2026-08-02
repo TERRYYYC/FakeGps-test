@@ -1,6 +1,7 @@
 package name.caiyao.fakegps.ui;
 
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -13,15 +14,17 @@ public class UiActionOwnershipContractTest {
 
     @Test
     public void editorSaveActionsShareOneSingleFlightOwner() throws Exception {
-        String editor = classBytecode(
-                "name.caiyao.fakegps.ui.screen.editor.ProfileEditorViewModel")
-                + classBytecode(
-                        "name.caiyao.fakegps.ui.screen.editor.ProfileEditorViewModel$save$1");
+        String owner = classBytecode(
+                "name.caiyao.fakegps.ui.screen.editor.ProfileEditorViewModel");
+        String saveAttempt = classBytecode(
+                "name.caiyao.fakegps.ui.screen.editor.ProfileEditorViewModel$save$1");
 
-        assertTrue(editor.contains("SingleFlightGate"));
-        assertTrue(editor.contains("tryStart"));
-        assertTrue(editor.contains("finish"));
-        assertTrue(editor.contains("saving"));
+        assertTrue(owner.contains("SingleFlightGate"));
+        assertTrue(owner.contains("tryStart"));
+        assertFalse(saveAttempt.contains("tryStart"));
+        assertTrue(saveAttempt.contains("finish"));
+        assertTrue(owner.contains("getImmediate"));
+        assertTrue(owner.contains("saving"));
     }
 
     @Test

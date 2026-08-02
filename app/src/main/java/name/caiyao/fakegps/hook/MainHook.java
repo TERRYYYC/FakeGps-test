@@ -7,6 +7,7 @@ import android.os.Message;
 import java.util.concurrent.atomic.AtomicReference;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.XC_MethodHook.MethodHookParam;
 import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XC_MethodReplacement;
@@ -59,6 +60,10 @@ public class MainHook implements IXposedHookLoadPackage {
 
     /** Current spoofing config. Hooks read this atomically via CURRENT.get(). */
     static final AtomicReference<Snapshot> CURRENT = new AtomicReference<>(Snapshot.PASSTHROUGH);
+    /** Fingerprint paired with the last structurally accepted Snapshot. */
+    private static final AtomicReference<String> CURRENT_FINGERPRINT = new AtomicReference<>();
+    /** Serializes timer and verification-triggered reloads into one coherent publish order. */
+    private static final Object SNAPSHOT_LOCK = new Object();
 
     /** One owner per module classloader/process, even if LSPosed repeats the callback. */
     private static final HookRuntimeOwnership RUNTIME_OWNERSHIP = new HookRuntimeOwnership();
@@ -83,8 +88,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         // 1. Load initial config (XSharedPreferences works here — it's a file read, no app context needed)
-        Snapshot initial = loadSnapshot();
-        CURRENT.set(initial);
+        Snapshot initial = reloadSnapshot();
         XposedBridge.log(TAG + ": Loaded config for " + lpparam.packageName
                 + " | location=" + initial.hasLocation()
                 + " | cellRebuild=" + initial.hasCellReconstructionDecision());
@@ -111,8 +115,7 @@ public class MainHook implements IXposedHookLoadPackage {
             public void handleMessage(Message msg) {
                 if (msg.what == 1) {
                     long previousDelayMs = REFRESH_SCHEDULER.currentDelayMs();
-                    Snapshot refreshed = loadSnapshot();
-                    CURRENT.set(refreshed);
+                    Snapshot refreshed = reloadSnapshot();
                     long nextDelayMs = REFRESH_SCHEDULER.currentDelayMs();
                     if (previousDelayMs != nextDelayMs) {
                         XposedBridge.log(RuntimeEvidence.intervalChanged(
@@ -134,6 +137,31 @@ public class MainHook implements IXposedHookLoadPackage {
      * NULL/absent field == passthrough (real device value). On read/parse failure we keep the
      * last-known-good CURRENT rather than reverting to real data mid-test.
      */
+    private Snapshot reloadSnapshot() {
+        synchronized (SNAPSHOT_LOCK) {
+            return reloadSnapshotLocked();
+        }
+    }
+
+    /** Target-classloader bridge used by the private verification process before observation. */
+    private String reloadSnapshotForProbe(String expectedFingerprint) {
+        synchronized (SNAPSHOT_LOCK) {
+            reloadSnapshotLocked();
+            String activeFingerprint = CURRENT_FINGERPRINT.get();
+            if (expectedFingerprint != null && !expectedFingerprint.equals(activeFingerprint)) {
+                XposedBridge.log(TAG + ": probe snapshot mismatch expected="
+                        + expectedFingerprint + " actual=" + activeFingerprint);
+            }
+            return activeFingerprint;
+        }
+    }
+
+    private Snapshot reloadSnapshotLocked() {
+        Snapshot refreshed = loadSnapshot();
+        CURRENT.set(refreshed);
+        return refreshed;
+    }
+
     private Snapshot loadSnapshot() {
         try {
             XSharedPreferences prefs = new XSharedPreferences("name.caiyao.fakegps", PREFS_NAME);
@@ -180,7 +208,8 @@ public class MainHook implements IXposedHookLoadPackage {
             String mode = root.optString("mode", "always_on");
             if ("off".equals(mode)) {
                 debug("mode=off -> passthrough");
-                return acceptLoadedSnapshot(Snapshot.PASSTHROUGH, refreshIntervalSec);
+                return acceptLoadedSnapshot(
+                        Snapshot.PASSTHROUGH, refreshIntervalSec, fingerprint);
             }
             if ("time_based".equals(mode)) {
                 org.json.JSONObject hours = root.optJSONObject("activeHours");
@@ -192,7 +221,8 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (!inRange) {
                         debug("outside active hours (" + start + "-" + end
                                 + ") current=" + h + " -> passthrough");
-                        return acceptLoadedSnapshot(Snapshot.PASSTHROUGH, refreshIntervalSec);
+                        return acceptLoadedSnapshot(
+                                Snapshot.PASSTHROUGH, refreshIntervalSec, fingerprint);
                     }
                 }
             }
@@ -237,7 +267,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     + " unavailable=" + unavailable.asList().size()
                     + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude
                     + " rebuildCells=" + s.hasCellReconstructionDecision());
-            return acceptLoadedSnapshot(s, refreshIntervalSec);
+            return acceptLoadedSnapshot(s, refreshIntervalSec, fingerprint);
         } catch (Throwable t) {
             // Read/parse failure: keep last-known-good (do NOT revert to real device data mid-test).
             debug("loadSnapshot prefs error: " + t);
@@ -246,8 +276,12 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     /** Commit Snapshot and delay as one accepted last-known-good transport decision. */
-    private Snapshot acceptLoadedSnapshot(Snapshot snapshot, Integer refreshIntervalSec) {
+    private Snapshot acceptLoadedSnapshot(
+            Snapshot snapshot,
+            Integer refreshIntervalSec,
+            String fingerprint) {
         REFRESH_SCHEDULER.acceptPayloadInterval(refreshIntervalSec, true);
+        CURRENT_FINGERPRINT.set(fingerprint);
         return snapshot;
     }
 
@@ -267,6 +301,16 @@ public class MainHook implements IXposedHookLoadPackage {
                 sentinel,
                 "isHookActive",
                 XC_MethodReplacement.returnConstant(true));
+        XposedHelpers.findAndHookMethod(
+                sentinel,
+                "reloadHookSnapshot",
+                String.class,
+                new XC_MethodReplacement() {
+                    @Override
+                    protected Object replaceHookedMethod(MethodHookParam param) {
+                        return reloadSnapshotForProbe((String) param.args[0]);
+                    }
+                });
     }
 
 }

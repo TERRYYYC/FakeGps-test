@@ -18,6 +18,9 @@ public class RuntimeProbeWiringContractTest {
         assertTrue(hook.contains("RuntimeSelfHookPolicy"));
         assertTrue(hook.contains("RuntimeHookSentinel"));
         assertTrue(hook.contains("isHookActive"));
+        assertTrue(hook.contains("reloadHookSnapshot"));
+        assertTrue(hook.contains("reloadSnapshotForProbe"));
+        assertTrue(hook.contains("CURRENT_FINGERPRINT"));
     }
 
     @Test
@@ -41,6 +44,7 @@ public class RuntimeProbeWiringContractTest {
         String service = classBytecode("name.caiyao.fakegps.verify.HookVerificationService");
         assertTrue(service.contains("ResultReceiver"));
         assertTrue(service.contains("RuntimeHookSentinel"));
+        assertTrue(service.contains("reloadHookSnapshot"));
         assertTrue(service.contains("ConfigPrefsSync"));
         assertTrue(service.contains("DeviceObserver"));
         assertTrue(service.contains("ProbeObservationCodec"));

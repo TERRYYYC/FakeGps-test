@@ -105,7 +105,7 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
     fun save(thenVerify: Boolean = false) {
         if (!saveGate.tryStart()) return
         _saving.value = true
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
             try {
                 val values = _fieldValues.value
                 val errors = ProfileFieldDraft.validationErrors(values)

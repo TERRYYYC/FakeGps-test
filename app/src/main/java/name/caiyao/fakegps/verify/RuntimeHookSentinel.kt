@@ -10,4 +10,12 @@ package name.caiyao.fakegps.verify
 object RuntimeHookSentinel {
     @JvmStatic
     fun isHookActive(): Boolean = false
+
+    /**
+     * Reloads the snapshot owned by the Xposed module classloader and returns its active
+     * fingerprint. The unhooked implementation has no authority over hook state.
+     */
+    @JvmStatic
+    @Suppress("UNUSED_PARAMETER")
+    fun reloadHookSnapshot(expectedFingerprint: String): String? = null
 }
