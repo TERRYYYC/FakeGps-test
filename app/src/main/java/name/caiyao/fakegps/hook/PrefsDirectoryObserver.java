@@ -32,6 +32,8 @@ final class PrefsDirectoryObserver extends FileObserver {
 
     private static final String TAG = "FakeGPS";
     private static final int MASK = MOVED_TO | CLOSE_WRITE | CREATE;
+    /** Kernel inotify watch-loss signal. Not exposed in the FileObserver public API. */
+    private static final int IN_IGNORED = 0x8000;
 
     private final String watchedDirPath;
     private final String targetFilename;
@@ -82,6 +84,15 @@ final class PrefsDirectoryObserver extends FileObserver {
 
     @Override
     public void onEvent(int event, String path) {
+        // Kernel dropped the watch (directory deleted/moved/unmounted): IN_IGNORED is
+        // terminal — the watch is gone, but without disarming, isArmed() would stay true
+        // forever. The heartbeat lazy-retry would then never fire and the event-driven
+        // path would stay silently dead until process restart, even after the app
+        // recreates the directory. (Review finding P1 #2, Sol R3)
+        if ((event & IN_IGNORED) != 0) {
+            disarm();
+            return;
+        }
         if (!targetFilename.equals(path)) return;
         try {
             onChanged.run();
@@ -90,5 +101,11 @@ final class PrefsDirectoryObserver extends FileObserver {
             // A dead observer thread permanently stops ALL inotify delivery for the process.
             XposedBridge.log(TAG + ": observer reload failed: " + t.getMessage());
         }
+    }
+
+    /** Mark the watch as lost so the MainHook heartbeat re-arms on its next tick. */
+    private void disarm() {
+        armed = false;
+        XposedBridge.log(TAG + ": observer watch lost (IN_IGNORED) — heartbeat will re-arm");
     }
 }

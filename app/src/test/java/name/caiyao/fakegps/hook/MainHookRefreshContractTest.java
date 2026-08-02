@@ -175,6 +175,21 @@ public class MainHookRefreshContractTest {
                 timerCallback.contains("tryArmObserver"));
     }
 
+    /**
+     * Review finding (Sol R3): when the watched prefs directory is deleted/moved, the
+     * kernel delivers IN_IGNORED and drops the watch. onEvent must disarm in that case —
+     * otherwise isArmed() stays true forever, the heartbeat lazy-retry never fires, and
+     * the event-driven path is silently dead until process restart even after the app
+     * recreates the directory.
+     */
+    @Test
+    public void observerDisarmsOnKernelWatchLoss() throws Exception {
+        String observer = classBytecode("name.caiyao.fakegps.hook.PrefsDirectoryObserver");
+        assertTrue("onEvent must disarm on IN_IGNORED (kernel watch loss)",
+                observer.contains("disarm"));
+        assertTrue("watch-loss evidence log missing", observer.contains("watch lost"));
+    }
+
     private static String classBytecode(String className) throws Exception {
         String resource = className.replace('.', '/') + ".class";
         try (InputStream input = MainHookRefreshContractTest.class
