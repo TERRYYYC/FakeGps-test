@@ -15,8 +15,14 @@ interface ProfileDao {
     @Query("SELECT * FROM temp WHERE id = :id")
     suspend fun getById(id: Long): ProfileEntity?
 
+    @Query("SELECT * FROM temp ORDER BY id ASC")
+    suspend fun getAll(): List<ProfileEntity>
+
     @Insert
     suspend fun insert(profile: ProfileEntity): Long
+
+    @Insert
+    suspend fun insertAll(profiles: List<ProfileEntity>): List<Long>
 
     @Update
     suspend fun update(profile: ProfileEntity)

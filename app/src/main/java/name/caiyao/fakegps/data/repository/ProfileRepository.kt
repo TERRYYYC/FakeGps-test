@@ -2,15 +2,21 @@ package name.caiyao.fakegps.data.repository
 
 import android.content.Context
 import android.util.Log
+import androidx.room.withTransaction
 import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.data.db.AppDatabase
 import name.caiyao.fakegps.data.db.ProfileEntity
 import name.caiyao.fakegps.data.db.ProfileSummary
 import kotlinx.coroutines.flow.Flow
 
-class ProfileRepository(private val db: AppDatabase, private val context: Context? = null) {
+class ProfileRepository(
+    private val db: AppDatabase,
+    private val context: Context? = null,
+    private val publishOverride: (() -> Boolean)? = null,
+) {
 
     data class SaveResult(val id: Long, val published: Boolean)
+    data class ImportResult(val imported: Int, val duplicates: Int)
 
     private val dao get() = db.profileDao()
 
@@ -41,6 +47,18 @@ class ProfileRepository(private val db: AppDatabase, private val context: Contex
     }
 
     /**
+     * Adds a confirmed archive batch atomically without changing the published hook snapshot.
+     *
+     * Duplicate detection is deliberately repeated inside the transaction: the database may have
+     * changed between file preview and confirmation. Imported ids are always database-generated.
+     */
+    suspend fun importAll(candidates: List<ProfileEntity>): ImportResult = db.withTransaction {
+        val plan = ProfileImportPlanner.plan(dao.getAll(), candidates)
+        if (plan.toInsert.isNotEmpty()) dao.insertAll(plan.toInsert)
+        ImportResult(imported = plan.toInsert.size, duplicates = plan.duplicates)
+    }
+
+    /**
      * Re-publish the effective config to the world-readable prefs the hook reads.
      *
      * This lives in the REPOSITORY, not in a screen: the app has two parallel UIs (legacy
@@ -50,8 +68,9 @@ class ProfileRepository(private val db: AppDatabase, private val context: Contex
      * create/update/delete funnels through here, so the transport can no longer go stale.
      */
     private fun republish(): Boolean {
-        val ctx = context ?: return true
-        val published = runCatching { ConfigPrefsSync.sync(ctx) }
+        val publisher = publishOverride ?: context?.let { ctx -> { ConfigPrefsSync.sync(ctx) } }
+            ?: return true
+        val published = runCatching(publisher)
             .onFailure { Log.e("ProfileRepository", "config republish failed", it) }
             .getOrDefault(false)
         if (!published) {

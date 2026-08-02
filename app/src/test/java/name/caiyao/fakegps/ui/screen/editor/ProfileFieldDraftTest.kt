@@ -45,6 +45,31 @@ class ProfileFieldDraftTest {
     }
 
     @Test
+    fun `editor and importer share range boolean JSON and 36-bit NCI validation`() {
+        val errors = ProfileFieldDraft.validationErrors(
+            mapOf(
+                "latitude" to "91",
+                "wifi_hidden" to "2",
+                "neighbor_cells_json" to "{}",
+                "nci" to "68719476735",
+            ),
+        )
+
+        assertTrue(errors.containsKey("latitude"))
+        assertTrue(errors.containsKey("wifi_hidden"))
+        assertTrue(errors.containsKey("neighbor_cells_json"))
+        assertFalse(errors.containsKey("nci"))
+        assertEquals(68_719_476_735L, mapToEntity(mapOf("nci" to "68719476735"), 0L).nci)
+    }
+
+    @Test
+    fun `GSM BER accepts measured values and unknown sentinel but rejects reserved gap`() {
+        assertFalse(ProfileFieldDraft.validationErrors(mapOf("gsm_ber" to "7")).containsKey("gsm_ber"))
+        assertFalse(ProfileFieldDraft.validationErrors(mapOf("gsm_ber" to "99")).containsKey("gsm_ber"))
+        assertTrue(ProfileFieldDraft.validationErrors(mapOf("gsm_ber" to "8")).containsKey("gsm_ber"))
+    }
+
+    @Test
     fun `PLMN unavailable is one paired state`() {
         val unavailable = ProfileFieldDraft.update(emptyMap(), "mcc", " -- ")
         assertEquals("--", unavailable["mcc"])

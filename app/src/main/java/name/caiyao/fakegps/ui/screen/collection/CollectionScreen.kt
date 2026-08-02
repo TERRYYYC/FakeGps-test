@@ -1,23 +1,30 @@
 package name.caiyao.fakegps.ui.screen.collection
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,8 +54,12 @@ fun CollectionScreen(
 ) {
     val profiles by vm.profiles.collectAsState()
     val effectiveId by vm.effectiveProfileId.collectAsState()
+    val importState by vm.importState.collectAsState()
     var showClearDialog by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<ProfileSummary?>(null) }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(vm::previewImport)
+    }
 
     Scaffold(
         topBar = {
@@ -60,6 +71,23 @@ fun CollectionScreen(
                     }
                 },
                 actions = {
+                    val importBusy = importState is ProfileImportUiState.Parsing ||
+                        importState is ProfileImportUiState.Importing
+                    IconButton(
+                        enabled = !importBusy,
+                        onClick = {
+                            importLauncher.launch(
+                                arrayOf(
+                                    "text/csv",
+                                    "text/comma-separated-values",
+                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    "application/octet-stream",
+                                ),
+                            )
+                        },
+                    ) {
+                        Icon(Icons.Default.FileUpload, contentDescription = "导入 CSV/Excel")
+                    }
                     if (profiles.isNotEmpty()) {
                         IconButton(onClick = { showClearDialog = true }) {
                             Icon(Icons.Default.DeleteSweep, contentDescription = "清空")
@@ -145,6 +173,124 @@ fun CollectionScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
+    ProfileImportDialogs(
+        state = importState,
+        onConfirm = vm::confirmImport,
+        onDismiss = vm::dismissImport,
+    )
+}
+
+@Composable
+private fun ProfileImportDialogs(
+    state: ProfileImportUiState,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    when (state) {
+        ProfileImportUiState.Idle -> Unit
+        is ProfileImportUiState.Parsing -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text("正在校验") },
+            text = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator()
+                    Text("正在读取 ${state.fileName}…")
+                }
+            },
+            confirmButton = {},
+        )
+        is ProfileImportUiState.Preview -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("确认导入") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(state.fileName, style = MaterialTheme.typography.titleSmall)
+                    Text("数据行：${state.dataRows}")
+                    Text("将新增：${state.records.size}")
+                    Text("文件内重复：${state.fileDuplicates}")
+                    Text(
+                        "导入只新增收藏，不替换现有档案，也不会改变「生效中」档案或已发布 Hook 配置。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onConfirm) { Text("确认导入") }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("取消") }
+            },
+        )
+        is ProfileImportUiState.Invalid -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("文件无法导入") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(state.fileName, style = MaterialTheme.typography.titleSmall)
+                    state.issues.forEach { issue ->
+                        val location = buildString {
+                            issue.row?.let { append("第 ${it} 行") }
+                            issue.column?.let {
+                                if (isNotEmpty()) append(" · ")
+                                append(it)
+                            }
+                        }
+                        Text(
+                            text = if (location.isEmpty()) issue.message else "$location：${issue.message}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Text("未写入任何档案。", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onDismiss) { Text("知道了") }
+            },
+        )
+        is ProfileImportUiState.Importing -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text("正在导入") },
+            text = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator()
+                    Text("正在原子写入 ${state.fileName}…")
+                }
+            },
+            confirmButton = {},
+        )
+        is ProfileImportUiState.Success -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("导入完成") },
+            text = {
+                Text("新增 ${state.imported} 个档案，跳过重复 ${state.duplicates} 个。生效档案未改变。")
+            },
+            confirmButton = {
+                TextButton(onClick = onDismiss) { Text("完成") }
+            },
+        )
+        is ProfileImportUiState.Failure -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("导入失败") },
+            text = { Text("${state.message}\n事务已回滚，未留下半批数据。") },
+            confirmButton = {
+                TextButton(onClick = onDismiss) { Text("知道了") }
             },
         )
     }

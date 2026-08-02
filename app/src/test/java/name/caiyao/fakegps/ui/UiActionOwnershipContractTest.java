@@ -41,6 +41,25 @@ public class UiActionOwnershipContractTest {
         assertTrue(verify.contains("finish"));
     }
 
+    @Test
+    public void collectionImportOwnsDocumentPreviewAndExplicitConfirmation() throws Exception {
+        String screen = classBytecode(
+                "name.caiyao.fakegps.ui.screen.collection.CollectionScreenKt");
+        String viewModel = classBytecode(
+                "name.caiyao.fakegps.ui.screen.collection.CollectionViewModel")
+                + classBytecode(
+                        "name.caiyao.fakegps.ui.screen.collection.CollectionViewModel$confirmImport$1")
+                + classBytecode(
+                        "name.caiyao.fakegps.ui.screen.collection.CollectionViewModel$confirmImport$1$1$1");
+
+        assertTrue(screen.contains("OpenDocument"));
+        assertTrue(screen.contains("ProfileImportDialogs"));
+        assertTrue(screen.contains("ProfileImportUiState$Preview"));
+        assertTrue(viewModel.contains("previewImport"));
+        assertTrue(viewModel.contains("beginImport"));
+        assertTrue(viewModel.contains("importAll"));
+    }
+
     private static String classBytecode(String className) throws Exception {
         String resource = className.replace('.', '/') + ".class";
         try (InputStream input = UiActionOwnershipContractTest.class
