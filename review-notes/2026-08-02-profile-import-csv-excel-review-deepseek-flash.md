@@ -59,3 +59,17 @@ Base: `origin/master` at `5dab712ff4119b421076b5034c3fea859ad2b29a`
 数据安全、review 独立性、Evidence Manifest、Feature Doc Truth；门禁闭合后允许 squash merge。
 
 [深海猫/DeepSeek V4 Flash🐾]
+
+## 补记：Instrumentation 复验实际运行记录（2026-08-03 01:46 +0300）
+
+verdict 表格中 Instrumentation 行以本次独立复跑作为最终证据（模拟器需先行修复环境）：
+
+- 设备：AVD `f001_ui_test`（emulator-5554, android-35 arm64）；启动需设
+  `HOME=/Users/terry` + `ANDROID_AVD_HOME=/Users/terry/.android/avd`（session 默认 HOME 指向临时目录），
+  并以 setsid 双 fork 守护化避免被命令会话回收。
+- 命令（worktree `/Users/terry/Desktop/coding/FakeGps-profile-import-csv-excel`，代码仍为 9bb2aa2）：
+  `./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=name.caiyao.fakegps.data.db.ProfileImportTransactionTest`
+- 结果：BUILD SUCCESSFUL；XML 报告 tests=2 failures=0 errors=0 skipped=0
+  - `importAll_rollsBackEveryRowWhenOneInsertFails` 0.214s
+  - `importAll_preservesExistingRows_skipsDuplicates_andDoesNotPublish` 0.07s
+- 报告：`app/build/outputs/androidTest-results/connected/debug/TEST-f001_ui_test(AVD) - 15-_app-.xml`
