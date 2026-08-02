@@ -10,7 +10,6 @@ import android.os.Looper
 import android.os.Process
 import android.os.ResultReceiver
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
 import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.config.PublishedConfig
 import name.caiyao.fakegps.config.TransportSchemaContract
@@ -18,17 +17,16 @@ import name.caiyao.fakegps.config.TransportSchemaContract
 /** Non-exported one-shot service running in `:hook_verify`. */
 class HookVerificationService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
-    private val terminationScheduled = AtomicBoolean(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        processTermination.cancelPending()
         val receiver = intent?.resultReceiver(EXTRA_RECEIVER)
         val requestId = intent?.getStringExtra(EXTRA_REQUEST_ID)
         val expectedFingerprint = intent?.getStringExtra(EXTRA_FINGERPRINT)
         if (receiver == null || requestId.isNullOrBlank() || expectedFingerprint.isNullOrBlank()) {
             stopSelf(startId)
-            scheduleProcessTermination()
             return START_NOT_STICKY
         }
 
@@ -54,7 +52,6 @@ class HookVerificationService : Service() {
                 },
             )
             stopSelf(startId)
-            scheduleProcessTermination()
         }
         return START_NOT_STICKY
     }
@@ -63,7 +60,7 @@ class HookVerificationService : Service() {
         executor.shutdownNow()
         // A main-process timeout stops the service before its worker reports. The probe process is
         // otherwise still alive with a hook scheduler, so every exit path must converge here.
-        scheduleProcessTermination()
+        processTermination.schedule(PROCESS_TERMINATION_DELAY_MS)
         super.onDestroy()
     }
 
@@ -99,14 +96,6 @@ class HookVerificationService : Service() {
         )
     }
 
-    private fun scheduleProcessTermination() {
-        if (!terminationScheduled.compareAndSet(false, true)) return
-        Handler(Looper.getMainLooper()).postDelayed(
-            { Process.killProcess(Process.myPid()) },
-            PROCESS_TERMINATION_DELAY_MS,
-        )
-    }
-
     private class ProbeException(val failure: ProbeFailure) : IllegalStateException(failure.name)
 
     companion object {
@@ -118,6 +107,14 @@ class HookVerificationService : Service() {
         const val RESULT_OK = 1
         const val RESULT_FAILED = 2
         private const val PROCESS_TERMINATION_DELAY_MS = 500L
+        private val processTermination by lazy {
+            val handler = Handler(Looper.getMainLooper())
+            DeferredProcessTermination(
+                postDelayed = { callback, delayMs -> handler.postDelayed(callback, delayMs) },
+                removeCallback = { callback -> handler.removeCallbacks(callback) },
+                terminate = { Process.killProcess(Process.myPid()) },
+            )
+        }
 
         fun intent(context: Context, request: ProbeRequest): Intent =
             Intent(context, HookVerificationService::class.java)
@@ -129,3 +126,32 @@ class HookVerificationService : Service() {
 @Suppress("DEPRECATION")
 private fun Intent.resultReceiver(key: String): ResultReceiver? =
     getParcelableExtra(key) as? ResultReceiver
+
+internal class DeferredProcessTermination(
+    private val postDelayed: (Runnable, Long) -> Unit,
+    private val removeCallback: (Runnable) -> Unit,
+    private val terminate: () -> Unit,
+) {
+    private var pending: Runnable? = null
+
+    @Synchronized
+    fun cancelPending() {
+        pending?.let(removeCallback)
+        pending = null
+    }
+
+    @Synchronized
+    fun schedule(delayMs: Long) {
+        cancelPending()
+        lateinit var callback: Runnable
+        callback = Runnable {
+            synchronized(this) {
+                if (pending !== callback) return@synchronized
+                pending = null
+                terminate()
+            }
+        }
+        pending = callback
+        postDelayed(callback, delayMs)
+    }
+}

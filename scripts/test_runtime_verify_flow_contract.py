@@ -174,6 +174,53 @@ class RuntimeVerifyFlowContractTest(unittest.TestCase):
             runtime_flow.verify_trace(not_scoped, expected_fingerprint=FP2).passed
         )
 
+    def test_latest_probe_failure_cannot_be_masked_by_historical_delivery(self):
+        lines = [
+            f"FakeGPS-Probe: event=requested requestId=old fp={FP1}",
+            f"FakeGPS-Probe: event=delivered requestId=old fp={FP1} fields=1",
+            f"FakeGPS-Probe: event=requested requestId=current fp={FP1}",
+            f"FakeGPS-Probe: event=failed requestId=current fp={FP1} reason=NOT_SCOPED",
+        ]
+
+        verdict = runtime_flow.verify_trace(
+            lines,
+            expected_fingerprint=FP1,
+            require_probe=True,
+        )
+
+        self.assertFalse(verdict.passed)
+        self.assertIn("latest probe was not delivered", verdict.errors)
+
+    def test_expected_failure_must_belong_to_latest_probe(self):
+        lines = [
+            f"FakeGPS-Probe: event=requested requestId=old fp={FP1}",
+            f"FakeGPS-Probe: event=failed requestId=old fp={FP1} reason=NOT_SCOPED",
+            f"FakeGPS-Probe: event=requested requestId=current fp={FP1}",
+            f"FakeGPS-Probe: event=delivered requestId=current fp={FP1} fields=1",
+        ]
+
+        verdict = runtime_flow.verify_trace(
+            lines,
+            expected_fingerprint=FP1,
+            expected_probe_failure="NOT_SCOPED",
+        )
+
+        self.assertFalse(verdict.passed)
+        self.assertIn("missing probe failure NOT_SCOPED", verdict.errors)
+
+    def test_expected_fingerprint_must_belong_to_latest_probe(self):
+        lines = [
+            f"FakeGPS-Probe: event=requested requestId=old fp={FP1}",
+            f"FakeGPS-Probe: event=delivered requestId=old fp={FP1} fields=1",
+            f"FakeGPS-Probe: event=requested requestId=current fp={FP2}",
+            f"FakeGPS-Probe: event=delivered requestId=current fp={FP2} fields=1",
+        ]
+
+        verdict = runtime_flow.verify_trace(lines, expected_fingerprint=FP1)
+
+        self.assertFalse(verdict.passed)
+        self.assertIn(f"missing delivered fingerprint {FP1}", verdict.errors)
+
 
 if __name__ == "__main__":
     unittest.main()

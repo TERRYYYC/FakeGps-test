@@ -43,7 +43,9 @@ public class RuntimeProbeWiringContractTest {
         assertTrue(service.contains("DeviceObserver"));
         assertTrue(service.contains("ProbeObservationCodec"));
         assertTrue(service.contains("killProcess"));
-        assertTrue(service.contains("compareAndSet"));
+        assertTrue(service.contains("DeferredProcessTermination"));
+        assertTrue(service.contains("cancelPending"));
+        assertTrue(service.contains("schedule"));
         assertFalse(service.contains("probeDelivered"));
     }
 

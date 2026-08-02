@@ -120,7 +120,6 @@ def verify_trace(
     for index, event in enumerate(events):
         if event.event == "requested":
             requested.setdefault((event.request_id, event.fingerprint), []).append(index)
-    delivered = [event for event in events if event.event == "delivered"]
     for terminal_index, event in enumerate(events):
         if event.event != "delivered":
             continue
@@ -184,23 +183,54 @@ def verify_trace(
         if expected not in observed_intervals:
             errors.append(f"missing interval {expected}")
 
-    if require_probe and not delivered:
-        errors.append("no correlated probe delivery")
+    latest_request = next(
+        (
+            (index, event)
+            for index, event in reversed(tuple(enumerate(events)))
+            if event.event == "requested"
+        ),
+        None,
+    )
+    latest_terminal = None
+    if latest_request is not None:
+        request_index, request = latest_request
+        latest_terminal = next(
+            (
+                event
+                for index, event in enumerate(events)
+                if index > request_index
+                and event.event in {"delivered", "failed"}
+                and event.request_id == request.request_id
+                and event.fingerprint == request.fingerprint
+            ),
+            None,
+        )
+
+    if require_probe and (
+        latest_terminal is None or latest_terminal.event != "delivered"
+    ):
+        errors.append("latest probe was not delivered")
     if require_scheduler and not owners_by_process:
         errors.append("no scheduler owner evidence")
 
     if expected_probe_failure is not None:
-        if not any(
-            event.event == "failed"
-            and event.reason == expected_probe_failure
-            and (expected_fingerprint is None or event.fingerprint == expected_fingerprint)
-            for event in events
+        if not (
+            latest_request is not None
+            and latest_terminal is not None
+            and latest_terminal.event == "failed"
+            and latest_terminal.reason == expected_probe_failure
+            and (
+                expected_fingerprint is None
+                or latest_request[1].fingerprint == expected_fingerprint
+            )
         ):
             errors.append(f"missing probe failure {expected_probe_failure}")
     elif expected_fingerprint is not None:
-        if not any(
-            event.event == "delivered" and event.fingerprint == expected_fingerprint
-            for event in events
+        if not (
+            latest_request is not None
+            and latest_request[1].fingerprint == expected_fingerprint
+            and latest_terminal is not None
+            and latest_terminal.event == "delivered"
         ):
             errors.append(f"missing delivered fingerprint {expected_fingerprint}")
 
