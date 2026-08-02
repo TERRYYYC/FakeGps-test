@@ -132,3 +132,114 @@ latest change.
 `6b3eb5b` on `feat/address-hook-cadence`
 
 [宪宪/claude-opus-4-6]
+
+---
+
+# Extended Validation Matrix (R2 follow-up, HEAD `42ae1d2`)
+
+Sol's R2 review flagged a validation gap: the original 57x figure covered only
+single-process, file-injected stimulus. This section closes that gap with
+multi-process, real-UI-publish, frozen-process, and cold-start evidence.
+Device: moto g54 5G (ZY22JHW9M4), Android 15, LSPosed (zygisk_vector), SELinux
+Enforcing. Module under test: release APK built from `42ae1d2`, installed as
+`name.caiyao.fakegps`.
+
+## 1. Multi-process latency (2 live target apps simultaneously)
+
+Processes armed: `com.google.android.apps.maps` (pid 21096→23472 across
+restarts), `com.hopefactory2021.fakegpslocation` (pid 21128), and
+`com.google.android.apps.maps:server_recovery_process`. All three logged
+`event=observer_armed` on the same prefs directory; zero
+`observer_arm_failed` / `timer_fallback` events.
+
+6 probe rounds (`--seed 42 --settle 3`), both live processes accepting every
+round (12 samples):
+
+| Metric | Value |
+|--------|-------|
+| min | 0.174s |
+| mean | **0.208s** |
+| median | 0.214s |
+| max | 0.244s |
+| intra-round cross-process delta | ≤ 0.002s |
+
+Raw data: `phase-b-raw-multiprocess.json`.
+
+The ≤2ms intra-round delta is the empirical existence proof of the "global
+commit instant" Phase A found missing: one file write commits all live hooked
+processes within measurement resolution of each other. (Probe numbers include
+~100-200ms adb/logcat overhead; see §2 for the tighter real-path figure.)
+
+## 2. Real UI publish (end-to-end, no file injection)
+
+Drove the actual write path: Settings → 刷新间隔 → picked a new value in the
+app UI. This exercises Compose → SettingsViewModel → RefreshIntervalUpdate →
+ConfigPrefsSync (Room open + ContentProvider queries + JSON build + atomic
+commit) → inotify → hook reload. Correlated by payload fingerprint between the
+app-side `ConfigPrefsSync: published … fp=` log and hook-side
+`transport accepted … fp=` logs.
+
+| Publish (device time) | Payload change | Hook accept (per process) | Publish→accept |
+|---|---|---|---|
+| 02:24:27.071 | interval 5s→10s, fp=769b68e1… | Maps 02:24:27.078 | **7ms** |
+| 02:26:44.033 | interval 10s→5s, fp=a46f31b7… | hopefactory .038, Maps .040 | **5ms / 7ms** |
+
+Both publishes also produced `event=interval_changed` evidence per process
+(5000↔10000ms), confirming the scheduler adopts payload-driven intervals on
+the observer path. The ~200ms probe figure is therefore confirmed to be
+dominated by harness overhead; real propagation is single-digit milliseconds.
+The second publish restored the user's original payload (fp matches the
+pre-test baseline) — device config left semantically unchanged.
+
+## 3. Frozen / cached processes (Android app freezer)
+
+During testing, two processes stopped accepting while still alive:
+`maps:server_recovery_process` (pid 23649) and later
+`com.hopefactory2021.fakegpslocation` (pid 21128). Root cause confirmed via
+kernel evidence, not inference:
+
+```
+08-03 02:21:13 ActivityManager: freezing 23649 … reason = oom_cached
+/sys/fs/cgroup/uid_10373/pid_21128/cgroup.freeze = 1
+```
+
+Android's cached-app freezer suspends all threads of a backgrounded process —
+the timer Handler and the FileObserver thread alike. This is OS behavior, not
+an observer defect, and it bounds the "global refresh" claim to *live*
+processes. Recovery verified: on re-launch (unfreeze), pid 21128 accepted the
+payload published 66s earlier on its very first heartbeat tick
+(02:25:33.166, `interval_changed 10000→5000` included) — the timer safety net
+converges frozen processes on wake, exactly the fail-closed design intent.
+
+## 4. Cold process start
+
+`handleLoadPackage` performs a synchronous `reloadSnapshot()` before hook
+registration and before the timer's `INITIAL_DELAY_MS` ever matters. Captured
+at Maps cold start (after `am force-stop`):
+
+```
+02:21:01.390 FakeGPS: Loaded config for com.google.android.apps.maps | location=true | cellRebuild=true
+02:21:01.484 event=scheduler_owned …
+02:21:01.489 event=observer_armed …
+```
+
+A fresh process serves the current config from its first hook invocation; the
+Phase A concern about a 3s passthrough window does not apply to the serving
+path (the initial load is synchronous, not timer-gated).
+
+## 5. Pre-existing gap observed (not introduced by this change)
+
+`maps:server_recovery_process` logs `fused impl NOT found, falling back to
+abstract … FusedLocationProviderClient` followed by "Cannot hook abstract
+methods" skips — the GMS obfuscation brittleness already catalogued in
+phase-a-insight.md §6. Unchanged by this branch; noted so R3 review does not
+mistake it for a regression.
+
+## Verdict
+
+The R2 validation gap is closed: propagation is 5-7ms on the real UI path,
+≤0.25s (harness-dominated) under file injection, simultaneous across live
+processes (≤2ms spread), and fail-closed for frozen (converge on wake) and
+cold (synchronous initial load) processes.
+
+[墨墨/kimi-k3🐾]
