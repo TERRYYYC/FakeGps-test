@@ -120,3 +120,20 @@ if [[ -n "$SCREENSHOT_PATH" ]]; then
 fi
 
 echo "ACCEPTANCE_ACTIVE_PHASE_COMPLETE"
+
+restore
+restored_mock_app=$(
+    "${ADB[@]}" shell cmd appops query-op android:mock_location allow | tr -d '\r'
+)
+test "$restored_mock_app" = "$REFERENCE_PACKAGE"
+test -z "$("${ADB[@]}" shell pidof "$LAB_PACKAGE" | tr -d '\r')"
+
+"${ADB[@]}" shell monkey -p "$REFERENCE_PACKAGE" 1 >/dev/null
+sleep 2
+echo "REFERENCE_APP_FOREGROUND"
+"${ADB[@]}" shell dumpsys activity activities \
+    | rg 'mResumedActivity|topResumedActivity' \
+    | rg "$REFERENCE_PACKAGE" \
+    | sed -n '1,2p'
+echo "ACCEPTANCE_RESTORE_PHASE_COMPLETE"
+trap - EXIT
