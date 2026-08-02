@@ -103,16 +103,47 @@ public class MainHookRefreshContractTest {
         assertTrue("startWatching call missing", observer.contains("startWatching"));
     }
 
+    // --- SnapshotSkipDecision behavioral tests (replaces bytecode-only fingerprintSkipIncludesHourCheck) ---
+
     /**
      * Review finding #1 (Sol): fingerprint skip must include hour-of-day so that
      * time_based mode re-evaluates on hour boundaries even when config text is identical.
-     * Without this, crossing an active-hours boundary silently freezes the stale Snapshot.
+     *
+     * Same fingerprint + same hour = skip (no redundant parse).
      */
     @Test
-    public void fingerprintSkipIncludesHourCheck() throws Exception {
-        String hook = classBytecode("name.caiyao.fakegps.hook.MainHook");
-        assertTrue("LAST_EVALUATED_HOUR field missing — fingerprint skip must include hour check",
-                hook.contains("LAST_EVALUATED_HOUR"));
+    public void shouldSkip_sameFingerprint_sameHour_skips() {
+        assertTrue(SnapshotSkipDecision.shouldSkip("abc123", "abc123", 14, 14));
+    }
+
+    /** Different fingerprint = config changed, must reload regardless of hour. */
+    @Test
+    public void shouldSkip_differentFingerprint_doesNotSkip() {
+        assertFalse(SnapshotSkipDecision.shouldSkip("abc123", "def456", 14, 14));
+    }
+
+    /** Same fingerprint but different hour = hour boundary crossed, must re-evaluate. */
+    @Test
+    public void shouldSkip_sameFingerprint_differentHour_doesNotSkip() {
+        assertFalse(SnapshotSkipDecision.shouldSkip("abc123", "abc123", 15, 14));
+    }
+
+    /** Null fingerprint (first load or parse failure) must never skip. */
+    @Test
+    public void shouldSkip_nullFingerprint_doesNotSkip() {
+        assertFalse(SnapshotSkipDecision.shouldSkip(null, "abc123", 14, 14));
+    }
+
+    /** No previous fingerprint (cold start) must not skip. */
+    @Test
+    public void shouldSkip_nullPreviousFingerprint_doesNotSkip() {
+        assertFalse(SnapshotSkipDecision.shouldSkip("abc123", null, 14, 14));
+    }
+
+    /** Both null = cold start with null payload, must not skip. */
+    @Test
+    public void shouldSkip_bothNull_doesNotSkip() {
+        assertFalse(SnapshotSkipDecision.shouldSkip(null, null, 14, 14));
     }
 
     /**
@@ -125,6 +156,23 @@ public class MainHookRefreshContractTest {
         String observer = classBytecode("name.caiyao.fakegps.hook.PrefsDirectoryObserver");
         assertTrue("isDirectory check missing — arm() must verify target dir exists",
                 observer.contains("isDirectory"));
+    }
+
+    /**
+     * Review finding (Sol R2): heartbeat handler must attempt observer re-arm when
+     * observer is null or not armed. Without this, an initial arm failure permanently
+     * degrades the process to timer-only mode with no recovery path.
+     *
+     * Verified via bytecode: the timer callback (MainHook$1) must reference both
+     * isArmed (check) and tryArmObserver (retry).
+     */
+    @Test
+    public void heartbeatHandlerRetriesObserverArm() throws Exception {
+        String timerCallback = classBytecode("name.caiyao.fakegps.hook.MainHook$1");
+        assertTrue("heartbeat must check isArmed for lazy retry",
+                timerCallback.contains("isArmed"));
+        assertTrue("heartbeat must call tryArmObserver for recovery",
+                timerCallback.contains("tryArmObserver"));
     }
 
     private static String classBytecode(String className) throws Exception {

@@ -119,37 +119,12 @@ public class MainHook implements IXposedHookLoadPackage {
                 lpparam.processName, REFRESH_SCHEDULER.currentDelayMs()));
 
         // Phase B: event-driven observer (primary) + timer heartbeat (safety net).
-        // Observer delivers near-instant reload on prefs change via inotify.
-        // Timer always runs as safety net; fingerprint skip makes ticks near-free.
-        boolean observerArmed = false;
-        try {
-            XSharedPreferences probePrefs = new XSharedPreferences(
-                    name.caiyao.fakegps.BuildConfig.APPLICATION_ID, PREFS_NAME);
-            java.io.File prefsFile = probePrefs.getFile();
-            String dirPath = prefsFile.getParent();
-            String fileName = prefsFile.getName();
-
-            prefsObserver = new PrefsDirectoryObserver(
-                    dirPath, fileName, () -> reloadSnapshot(lpparam.processName));
-            observerArmed = prefsObserver.arm();
-
-            if (observerArmed) {
-                XposedBridge.log(RuntimeEvidence.observerArmed(
-                        lpparam.processName, dirPath));
-            } else {
-                XposedBridge.log(RuntimeEvidence.observerArmFailed(
-                        lpparam.processName, "arm() returned false"));
-            }
-        } catch (Throwable t) {
-            XposedBridge.log(RuntimeEvidence.observerArmFailed(
-                    lpparam.processName,
-                    t.getClass().getSimpleName() + ": " + t.getMessage()));
-        }
-
-        // Timer always runs: as heartbeat when observer is primary, or as sole
-        // refresh mechanism when observer failed. Fingerprint-based skip in
-        // loadSnapshot() makes heartbeat ticks near-free (~one SHA-256 compare).
+        // tryArmObserver handles pre-flight checks and evidence logging.
+        // If initial arm fails, heartbeat will retry on each tick.
+        boolean observerArmed = tryArmObserver(lpparam.processName);
         if (!observerArmed) {
+            XposedBridge.log(RuntimeEvidence.observerArmFailed(
+                    lpparam.processName, "initial arm failed"));
             XposedBridge.log(RuntimeEvidence.timerFallback(
                     lpparam.processName, REFRESH_SCHEDULER.currentDelayMs()));
         }
@@ -157,6 +132,12 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             public void handleMessage(Message msg) {
                 if (msg.what == 1) {
+                    // Lazy retry: re-arm observer if initial arm failed or observer died.
+                    // Cost: one tryArmObserver per heartbeat tick until success — acceptable
+                    // because ticks are ≥5s apart and arm() is a single stat+inotify syscall.
+                    if (prefsObserver == null || !prefsObserver.isArmed()) {
+                        tryArmObserver(lpparam.processName);
+                    }
                     Snapshot refreshed = reloadSnapshot(lpparam.processName);
                     debug("timer refresh -> hasLocation=" + refreshed.hasLocation());
                 }
@@ -208,6 +189,12 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private Snapshot loadSnapshot() {
         try {
+            // Single time sample for the entire evaluation. Used by fingerprint skip,
+            // active-hours check, and hour recording. Separate reads would race at hour
+            // boundaries. (Review finding #2 R2, Sol)
+            final int evaluationHour = java.util.Calendar.getInstance()
+                    .get(java.util.Calendar.HOUR_OF_DAY);
+
             XSharedPreferences prefs = new XSharedPreferences(
                     name.caiyao.fakegps.BuildConfig.APPLICATION_ID, PREFS_NAME);
             prefs.makeWorldReadable();
@@ -235,9 +222,8 @@ public class MainHook implements IXposedHookLoadPackage {
             // the stale Snapshot. (Review finding #1, Sol)
             String fingerprint = PublishedConfig.Companion.fingerprint(jsonStr);
             String previousFingerprint = CURRENT_FINGERPRINT.get();
-            int currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
-            if (fingerprint.equals(previousFingerprint)
-                    && currentHour == LAST_EVALUATED_HOUR.get()) {
+            if (shouldSkipLoad(fingerprint, previousFingerprint,
+                    evaluationHour, LAST_EVALUATED_HOUR.get())) {
                 debug("fingerprint and hour unchanged (" + fingerprint + ") -> skip parse");
                 return CURRENT.get();
             }
@@ -267,20 +253,21 @@ public class MainHook implements IXposedHookLoadPackage {
             if ("off".equals(mode)) {
                 debug("mode=off -> passthrough");
                 return acceptLoadedSnapshot(
-                        Snapshot.PASSTHROUGH, refreshIntervalSec, fingerprint);
+                        Snapshot.PASSTHROUGH, refreshIntervalSec, fingerprint, evaluationHour);
             }
             if ("time_based".equals(mode)) {
                 org.json.JSONObject hours = root.optJSONObject("activeHours");
                 if (hours != null) {
-                    int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
                     int start = hours.optInt("start", 0);
                     int end = hours.optInt("end", 24);
-                    boolean inRange = (start <= end) ? (h >= start && h < end) : (h >= start || h < end);
+                    boolean inRange = (start <= end)
+                            ? (evaluationHour >= start && evaluationHour < end)
+                            : (evaluationHour >= start || evaluationHour < end);
                     if (!inRange) {
                         debug("outside active hours (" + start + "-" + end
-                                + ") current=" + h + " -> passthrough");
+                                + ") current=" + evaluationHour + " -> passthrough");
                         return acceptLoadedSnapshot(
-                                Snapshot.PASSTHROUGH, refreshIntervalSec, fingerprint);
+                                Snapshot.PASSTHROUGH, refreshIntervalSec, fingerprint, evaluationHour);
                     }
                 }
             }
@@ -328,7 +315,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     + " locationDelivery=" + locationDeliveryMode
                     + " hasLocation=" + s.hasLocation() + " lat=" + s.latitude + " lng=" + s.longitude
                     + " rebuildCells=" + s.hasCellReconstructionDecision());
-            return acceptLoadedSnapshot(s, refreshIntervalSec, fingerprint);
+            return acceptLoadedSnapshot(s, refreshIntervalSec, fingerprint, evaluationHour);
         } catch (Throwable t) {
             // Read/parse failure: keep last-known-good (do NOT revert to real device data mid-test).
             debug("loadSnapshot prefs error: " + t);
@@ -340,12 +327,53 @@ public class MainHook implements IXposedHookLoadPackage {
     private Snapshot acceptLoadedSnapshot(
             Snapshot snapshot,
             Integer refreshIntervalSec,
-            String fingerprint) {
+            String fingerprint,
+            int evaluationHour) {
         REFRESH_SCHEDULER.acceptPayloadInterval(refreshIntervalSec, true);
         CURRENT_FINGERPRINT.set(fingerprint);
-        LAST_EVALUATED_HOUR.set(
-                java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY));
+        LAST_EVALUATED_HOUR.set(evaluationHour);
         return snapshot;
+    }
+
+    /**
+     * Fingerprint skip decision: safe to skip only if payload AND hour are unchanged.
+     * The hour check ensures time_based mode re-evaluates on hour boundaries even when
+     * config text is identical. Package-private for behavioral testing.
+     */
+    static boolean shouldSkipLoad(String fingerprint, String previousFingerprint,
+                                   int evaluationHour, int lastEvaluatedHour) {
+        return SnapshotSkipDecision.shouldSkip(
+                fingerprint, previousFingerprint, evaluationHour, lastEvaluatedHour);
+    }
+
+    /**
+     * Try to (re-)arm the prefs directory observer. Stops any previous observer first.
+     * Returns true if newly armed. Called at startup and retried on each heartbeat tick
+     * when not armed, so directories that appear after initial arm attempt are recovered.
+     * (Review R2, Sol — lifecycle recovery)
+     */
+    private boolean tryArmObserver(String processName) {
+        try {
+            if (prefsObserver != null) {
+                try { prefsObserver.stopWatching(); } catch (Throwable ignored) {}
+            }
+            XSharedPreferences probePrefs = new XSharedPreferences(
+                    name.caiyao.fakegps.BuildConfig.APPLICATION_ID, PREFS_NAME);
+            java.io.File prefsFile = probePrefs.getFile();
+            String dirPath = prefsFile.getParent();
+            String fileName = prefsFile.getName();
+
+            PrefsDirectoryObserver obs = new PrefsDirectoryObserver(
+                    dirPath, fileName, () -> reloadSnapshot(processName));
+            if (obs.arm()) {
+                prefsObserver = obs;
+                XposedBridge.log(RuntimeEvidence.observerArmed(processName, dirPath));
+                return true;
+            }
+        } catch (Throwable t) {
+            debug("observer arm attempt failed: " + t.getMessage());
+        }
+        return false;
     }
 
     /**
