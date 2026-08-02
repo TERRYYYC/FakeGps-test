@@ -1,7 +1,7 @@
 package name.caiyao.fakegps.mockprovider
 
+import android.annotation.SuppressLint
 import android.location.Location
-import android.location.Criteria
 import android.location.LocationManager
 import android.location.provider.ProviderProperties
 import android.os.Build
@@ -64,6 +64,7 @@ class AndroidMockProviderGateway(
         locationManager.addTestProvider(LocationManager.GPS_PROVIDER, properties)
     }
 
+    @SuppressLint("InlinedApi")
     @Suppress("DEPRECATION")
     private fun addLegacyGpsProvider() {
         locationManager.addTestProvider(
@@ -75,8 +76,8 @@ class AndroidMockProviderGateway(
             true,
             true,
             true,
-            Criteria.POWER_HIGH,
-            Criteria.ACCURACY_FINE,
+            ProviderProperties.POWER_USAGE_HIGH,
+            ProviderProperties.ACCURACY_FINE,
         )
     }
 }
