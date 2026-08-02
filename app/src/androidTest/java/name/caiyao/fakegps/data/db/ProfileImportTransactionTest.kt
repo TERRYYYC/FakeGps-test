@@ -84,4 +84,19 @@ class ProfileImportTransactionTest {
 
         assertEquals(listOf(ProfileEntity(id = originalId, addname = "original", tac = 1)), dao.getAll())
     }
+
+    @Test
+    fun savePublishesTheExactRowThatWasSaved() = runBlocking {
+        var selectedId: Long? = null
+        val repo = ProfileRepository(db, publishOverride = { id ->
+            selectedId = id
+            true
+        })
+        db.profileDao().insert(ProfileEntity(addname = "older", latitude = 1.0))
+
+        val result = repo.save(ProfileEntity(addname = "selected", latitude = 22.5461))
+
+        assertEquals(result.id, selectedId)
+        assertEquals(true, result.published)
+    }
 }
