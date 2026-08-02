@@ -13,7 +13,7 @@ ADB=(adb -s "$SERIAL")
 restore() {
     local restore_status=0
     set +e
-    "${ADB[@]}" shell run-as "$LAB_PACKAGE" am startservice \
+    "${ADB[@]}" shell run-as "$LAB_PACKAGE" am startservice --user 0 \
         -n "$LAB_COMPONENT" \
         -a name.caiyao.fakegps.mockprovider.action.STOP >/dev/null 2>&1
     sleep 1
@@ -52,7 +52,7 @@ done
 "${ADB[@]}" shell cmd appops set "$REFERENCE_PACKAGE" android:mock_location deny
 "${ADB[@]}" shell cmd appops set "$LAB_PACKAGE" android:mock_location allow
 
-"${ADB[@]}" shell run-as "$LAB_PACKAGE" am start-foreground-service \
+"${ADB[@]}" shell run-as "$LAB_PACKAGE" am start-foreground-service --user 0 \
     -n "$LAB_COMPONENT" \
     -a name.caiyao.fakegps.mockprovider.action.START \
     --es latitude 40.7128 \
