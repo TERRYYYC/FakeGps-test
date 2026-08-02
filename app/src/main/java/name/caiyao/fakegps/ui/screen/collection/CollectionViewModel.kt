@@ -11,12 +11,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import name.caiyao.fakegps.data.db.AppDatabase
 import name.caiyao.fakegps.data.db.ProfileSummary
+import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.data.importer.ImportIssueCode
 import name.caiyao.fakegps.data.importer.ProfileArchiveParser
 import name.caiyao.fakegps.data.importer.ProfileImportAnalysis
@@ -29,6 +31,7 @@ class CollectionViewModel(app: Application) : AndroidViewModel(app) {
     private val parser = ProfileArchiveParser()
     private var importGeneration = 0L
     private var parseJob: Job? = null
+    private val publicationRevision = MutableStateFlow(0L)
 
     private val _importState = MutableStateFlow<ProfileImportUiState>(ProfileImportUiState.Idle)
     val importState: StateFlow<ProfileImportUiState> = _importState
@@ -37,23 +40,35 @@ class CollectionViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /**
-     * Id of the profile the hook is actually running on, or null when there is none.
+     * Id of the row represented by the actual published payload, or null when none matches.
      *
-     * ConfigPrefsSync publishes the FIRST row of `id ASC`, i.e. the OLDEST profile — while this list
-     * is ordered `id DESC`, so the effective profile renders at the BOTTOM. Users had no way to tell
-     * which of several profiles was live, and editing any other one appeared to do nothing. Derived
-     * from the same rule the transport uses so the badge cannot drift away from the real behaviour.
+     * Import deliberately does not publish, so guessing from Room order would mark the first row of
+     * an empty-database import as active even though the hook still has no config. Matching the
+     * published bytes also keeps stale/failed publication states from receiving a false badge.
      */
-    val effectiveProfileId: StateFlow<Long?> = repo.observeAll()
-        .map { list -> list.minByOrNull { it.id }?.id }
+    val effectiveProfileId: StateFlow<Long?> = combine(
+        repo.observeEntities(),
+        publicationRevision,
+    ) { entities, _ ->
+        PublishedProfileMatcher.effectiveProfileId(
+            entities,
+            ConfigPrefsSync.readPublished(getApplication()),
+        )
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     fun delete(id: Long) {
-        viewModelScope.launch { repo.deleteById(id) }
+        viewModelScope.launch {
+            repo.deleteById(id)
+            publicationRevision.value++
+        }
     }
 
     fun deleteAll() {
-        viewModelScope.launch { repo.deleteAll() }
+        viewModelScope.launch {
+            repo.deleteAll()
+            publicationRevision.value++
+        }
     }
 
     fun previewImport(uri: Uri) {

@@ -20,11 +20,7 @@ object ProfileEntityCodec {
         val lat = values["latitude"]?.toDoubleOrNull()
         val lon = values["longitude"]?.toDoubleOrNull()
         val canonicalName = addname?.takeIf { it.isNotBlank() }
-            ?: if (lat != null && lon != null) {
-                String.format(Locale.US, "%.6f, %.6f", lat, lon)
-            } else {
-                null
-            }
+            ?: generatedName(lat, lon)
 
         return ProfileEntity(
             id = id,
@@ -215,4 +211,11 @@ object ProfileEntityCodec {
     }
 
     fun canonical(entity: ProfileEntity): ProfileEntity = entity.copy(id = 0L)
+
+    fun generatedName(latitude: Double?, longitude: Double?): String? =
+        if (latitude != null && longitude != null) {
+            String.format(Locale.US, "%.6f, %.6f", latitude, longitude)
+        } else {
+            null
+        }
 }

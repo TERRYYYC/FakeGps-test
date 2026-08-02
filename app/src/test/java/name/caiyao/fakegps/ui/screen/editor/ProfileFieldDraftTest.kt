@@ -2,9 +2,11 @@ package name.caiyao.fakegps.ui.screen.editor
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import name.caiyao.fakegps.data.db.ProfileEntity
+import name.caiyao.fakegps.data.db.ProfileEntityCodec
 
 class ProfileFieldDraftTest {
 
@@ -67,6 +69,34 @@ class ProfileFieldDraftTest {
         assertFalse(ProfileFieldDraft.validationErrors(mapOf("gsm_ber" to "7")).containsKey("gsm_ber"))
         assertFalse(ProfileFieldDraft.validationErrors(mapOf("gsm_ber" to "99")).containsKey("gsm_ber"))
         assertTrue(ProfileFieldDraft.validationErrors(mapOf("gsm_ber" to "8")).containsKey("gsm_ber"))
+    }
+
+    @Test
+    fun `text fields preserve significant leading and trailing whitespace`() {
+        val entity = mapToEntity(
+            mapOf("wifi_ssid" to "  cafe network  ", "operator_name" to " Carrier "),
+            0L,
+        )
+
+        assertEquals("  cafe network  ", entity.wifiSsid)
+        assertEquals(" Carrier ", entity.operatorName)
+    }
+
+    @Test
+    fun `editing an imported profile preserves its custom archive name`() {
+        val entity = mapToEntity(
+            draft = mapOf("latitude" to "51", "longitude" to "31"),
+            id = 17L,
+            addname = "Imported favorite",
+        )
+
+        assertEquals("Imported favorite", entity.addname)
+        assertEquals("Imported favorite", profileNameOverride(entity))
+        assertNull(
+            profileNameOverride(
+                entity.copy(addname = ProfileEntityCodec.generatedName(entity.latitude, entity.longitude)),
+            ),
+        )
     }
 
     @Test

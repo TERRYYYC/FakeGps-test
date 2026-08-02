@@ -51,6 +51,7 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
     val scope: ObservationScope = ObservationScope.current()
 
     private var editingId: Long = 0L
+    private var editingNameOverride: String? = null
 
     fun load(profileId: Long, defaultLat: Double, defaultLon: Double) {
         viewModelScope.launch {
@@ -59,6 +60,7 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
                     val entity = repo.getById(profileId)
                     if (entity != null) {
                         editingId = entity.id
+                        editingNameOverride = profileNameOverride(entity)
                         _fieldValues.value = runCatching { entityToMap(entity) }
                             .getOrElse {
                                 _notice.value =
@@ -70,6 +72,7 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 editingId = 0L
+                editingNameOverride = null
                 _fieldValues.value = mapOf(
                     "latitude" to defaultLat.toString(),
                     "longitude" to defaultLon.toString(),
@@ -115,7 +118,7 @@ class ProfileEditorViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
                 runCatching {
-                    val entity = mapToEntity(values, editingId)
+                    val entity = mapToEntity(values, editingId, editingNameOverride)
                     val result = repo.save(entity)
                     editingId = result.id
                     when (postSaveAction(result.published, thenVerify)) {
@@ -163,10 +166,18 @@ internal fun referenceColumns(values: Map<String, String>): Set<String> =
 internal fun entityToMap(entity: ProfileEntity): Map<String, String> =
     ProfileEntityCodec.toDraft(entity)
 
-internal fun mapToEntity(draft: Map<String, String>, id: Long): ProfileEntity {
+internal fun mapToEntity(
+    draft: Map<String, String>,
+    id: Long,
+    addname: String? = null,
+): ProfileEntity {
     val split = ProfileFieldDraft.split(draft)
     val normalized = split.values + split.unavailable.associateWith {
         ProfileEntityCodec.UNAVAILABLE_TOKEN
     }
-    return ProfileEntityCodec.fromDraft(normalized, id = id)
+    return ProfileEntityCodec.fromDraft(normalized, id = id, addname = addname)
+}
+
+internal fun profileNameOverride(entity: ProfileEntity): String? = entity.addname?.takeUnless {
+    it == ProfileEntityCodec.generatedName(entity.latitude, entity.longitude)
 }

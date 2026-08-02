@@ -22,6 +22,8 @@ class ProfileRepository(
 
     fun observeAll(): Flow<List<ProfileSummary>> = dao.observeAll()
 
+    fun observeEntities(): Flow<List<ProfileEntity>> = dao.observeEntities()
+
     fun observeCount(): Flow<Int> = dao.observeCount()
 
     suspend fun getById(id: Long): ProfileEntity? = dao.getById(id)

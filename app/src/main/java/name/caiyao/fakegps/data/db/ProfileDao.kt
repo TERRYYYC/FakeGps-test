@@ -15,6 +15,9 @@ interface ProfileDao {
     @Query("SELECT * FROM temp WHERE id = :id")
     suspend fun getById(id: Long): ProfileEntity?
 
+    @Query("SELECT * FROM temp ORDER BY id DESC")
+    fun observeEntities(): Flow<List<ProfileEntity>>
+
     @Query("SELECT * FROM temp ORDER BY id ASC")
     suspend fun getAll(): List<ProfileEntity>
 

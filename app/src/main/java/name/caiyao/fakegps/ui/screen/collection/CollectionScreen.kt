@@ -116,8 +116,12 @@ fun CollectionScreen(
             ) {
                 item(key = "__effective_hint") {
                     Text(
-                        text = "只有标记「生效中」的档案会被 hook 使用（最早创建的那条）。" +
-                            "编辑其它档案不会改变伪装结果。",
+                        text = if (effectiveId == null) {
+                            "当前没有收藏档案与已发布 Hook 配置匹配；导入只新增收藏，不会自动生效。"
+                        } else {
+                            "只有标记「生效中」的档案与已发布 Hook 配置一致。" +
+                                "编辑其它档案不会改变伪装结果。"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp),

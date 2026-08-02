@@ -3,6 +3,7 @@ package name.caiyao.fakegps.data.importer
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
+import java.nio.charset.Charset
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -129,6 +130,19 @@ class ProfileArchiveParserTest {
             contents.toString(StandardCharsets.UTF_8)
                 .replace("<c r=\"A2\" t=\"s\">", "<c r=\"A2\" t=\"d\">")
                 .toByteArray(StandardCharsets.UTF_8)
+        }
+
+        assertIssue("profiles.xlsx", archive, ImportIssueCode.MALFORMED_FILE)
+    }
+
+    @Test
+    fun `XLSX rejects DOCTYPE independently of the XML byte encoding`() {
+        val archive = rewriteZip(fixture("valid-unicode.xlsx")) { name, contents ->
+            if (name != "[Content_Types].xml") return@rewriteZip contents
+            contents.toString(StandardCharsets.UTF_8)
+                .replace("encoding=\"UTF-8\"", "encoding=\"IBM037\"")
+                .replace("?>", "?><!DOCTYPE Types [<!ELEMENT Types ANY>]>")
+                .toByteArray(Charset.forName("IBM037"))
         }
 
         assertIssue("profiles.xlsx", archive, ImportIssueCode.MALFORMED_FILE)

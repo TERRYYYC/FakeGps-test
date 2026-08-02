@@ -7,6 +7,7 @@ import java.util.zip.ZipInputStream
 import javax.xml.parsers.DocumentBuilderFactory
 import org.w3c.dom.Element
 import org.w3c.dom.Node
+import org.xml.sax.SAXException
 
 internal object XlsxTableReader {
     private const val OFFICE_REL_NS =
@@ -251,7 +252,16 @@ internal object XlsxTableReader {
             isNamespaceAware = true
             isExpandEntityReferences = false
         }
-        factory.newDocumentBuilder().parse(ByteArrayInputStream(bytes))
+        val builder = factory.newDocumentBuilder().apply {
+            setEntityResolver { _, _ ->
+                throw SAXException("XLSX external XML entities are disabled")
+            }
+        }
+        val document = builder.parse(ByteArrayInputStream(bytes))
+        if (document.doctype != null) {
+            fail(ImportIssueCode.MALFORMED_FILE, "$partName 包含不允许的 DOCTYPE")
+        }
+        document
     } catch (failure: ProfileImportFormatException) {
         throw failure
     } catch (_: Throwable) {

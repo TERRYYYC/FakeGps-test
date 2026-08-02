@@ -48,37 +48,37 @@ object ProfileFieldValueValidator {
     )
 
     fun normalize(column: String, raw: String): Result {
-        val value = raw.trim()
-        if (value.isEmpty()) return Result()
+        if (raw.isBlank()) return Result()
         if (column == "addname") {
-            return if (value.length <= MAX_NAME_CHARS) {
-                Result(value)
+            return if (raw.length <= MAX_NAME_CHARS) {
+                Result(raw)
             } else {
                 Result(error = "档案名超过 $MAX_NAME_CHARS 字符")
             }
         }
         val spec = specs[column] ?: return Result(error = "未知字段")
-        if (value == ProfileEntityCodec.UNAVAILABLE_TOKEN) {
+        if (raw.length > MAX_VALUE_CHARS) {
+            return Result(error = "单元格超过 $MAX_VALUE_CHARS 字符")
+        }
+        val trimmed = raw.trim()
+        if (trimmed == ProfileEntityCodec.UNAVAILABLE_TOKEN) {
             return if (UnavailableSpec.supportsUnavailable(column)) {
                 Result(ProfileEntityCodec.UNAVAILABLE_TOKEN)
             } else {
                 Result(error = "此字段不支持 -- 不上报")
             }
         }
-        if (value.length > MAX_VALUE_CHARS) {
-            return Result(error = "单元格超过 $MAX_VALUE_CHARS 字符")
-        }
 
         return when (spec.type) {
-            FieldType.TEXT -> validateText(column, value)
+            FieldType.TEXT -> validateText(column, raw)
             FieldType.BOOLEAN -> when {
-                value == "0" || value.equals("false", ignoreCase = true) -> Result("0")
-                value == "1" || value.equals("true", ignoreCase = true) -> Result("1")
+                trimmed == "0" || trimmed.equals("false", ignoreCase = true) -> Result("0")
+                trimmed == "1" || trimmed.equals("true", ignoreCase = true) -> Result("1")
                 else -> Result(error = "布尔值必须是 0/1/true/false")
             }
-            FieldType.INTEGER -> normalizeInteger(column, value)
-            FieldType.DOUBLE -> normalizeDecimal(column, value, false)
-            FieldType.FLOAT -> normalizeDecimal(column, value, true)
+            FieldType.INTEGER -> normalizeInteger(column, trimmed)
+            FieldType.DOUBLE -> normalizeDecimal(column, trimmed, false)
+            FieldType.FLOAT -> normalizeDecimal(column, trimmed, true)
         }
     }
 
