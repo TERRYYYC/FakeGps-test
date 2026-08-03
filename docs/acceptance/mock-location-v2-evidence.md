@@ -12,6 +12,8 @@ created: 2026-08-03
 
 # Mock Location v2 — Evidence Manifest and Quality Gate
 
+> **Historical Lab evidence.** This manifest proves the experiment behind PR #8; it is not evidence that the feature was integrated into 千网游 or that the old restore harness removed the system provider. Current product evidence is in `mock-location-main-integration-evidence.md`.
+
 ## Provenance
 
 - Repository: `https://github.com/TERRYYYC/FakeGps-test.git`
