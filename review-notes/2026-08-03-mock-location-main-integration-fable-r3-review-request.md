@@ -123,7 +123,8 @@ scripts/mock_provider_acceptance.sh ZY22JHW9M4
 # first-start / restart-clean / Kyiv / task removal / Maps / residue recovery / restore; exit 0
 ```
 
-- Debug APK: `0aa312f2e5fe9b6ce6ef67e17e1e90a6dadd540fcb2ac4ef1cf69d14396f9cbc`
+- Author Debug APK (Android Studio JBR 21.0.10): `0aa312f2e5fe9b6ce6ef67e17e1e90a6dadd540fcb2ac4ef1cf69d14396f9cbc`
+- Independent reviewer Debug APK (Homebrew OpenJDK 17.0.20): `83e725aac7615f2d646b34fd920ecce8fbab5ca70cf6066a206bf891ad62ebc4`
 - First-start screenshot: `cd9fecb9326a6743065a903e174353571f380802642e4f2ce6ad0903e05519c9`
 - Final device: reference App sole mock app; gps `identity=1000/android[GnssService]`; four packages installed; Bench service absent; notification permission restored.
 - Fallback/hotfix automation scripts are absent in this Android repo and the workspace governance repo; manual diff audit found no three-layer fallback. Controller catch has two explicit mutually exclusive recovery branches.
@@ -132,6 +133,7 @@ scripts/mock_provider_acceptance.sh ZY22JHW9M4
 
 - Plan: `feature-specs/2026-08-03-mock-location-main-integration.md`
 - Bug: `docs/bug-report/mock-provider-start-permission-false-residue/bug-report.md`
+- Build provenance bug: `docs/bug-report/debug-apk-hash-jdk-drift/bug-report.md`
 - Evidence: `docs/acceptance/mock-location-main-integration-evidence.md`
 - PR: `https://github.com/TERRYYYC/FakeGps-test/pull/10`
 

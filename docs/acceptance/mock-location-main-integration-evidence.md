@@ -17,7 +17,8 @@ created: 2026-08-03
 - R3 first-start recovery implementation: `5dbcfa43b17d2982772c81ee9eb2c8897f49ee94`
 - Device: moto g54 5G `ZY22JHW9M4`, Android 15
 - Debug main APK: `app/build/outputs/apk/debug/app-debug.apk`
-- Debug APK SHA-256: `0aa312f2e5fe9b6ce6ef67e17e1e90a6dadd540fcb2ac4ef1cf69d14396f9cbc`
+- Author dogfood Debug APK SHA-256 (exact source, Android Studio JBR 21.0.10): `0aa312f2e5fe9b6ce6ef67e17e1e90a6dadd540fcb2ac4ef1cf69d14396f9cbc`
+- Independent R3 reviewer Debug APK SHA-256 (exact source, Homebrew OpenJDK 17.0.20): `83e725aac7615f2d646b34fd920ecce8fbab5ca70cf6066a206bf891ad62ebc4`
 - Release APK SHA-256 (informational): `ae3c923eb42b080a73edeeb0836cef1783ec68b7f122ef07f50d919b9f490863`
 - Private screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/maps-main-kyiv-appop-recovery.png`
 - Screenshot SHA-256: `6ae4f78e3ea1f7a3f2d99e201181974aa06658bdd2ea38e3c1a1a5bf63ee2c96`
@@ -70,7 +71,7 @@ ACCEPTANCE_RESTORE_PHASE_COMPLETE
 
 Settings OFF 图与 15 秒录屏来自首轮主 App 集成，覆盖用户入口、同一生效档案坐标和开关动作。本轮 exact build 的 Maps 图由脚本先移除任务卡并确认 FGS/gps/fused 继续；Maps 已跟随蓝点而没有渲染 recenter 控件，脚本按可选控件处理并截图。画面蓝点位于 Kyiv Independence Square。随后脚本改选 app-op，验证残留 provider 与恢复指引，再重新授权当前千网游并由“重试停止”恢复 GNSS。最后确认 `.bench` 仍安装、服务无残留，并恢复参考 App。
 
-R3 first-start 图来自 debug APK `0aa312f2…f9cbc`：开关保持关闭，状态明确说明 System Mock 未启动，动作是“选择当前千网游 → 重新打开开关”；画面没有“残留位置”或“重试停止”。截图后同一 harness force-stop/reopen，并以 `FIRST_START_RESTART_CLEAN` 证明失败未持久化为 cleanup transaction。
+R3 first-start 图来自作者用 Android Studio JBR 21.0.10 构建的 debug APK `0aa312f2…f9cbc`：开关保持关闭，状态明确说明 System Mock 未启动，动作是“选择当前千网游 → 重新打开开关”；画面没有“残留位置”或“重试停止”。截图后同一 harness force-stop/reopen，并以 `FIRST_START_RESTART_CLEAN` 证明失败未持久化为 cleanup transaction。Fable5 另用 Homebrew OpenJDK 17.0.20 从 exact HEAD 构建 `83e725aa…ebc4` 并跑完整真机链 exit 0。
 
 ## Fresh verification
 
@@ -148,5 +149,5 @@ Dogfood 当轮发现并修复：
 - Android 不允许 App 自行成为“模拟位置信息应用”。若用户在运行中改选别的 App，原 test provider 可能残留；设置页会明确要求重新选择当前千网游后重试，绝不把权限失败显示成已停止。
 - 已运行的 Hook 目标进程按既有 5–60 秒可配置周期读取 mode。切换期间 provider 与旧 Snapshot 可能短暂重叠，但两者来自同一生效档案坐标；目标在下一次刷新读取新模式，这是现有 transport 的传播语义，不伪装成跨进程同步切换。
 - debug acceptance Activity 受 debug-only `android.permission.DUMP` gate 保护且不进入 release；它只操作 `.bench` 数据。该权限可由 adb 授予，正是无 root 验收 seam 的有意取舍。
-- Release SHA-256 仅记录作者构建产物，不作为 exact-code 可复现身份；R8/resource shrinking 在独立 reviewer 构建中未逐位复现。Debug APK hash 与 exact source checkout 仍作为可复核 artifact identity。
+- APK hash 必须与 exact source **及执行 Gradle 的 JDK**一起解释，不能单独作为跨环境 artifact identity。R3 已从 clean exact HEAD 决定性复现：JBR 21.0.10 为 `0aa312f2…f9cbc`，OpenJDK 17.0.20 为 `83e725aa…ebc4`；两者签名证书、资源及 16/18 个 DEX 相同，差异来自 javac 对 enum switch 的 lowering（JDK 17 额外生成 `UnavailableValueResolver$1`），继而改变两个 DEX。项目当前只固定 Java source/target 17，未固定 Gradle runtime JDK。Release SHA-256 同样只记录作者 JBR 21 构建，不声称跨 JDK 逐位复现；R8/resource shrinking 仍可能扩大环境差异。
 - 退役 Lab APK `name.caiyao.fakegps.mockprovider` 可能仍安装在开发设备；产品不会擅自卸载它。验收前置守卫要求参考 App 是唯一获准 mock app，避免 stale Lab 争用 app-op。
