@@ -36,6 +36,8 @@ class LocationDeliveryUiContractTest {
         )
 
         assertTrue(model.systemMockEnabled)
+        assertTrue(model.switchEnabled)
+        assertFalse(model.retryStopVisible)
         assertTrue(model.status.contains("运行中"))
         assertTrue(model.status.contains("9"))
         assertEquals("50.450100, 30.523400", model.effectiveCoordinate)
@@ -50,7 +52,30 @@ class LocationDeliveryUiContractTest {
         )
 
         assertTrue(model.status.contains("mock location app-op denied"))
+        assertFalse(model.switchEnabled)
+        assertTrue(model.retryStopVisible)
         assertEquals("生效中档案未配置有效经纬度", model.effectiveCoordinate)
+    }
+
+    @Test
+    fun `transition states disable repeated switch interaction`() {
+        val config = MockLocationConfig(50.4501, 30.5234)
+
+        val starting = LocationDeliveryUiContract.model(
+            LocationDeliveryMode.HOOK,
+            MockProviderState.Starting(config),
+            published(),
+        )
+        val stopping = LocationDeliveryUiContract.model(
+            LocationDeliveryMode.SYSTEM_MOCK,
+            MockProviderState.Stopping,
+            published(),
+        )
+
+        assertFalse(starting.switchEnabled)
+        assertFalse(stopping.switchEnabled)
+        assertFalse(starting.retryStopVisible)
+        assertFalse(stopping.retryStopVisible)
     }
 
     private fun published(

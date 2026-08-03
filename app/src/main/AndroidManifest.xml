@@ -85,8 +85,7 @@
         <service
             android:name=".mockprovider.MockProviderService"
             android:exported="false"
-            android:foregroundServiceType="location"
-            android:stopWithTask="true" />
+            android:foregroundServiceType="location" />
         <!--
             exported=false (review FC-6): this provider was world-readable with no permission, so
             ANY app on the device could read the full spoof profile — including the app under test,

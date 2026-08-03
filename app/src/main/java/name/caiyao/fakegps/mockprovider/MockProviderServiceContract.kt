@@ -27,10 +27,12 @@ object LocationDeliveryStartupPlan {
     fun commandFor(
         mode: LocationDeliveryMode,
         cleanupRequired: Boolean,
-    ): MockProviderCommand? = when (mode) {
-        LocationDeliveryMode.HOOK ->
-            if (cleanupRequired) MockProviderCommand.StopAndUseHook else null
-        LocationDeliveryMode.SYSTEM_MOCK -> MockProviderCommand.StartFromEffectiveProfile
+    ): MockProviderCommand? {
+        if (cleanupRequired) return MockProviderCommand.StopAndUseHook
+        return when (mode) {
+            LocationDeliveryMode.HOOK -> null
+            LocationDeliveryMode.SYSTEM_MOCK -> MockProviderCommand.StartFromEffectiveProfile
+        }
     }
 }
 

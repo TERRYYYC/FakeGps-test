@@ -7,6 +7,8 @@ import name.caiyao.fakegps.mockprovider.MockProviderState
 
 data class LocationDeliveryUiModel(
     val systemMockEnabled: Boolean,
+    val switchEnabled: Boolean,
+    val retryStopVisible: Boolean,
     val status: String,
     val detail: String,
     val effectiveCoordinate: String,
@@ -39,6 +41,9 @@ object LocationDeliveryUiContract {
 
         return LocationDeliveryUiModel(
             systemMockEnabled = mode == LocationDeliveryMode.SYSTEM_MOCK,
+            switchEnabled = providerState is MockProviderState.Idle ||
+                providerState is MockProviderState.Running,
+            retryStopVisible = providerState is MockProviderState.Failed,
             status = status,
             detail =
                 "此开关只选择位置交付方式；蜂窝/Wi-Fi 等档案字段仍由 Hook 提供。" +

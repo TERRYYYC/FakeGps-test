@@ -2,6 +2,7 @@
 """Structural contracts for main-app System Mock integration and truthful cleanup evidence."""
 
 from pathlib import Path
+import re
 import unittest
 
 
@@ -20,6 +21,13 @@ class MockProviderMainIntegrationContractTest(unittest.TestCase):
         self.assertIn('android:name=".mockprovider.MockProviderService"', manifest)
         self.assertIn('android:exported="false"', manifest)
         self.assertIn('android:foregroundServiceType="location"', manifest)
+        service = re.search(
+            r'<service\s+[^>]*android:name="\.mockprovider\.MockProviderService"[^>]*/>',
+            manifest,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(service)
+        self.assertNotIn('android:stopWithTask="true"', service.group(0))
 
     def test_service_resolves_the_published_effective_profile_not_intent_coordinates(self) -> None:
         service = (ROOT / "app/src/main/java/name/caiyao/fakegps/mockprovider/MockProviderService.kt").read_text()
@@ -48,6 +56,8 @@ class MockProviderMainIntegrationContractTest(unittest.TestCase):
 
         self.assertIn('Text("系统 Mock 位置")', screen)
         self.assertIn("Switch(", screen)
+        self.assertIn("enabled = locationModel.switchEnabled", screen)
+        self.assertIn('Text("重试停止")', screen)
         self.assertIn("ACTION_APPLICATION_DEVELOPMENT_SETTINGS", screen)
         self.assertIn("生效中档案", screen)
 
@@ -69,6 +79,10 @@ class MockProviderMainIntegrationContractTest(unittest.TestCase):
         self.assertNotIn("app-mockProvider.apk", harness)
         self.assertIn("assert_provider_is_mock", harness)
         self.assertIn("assert_provider_is_real", harness)
+        self.assertIn("remove_bench_task", harness)
+        self.assertIn("assert_service_is_foreground", harness)
+        self.assertIn("ACCEPTANCE_TASK_REMOVAL_PHASE_COMPLETE", harness)
+        self.assertIn("重新将您所在位置设为地图中心", harness)
         self.assertIn("GnssService", harness)
         self.assertIn("gps provider", harness)
         self.assertIn('appops set "$BENCH_PACKAGE" android:mock_location allow', harness)

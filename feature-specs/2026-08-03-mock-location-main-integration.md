@@ -9,7 +9,7 @@ created: 2026-08-03
 
 **Feature:** F001 — Google Maps 蓝点跨 GMS 进程缺口
 **Goal:** 把已验证的 System Mock Provider 从独立 Lab 合入千网游主 App，并用一个用户开关在 Hook 与 System Mock 之间选择位置注入方式。
-**Acceptance:** 使用主 App 生效中档案；位置只走一种注入路径；切回 Hook 后系统 `gps` test provider 确实消失；默认/验收地点为基辅；真机 Maps 蓝点与 Stop 均有可复核证据。
+**Acceptance:** 使用主 App 生效中档案；用户只选择一种位置交付意图，运行中目标按既有刷新周期收敛到该意图；切回 Hook 后系统 `gps` test provider 确实消失；默认/验收地点为基辅；真机 Maps 蓝点与 Stop 均有可复核证据。
 **Architecture cell:** Android application / location delivery
 **Map delta:** none
 **Map delta why:** 仓库没有 ownership-cell registry；改动将实验性 gateway/service 收入现有 `:app` 边界，没有新增跨进程存储或外部服务。
@@ -62,11 +62,12 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 - `stop`: 先持久化/发布 `hook` 用户意图，再无条件调用 cleanup；服务内存即使为 Idle，也不能跳过 `removeTestProvider`，以修复前次进程遗留。
 - `tick`: 重新解析当前已发布档案；坐标变化则 replace + immediate publish，否则发布新鲜时间戳样本。
 - `onDestroy`: best-effort cleanup；不把它当可靠 Stop 证明。
-- App 启动：持久意图为 `system_mock` 则恢复服务；为 `hook` 且 durable cleanup marker 为 true 时发送 recovery stop；普通 Hook 启动保持 no-op，避免没有 mock app-op 的用户看到伪失败。
+- durable cleanup marker 表示“切换事务未完成”，不是“provider 正在运行”；稳定的 Hook/System Mock 状态都清除 marker。任何残留 marker 在 App 启动时都优先执行 Stop + 回 Hook，不能按残留 `system_mock` 重启。
+- 移除 launcher task 不停止 FGS；用户选择 System Mock 后，服务持续运行直至开关、通知栏 Stop 或明确失败。
 
 ## 不变量
 
-- **INV-1 单位置通道：** System Mock 成功启用后，Hook Snapshot 的所有位置字段为空；其他字段不变。
+- **INV-1 单位置意图与有界交接：** System Mock 成功启用后，持久/发布快照的所有 Hook 位置字段为空，其他字段不变；已运行目标进程最迟在它当前的 5–60 秒刷新周期内采用新意图。交接窗口可能短暂重叠，但两路都来自同一生效档案坐标；不宣称跨进程瞬时原子切换。
 - **INV-2 单档案真相：** Mock 服务输出坐标等于已发布有效档案坐标，不接受 UI/Intent 中另一套坐标。
 - **INV-3 启用失败回滚：** provider 注册、首次发布或 Hook 配置发布任一失败，最终 intent 为 Hook，provider best-effort 清理，UI 为 Failed。
 - **INV-4 Stop 不信内存：** stop/reconcile 即使 controller 刚创建且 state=Idle，仍调用 `removeTestProvider`。
@@ -74,6 +75,7 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 - **INV-6 档案热更新：** System Mock 运行时修改生效档案，下一 tick 使用新坐标。
 - **INV-7 升级兼容：** 缺 `locationDeliveryMode` 的 v2/v3 payload 解释为 Hook；v4 的模式字段参与运行决策。
 - **INV-8 数据安全：** 真机开发只改 debug bench 数据；release App、参考 Fake GPS Location 的数据不读取、不迁移、不删除。
+- **INV-9 任务移除不改用户意图：** 从最近任务移除主 App 不停止 System Mock FGS；设备验收须证明 provider 与 Kyiv 输出仍存活，随后显式 Stop 恢复真实 GNSS。
 
 ## TDD 实施顺序
 
@@ -105,6 +107,7 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 - tick 坐标变化 replace provider；
 - start 后模式发布失败回滚 cleanup；
 - startup System Mock 恢复；Hook 仅在 durable cleanup marker 存在时规划 cleanup，普通 Hook no-op；
+- marker 为 true 时无条件规划 Stop + Hook，即使持久 mode 因中途失败仍是 `system_mock`；
 - null restart 不自动开始未知坐标。
 
 **Implementation:**
@@ -131,7 +134,7 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 1. `testDebugUnitTest --rerun-tasks`、结构契约、`assembleDebug`、`assembleRelease`。
 2. `aapt` 检查 main/debug 包名、Xposed metadata、service exported/type。
 3. 在 moto g54 上用 `.bench` 建立 Kyiv 生效档案；选择 `.bench` 为 mock app，验证服务、gps/fused/Maps 蓝点。
-4. UI 切回 Hook，直接检查系统 provider 已恢复；force-stop/reopen 场景验证 startup reconciliation。
+4. 从最近任务移除主 App，确认 FGS/provider/Kyiv 输出仍持续；再由 UI 切回 Hook并直接检查系统 provider 已恢复；force-stop/reopen 场景验证 startup reconciliation。
 5. 每轮 trap 恢复 `com.hopefactory2021.fakegpslocation` 且再次确认真实 GNSS。
 6. quality-gate 后请求跨个体 exact-HEAD review；reviewer 独立构建与真机复跑，放行后再进入 merge gate。
 

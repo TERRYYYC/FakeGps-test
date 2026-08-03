@@ -24,10 +24,17 @@ class MockProviderServiceContractTest {
     @Test
     fun `startup reconciliation follows durable location delivery intent`() {
         assertEquals(
-            MockProviderCommand.StartFromEffectiveProfile,
+            MockProviderCommand.StopAndUseHook,
             LocationDeliveryStartupPlan.commandFor(
                 LocationDeliveryMode.SYSTEM_MOCK,
                 cleanupRequired = true,
+            ),
+        )
+        assertEquals(
+            MockProviderCommand.StartFromEffectiveProfile,
+            LocationDeliveryStartupPlan.commandFor(
+                LocationDeliveryMode.SYSTEM_MOCK,
+                cleanupRequired = false,
             ),
         )
         assertEquals(

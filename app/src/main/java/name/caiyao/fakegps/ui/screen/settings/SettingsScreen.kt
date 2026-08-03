@@ -149,10 +149,18 @@ fun SettingsScreen(
                     )
                 },
                 trailingContent = {
-                    Switch(
-                        checked = locationModel.systemMockEnabled,
-                        onCheckedChange = ::requestSystemMock,
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Switch(
+                            checked = locationModel.systemMockEnabled,
+                            enabled = locationModel.switchEnabled,
+                            onCheckedChange = ::requestSystemMock,
+                        )
+                        if (locationModel.retryStopVisible) {
+                            TextButton(onClick = vm::retryStopSystemMock) {
+                                Text("重试停止")
+                            }
+                        }
+                    }
                 },
             )
             ListItem(

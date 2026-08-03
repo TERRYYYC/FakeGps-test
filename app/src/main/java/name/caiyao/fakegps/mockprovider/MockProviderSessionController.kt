@@ -13,12 +13,13 @@ sealed interface MockProviderState {
 
 class MockProviderSessionController(
     private val gateway: MockProviderGateway,
+    private val onStateChanged: (MockProviderState) -> Unit = {},
 ) {
     var state: MockProviderState = MockProviderState.Idle
         private set
 
     fun start(config: MockLocationConfig) {
-        state = MockProviderState.Starting(config)
+        updateState(MockProviderState.Starting(config))
         transition(
             sideEffect = {
                 // System test providers can survive process death. Always repair stale state first.
@@ -39,7 +40,7 @@ class MockProviderSessionController(
     }
 
     fun stop() {
-        state = MockProviderState.Stopping
+        updateState(MockProviderState.Stopping)
         transition(
             // Never short-circuit on in-memory Idle: a previous process may own the real residue.
             sideEffect = gateway::removeGpsProvider,
@@ -53,14 +54,19 @@ class MockProviderSessionController(
     ) {
         try {
             sideEffect()
-            state = success
+            updateState(success)
         } catch (failure: Throwable) {
             val cleanupFailure = runCatching(gateway::removeGpsProvider).exceptionOrNull()
             val primary = failure.message ?: failure.javaClass.simpleName
             val cleanup = cleanupFailure?.let {
                 "; cleanup failed: ${it.message ?: it.javaClass.simpleName}"
             }.orEmpty()
-            state = MockProviderState.Failed(primary + cleanup)
+            updateState(MockProviderState.Failed(primary + cleanup))
         }
+    }
+
+    private fun updateState(next: MockProviderState) {
+        state = next
+        onStateChanged(next)
     }
 }

@@ -9,24 +9,34 @@ class MockProviderSessionControllerTest {
     @Test
     fun `start removes stale provider then registers and publishes immediately`() {
         val gateway = RecordingMockProviderGateway()
-        val controller = MockProviderSessionController(gateway)
+        val states = mutableListOf<MockProviderState>()
+        val controller = MockProviderSessionController(gateway) { states += it }
         val config = MockLocationConfig(50.4501, 30.5234)
 
         controller.start(config)
 
         assertEquals(listOf("remove", "replace", "publish:$config"), gateway.calls)
         assertEquals(MockProviderState.Running(config, emittedCount = 1), controller.state)
+        assertEquals(
+            listOf(
+                MockProviderState.Starting(config),
+                MockProviderState.Running(config, emittedCount = 1),
+            ),
+            states,
+        )
     }
 
     @Test
     fun `fresh controller stop still removes a provider orphaned by a dead process`() {
         val gateway = RecordingMockProviderGateway()
-        val controller = MockProviderSessionController(gateway)
+        val states = mutableListOf<MockProviderState>()
+        val controller = MockProviderSessionController(gateway) { states += it }
 
         controller.stop()
 
         assertEquals(listOf("remove"), gateway.calls)
         assertEquals(MockProviderState.Idle, controller.state)
+        assertEquals(listOf(MockProviderState.Stopping, MockProviderState.Idle), states)
     }
 
     @Test

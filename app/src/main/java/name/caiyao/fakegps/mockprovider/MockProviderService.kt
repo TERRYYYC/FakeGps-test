@@ -44,7 +44,10 @@ class MockProviderService : Service() {
         super.onCreate()
         createNotificationChannel()
         val manager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        controller = MockProviderSessionController(AndroidMockProviderGateway(manager))
+        controller = MockProviderSessionController(
+            AndroidMockProviderGateway(manager),
+            MockProviderStatusStore::publish,
+        )
         val settings = SpoofSettings.getInstance(this)
         orchestrator = LocationDeliveryOrchestrator(
             controller = controller,
@@ -52,6 +55,7 @@ class MockProviderService : Service() {
                 PublishedConfig.parse(ConfigPrefsSync.readPublished(this).textOrNull)
             },
             readMode = settings::readLocationDeliveryMode,
+            readCleanupRequired = settings::isMockProviderCleanupRequired,
             persistMode = settings::setLocationDeliveryMode,
             publishConfig = { ConfigPrefsSync.sync(this) },
             persistCleanupRequired = settings::setMockProviderCleanupRequired,

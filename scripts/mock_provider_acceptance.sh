@@ -5,6 +5,7 @@ SERIAL="${1:-ZY22JHW9M4}"
 REFERENCE_PACKAGE="com.hopefactory2021.fakegpslocation"
 PRODUCT_PACKAGE="name.caiyao.fakegps"
 BENCH_PACKAGE="name.caiyao.fakegps.bench"
+BENCH_LABEL="千网游·测试"
 BENCH_ACTIVITY="$BENCH_PACKAGE/name.caiyao.fakegps.ui.ComposeActivity"
 ACCEPTANCE_ACTIVITY="$BENCH_PACKAGE/name.caiyao.fakegps.mockprovider.MockProviderAcceptanceActivity"
 BENCH_APK="${BENCH_APK:-app/build/outputs/apk/debug/app-debug.apk}"
@@ -84,6 +85,45 @@ assert_provider_is_real() {
     echo "PROVIDER_REAL owner=GnssService"
 }
 
+assert_service_is_foreground() {
+    local services
+    services=$("${ADB[@]}" shell dumpsys activity services "$BENCH_PACKAGE")
+    printf '%s\n' "$services" | rg -q 'MockProviderService'
+    printf '%s\n' "$services" | rg -q 'isForeground=true'
+}
+
+remove_bench_task() {
+    local attempt dump line coordinates x1 y1 x2 y2 center_x center_y
+    "${ADB[@]}" shell input keyevent KEYCODE_HOME
+    "${ADB[@]}" shell input keyevent KEYCODE_APP_SWITCH
+    for attempt in $(seq 1 10); do
+        dump=$(ui_dump || true)
+        line=$(printf '%s\n' "$dump" | awk -v selector="content-desc=\"$BENCH_LABEL\"" '
+            index($0, selector) && first == "" { first = $0 }
+            END { print first }
+        ')
+        coordinates=$(printf '%s\n' "$line" \
+            | sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p')
+        if [[ -n "$coordinates" ]]; then
+            read -r x1 y1 x2 y2 <<<"$coordinates"
+            center_x=$(((x1 + x2) / 2))
+            center_y=$(((y1 + y2) / 2))
+            "${ADB[@]}" shell input swipe "$center_x" "$center_y" "$center_x" 100 500
+            sleep 2
+            dump=$(ui_dump || true)
+            if [[ "$dump" == *"content-desc=\"$BENCH_LABEL\""* ]]; then
+                echo "Bench task still appears in Recents after swipe" >&2
+                return 1
+            fi
+            echo "TASK_REMOVED label=$BENCH_LABEL"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "Unable to find Bench task in Recents" >&2
+    return 1
+}
+
 acceptance_command() {
     local command="$1"
     "${ADB[@]}" shell am start --user 0 -W -n "$ACCEPTANCE_ACTIVITY" \
@@ -159,8 +199,18 @@ gps_section | sed -n '1,80p'
     | rg 'MockProviderMain' \
     | tail -30
 
+# Removing the launcher task must not silently stop the user-selected System Mock session.
+# This is the exact lifecycle regression caused by stopWithTask=true.
+remove_bench_task
+sleep 2
+assert_service_is_foreground
+assert_provider_is_mock
+echo "ACCEPTANCE_TASK_REMOVAL_PHASE_COMPLETE"
+
 "${ADB[@]}" shell monkey -p com.google.android.apps.maps 1 >/dev/null
 sleep "$OBSERVE_SECONDS"
+tap_node 'content-desc="重新将您所在位置设为地图中心"'
+sleep 3
 echo "MAPS_FOREGROUND coordinate=$KYIV_LATITUDE,$KYIV_LONGITUDE"
 "${ADB[@]}" shell dumpsys activity activities \
     | rg 'mResumedActivity|topResumedActivity' \

@@ -9,7 +9,10 @@ import name.caiyao.fakegps.config.PublishedConfig
 import name.caiyao.fakegps.config.PublishPropagation
 import name.caiyao.fakegps.data.LocationDeliveryMode
 import name.caiyao.fakegps.data.SpoofSettings
+import name.caiyao.fakegps.mockprovider.EffectiveMockLocationResolution
+import name.caiyao.fakegps.mockprovider.EffectiveMockLocationResolver
 import name.caiyao.fakegps.mockprovider.MockProviderRuntime
+import name.caiyao.fakegps.mockprovider.MockProviderState
 import name.caiyao.fakegps.mockprovider.MockProviderStatusStore
 
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
@@ -68,6 +71,10 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setSystemMockEnabled(enabled: Boolean) {
+        if (mockProviderState.value is MockProviderState.Starting ||
+            mockProviderState.value is MockProviderState.Stopping
+        ) return
+
         if (enabled) {
             // The service resolves coordinates from these exact bytes. Never pass a parallel UI
             // coordinate through an Intent, and never start from a stale publication.
@@ -77,10 +84,26 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                 return
             }
             _publishedConfig.value = readPublishedConfig()
+            when (val resolution = EffectiveMockLocationResolver.resolve(_publishedConfig.value)) {
+                is EffectiveMockLocationResolution.Invalid -> {
+                    MockProviderStatusStore.publish(MockProviderState.Failed(resolution.message))
+                    return
+                }
+                is EffectiveMockLocationResolution.Ready ->
+                    MockProviderStatusStore.publish(MockProviderState.Starting(resolution.config))
+            }
             MockProviderRuntime.enableSystemMock(getApplication())
         } else {
-            MockProviderRuntime.useHookAndStopSystemMock(getApplication())
+            retryStopSystemMock()
         }
+    }
+
+    fun retryStopSystemMock() {
+        if (mockProviderState.value is MockProviderState.Starting ||
+            mockProviderState.value is MockProviderState.Stopping
+        ) return
+        MockProviderStatusStore.publish(MockProviderState.Stopping)
+        MockProviderRuntime.useHookAndStopSystemMock(getApplication())
     }
 
     /**
