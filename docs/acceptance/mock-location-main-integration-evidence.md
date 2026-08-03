@@ -11,13 +11,13 @@ created: 2026-08-03
 
 - Repository: `https://github.com/TERRYYYC/FakeGps-test.git`
 - Branch: `feat/mock-provider-main-integration`
-- Accepted code commit: `19a5fd2edef2628c50b5d2c44158b0ea51aa4334`
+- Accepted code commit: `653f4c376a62127663de9bd1ce384df99a3ecad0`
 - Device: moto g54 5G `ZY22JHW9M4`, Android 15
 - Debug main APK: `app/build/outputs/apk/debug/app-debug.apk`
-- Debug APK SHA-256: `fe04eb60ccd06e3729928b2e48bc6bccc6f0d6ba8d70ba3bba2da12cde4f8836`
-- Release APK SHA-256: `8b17ef20db03fd82078cb0bb9d8afb0e45e94eb1ad0be891f7166fd8352614a4`
-- Private screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/maps-main-kyiv.png`
-- Screenshot SHA-256: `bed5bb83275566d4e687e82f6f9af0feefa5fe616babb3bebbc9aba603c16e9c`
+- Debug APK SHA-256: `c8a14c2e9a02ba793f33b449479d5e85ba19c87d77dafc19401f112a3facf172`
+- Release APK SHA-256: `ab1ab45f99e4edcf0b2b6d520d3d53f265835ce951a3c0f05c51ee939c3a376c`
+- Private screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/maps-main-kyiv-lifecycle-hardening.png`
+- Screenshot SHA-256: `471ec56abf6d8d6293b8f126264e8a7f159550583806eb107c37eee303665670`
 - Settings OFF screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-system-mock-off.png` (`08bb96ae13d77e3e48ece5def00649663474a9bef9b5f41b59cb905f4e1d6d0b`)
 - 15-second switch recording: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-toggle.mp4` (`bb359df2d29db50e67a5b00aea12965448aa47f97544bc891071653b307f9df1`)
 
@@ -29,7 +29,7 @@ created: 2026-08-03
 |---|---|---|
 | Lab 没有合入主 App | 删除独立 `mockProvider` build type；service/controller/gateway 进入 `src/main`，设置页成为唯一入口 | debug/release 均含非导出 `MockProviderService`；不再生成 Lab APK |
 | 数据应来自主 App 档案，开关决定 Hook/Mock | schema v4 发布 `locationDeliveryMode`；System Mock 每 tick 解析 `ConfigPrefsSync` 的同一份生效档案；System Mock 时 Hook 仅清空位置字段，cell/Wi-Fi 保留 | JVM 契约覆盖 v2/v3 兼容、档案解析、位置旁路与非位置字段保留；真机用 `ProfileRepository` 保存 Kyiv 后经正常 transport 输出 |
-| 虚拟位置不能停 | provider 变更前写 durable cleanup marker；显式 Stop 无条件 remove；验收直接读 provider truth | UI 关闭后 `gps provider:` 恢复 `identity=1000/android[GnssService]`；普通 Hook 启动无 service/失败，marker 恢复路径有单测 |
+| 虚拟位置不能停 | cleanup marker 表示未完成切换事务；显式 Stop 无条件 remove；失败态提供“重试停止”；移除任务卡不停止 FGS | 任务卡移除后 FGS 与 Kyiv gps/fused 仍持续；UI 关闭后 `gps provider:` 恢复 `identity=1000/android[GnssService]`；失败回滚/重试与 marker 优先恢复有单测 |
 | 地址改为基辅 | 地图默认、示例与隔离验收档案统一为 `50.4501,30.5234` | gps、fused 和 Maps 蓝点三路一致 |
 
 ## Exact-code 真机结果
@@ -42,6 +42,8 @@ PROVIDER_MOCK owner=name.caiyao.fakegps.bench coordinate=50.4501,30.5234
 isForeground=true ... types=0x00000008
 last location=Location[gps 50.450100,30.523400 ... mock]
 last location=Location[fused 50.450100,30.523400 ... mock]
+TASK_REMOVED label=千网游·测试
+ACCEPTANCE_TASK_REMOVAL_PHASE_COMPLETE
 MAPS_FOREGROUND ... com.google.android.apps.maps/com.google.android.maps.MapsActivity
 ACCEPTANCE_ACTIVE_PHASE_COMPLETE
 PROVIDER_REAL owner=GnssService
@@ -53,19 +55,19 @@ ACCEPTANCE_RESTORE_PHASE_COMPLETE
 
 恢复后又单独启动一次 `.bench` 的默认 Hook 模式：mock app-op 仍由参考 App 独占、`MockProviderService` 不存在、gps provider 仍是真实 GNSS、日志无启动失败。最后再次 force-stop `.bench` 并打开参考 App。
 
-Settings OFF 图与 15 秒录屏直接覆盖用户入口、同一生效档案坐标和开关动作；Maps 图覆盖运行时下游效果。录屏结束时脚本再次确认 `.bench` 仍安装、开关为 OFF、provider 为 GNSS，并恢复参考 App。
+Settings OFF 图与 15 秒录屏来自首轮主 App 集成，覆盖用户入口、同一生效档案坐标和开关动作。当前 lifecycle-hardening exact build 的 Maps 图由脚本先移除任务卡、确认 FGS/gps/fused 继续，再点击 Maps“重新将您所在位置设为地图中心”后截取；画面蓝点位于 Kyiv Independence Square。脚本结束时再次确认 `.bench` 仍安装、开关为 OFF、provider 为 GNSS，并恢复参考 App。
 
 ## Fresh verification
 
 | Gate | Result |
 |---|---|
-| `./gradlew testDebugUnitTest --rerun-tasks` | 378 tests；0 failure/error/skipped |
+| `./gradlew testDebugUnitTest --rerun-tasks` | 382 tests；0 failure/error/skipped |
 | `./gradlew assembleDebug assembleRelease --rerun-tasks` | BUILD SUCCESSFUL；release `lintVital` 通过 |
 | `python3 scripts/test_mock_provider_main_integration.py` | 6/6 pass |
 | `bash -n scripts/mock_provider_acceptance.sh` | pass |
 | `git diff --check` | pass |
 | APK manifest inspection | debug `.bench` / release main identity 正确；两者保留 Xposed metadata、动态 provider authority 与 `foregroundServiceType=location` |
-| `scripts/mock_provider_acceptance.sh ZY22JHW9M4` | active / Maps / Stop / restore 全阶段完成，exit 0 |
+| `scripts/mock_provider_acceptance.sh ZY22JHW9M4` | active / task removal / Maps recenter / Stop / restore 全阶段完成，exit 0 |
 | `./gradlew lintDebug --rerun-tasks` | inherited baseline：20 errors / 148 warnings；20 个 error 全部位于未改动的 `HookProbe.kt`、`MainActivity.java`、`TempDao.java` 与 `res/values/strings.xml`，本 diff 零 lint error；release `lintVital` 通过 |
 
 ## Quality Gate 审计
@@ -90,10 +92,22 @@ Dogfood 当轮发现并修复：
 2. `.bench` manifest authority 与硬编码 `UriMatcher` 不一致 → authority 改为由 `BuildConfig.APPLICATION_ID` 构造并加 JVM test。
 3. 普通 Hook 启动若无 app-op 会产生伪失败 → 只在 cleanup marker 为 true 时恢复清理，并增加 startup-plan test 与真机 no-op 验证。
 4. debug 数据准备在 app-op 切换前做无意义 cleanup → 准备步骤仅重置隔离数据/marker，最终运行日志不再有伪失败。
+5. 初版 Maps 截图停留在旧视野，蓝点不能证明 Kyiv → harness 明确点击“重新将您所在位置设为地图中心”后再截图，当前图显示 Independence Square。
+
+## Fresh-context findings 处置
+
+| Finding | 处置与证据 |
+|---|---|
+| 未完成 enable 遇到无效档案可能遗留 provider/mode | `enable()` 在持久 mode 或 transaction marker 表示 System Mock 时先执行完整 Stop + Hook 回滚；普通 Hook 的无效档案仍不碰系统 provider。JVM 覆盖两条分支。 |
+| Hook 回滚忽略 mode 持久化失败 | 回滚仅在 mode、配置发布与 provider cleanup 全部成功后清 marker；持久化失败保留 marker，下次启动无条件 Stop + Hook。 |
+| `stopWithTask=true` 造成划掉任务即停服务 | 主 service 移除该属性；合并 manifest 证明属性不存在；真机划掉任务后 FGS、gps/fused Kyiv 均继续。 |
+| Starting/Stopping 未发布且开关可连点 | controller 每次 transition 发布真实状态；ViewModel 在发命令前同步发布过渡态；纯 UI contract 在 Starting/Stopping 禁用 switch。 |
+| Stop 失败后没有重试入口 | Failed 状态禁用 switch 并显示“重试停止”；第二次完整 Stop 成功后 marker 清除并回 Idle。 |
+| “单通道”被写成瞬时保证 | INV-1 改为单一持久交付意图 + 既有 5–60 秒跨进程刷新收敛；短暂重叠使用同一生效档案坐标，不再声称原子切换。 |
 
 ## 已知边界
 
 - System Mock 位置保留 Android mock marker；本功能不尝试隐藏 `Location.isMock()`。
 - API 24–30 legacy registration 有纯代码契约和 review 覆盖；本轮真机是 API 35。
-- 已运行的 Hook 目标进程按既有 5–60 秒可配置周期读取 mode。开关关闭会立即移除系统 provider；目标 Hook 在下一次刷新读取 Hook 模式，这是现有 transport 的传播语义，不伪装成同步切换。
+- 已运行的 Hook 目标进程按既有 5–60 秒可配置周期读取 mode。切换期间 provider 与旧 Snapshot 可能短暂重叠，但两者来自同一生效档案坐标；目标在下一次刷新读取新模式，这是现有 transport 的传播语义，不伪装成跨进程同步切换。
 - debug acceptance Activity 受 signature-level `android.permission.DUMP` 保护且不进入 release；它只操作 `.bench` 数据。
