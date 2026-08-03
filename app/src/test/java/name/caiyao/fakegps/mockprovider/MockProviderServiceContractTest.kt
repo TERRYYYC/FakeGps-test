@@ -65,13 +65,21 @@ class MockProviderServiceContractTest {
         val sample = MockLocationSampleFactory(
             wallClockMillis = { 1_725_000_000_000L },
             elapsedRealtimeNanos = { 123_456_789L },
-        ).create(MockLocationConfig(50.4501, 30.5234, 3f))
+        ).create(
+            MockLocationConfig(
+                latitude = 50.4501,
+                longitude = 30.5234,
+                accuracyMeters = 3f,
+                altitudeMeters = 179.0,
+            ),
+        )
 
         assertEquals("gps", sample.provider)
         assertEquals(50.4501, sample.latitude, 0.0)
         assertEquals(30.5234, sample.longitude, 0.0)
+        assertEquals(179.0, sample.altitudeMeters)
         assertEquals(3f, sample.accuracyMeters)
-        assertTrue(sample.timeMillis > 0)
-        assertTrue(sample.elapsedRealtimeNanos > 0)
+        assertEquals(1_725_000_000_000L, sample.timeMillis)
+        assertEquals(123_456_789L, sample.elapsedRealtimeNanos)
     }
 }

@@ -9,8 +9,6 @@ import name.caiyao.fakegps.config.PublishedConfig
 import name.caiyao.fakegps.config.PublishPropagation
 import name.caiyao.fakegps.data.LocationDeliveryMode
 import name.caiyao.fakegps.data.SpoofSettings
-import name.caiyao.fakegps.mockprovider.EffectiveMockLocationResolution
-import name.caiyao.fakegps.mockprovider.EffectiveMockLocationResolver
 import name.caiyao.fakegps.mockprovider.MockProviderRuntime
 import name.caiyao.fakegps.mockprovider.MockProviderState
 import name.caiyao.fakegps.mockprovider.MockProviderStatusStore
@@ -70,6 +68,10 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         _publishFailure.value = null
     }
 
+    fun reportSystemMockPermissionFailure(message: String) {
+        _publishFailure.value = message
+    }
+
     fun setSystemMockEnabled(enabled: Boolean) {
         if (mockProviderState.value is MockProviderState.Starting ||
             mockProviderState.value is MockProviderState.Stopping
@@ -78,21 +80,26 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         if (enabled) {
             // The service resolves coordinates from these exact bytes. Never pass a parallel UI
             // coordinate through an Intent, and never start from a stale publication.
-            if (!ConfigPrefsSync.sync(getApplication())) {
-                _publishFailure.value =
-                    "无法发布生效中档案，System Mock 未启动；Hook 仍保持当前状态"
-                return
-            }
-            _publishedConfig.value = readPublishedConfig()
-            when (val resolution = EffectiveMockLocationResolver.resolve(_publishedConfig.value)) {
-                is EffectiveMockLocationResolution.Invalid -> {
-                    MockProviderStatusStore.publish(MockProviderState.Failed(resolution.message))
-                    return
+            when (
+                val outcome = SystemMockEnableAction.run(
+                    syncPublishedConfig = { ConfigPrefsSync.sync(getApplication()) },
+                    readPublishedConfig = ::readPublishedConfig,
+                    publishProviderState = MockProviderStatusStore::publish,
+                    startService = { MockProviderRuntime.enableSystemMock(getApplication()) },
+                )
+            ) {
+                SystemMockEnableOutcome.PublicationFailed -> {
+                    _publishFailure.value =
+                        "无法发布生效中档案，System Mock 未启动；Hook 仍保持当前状态"
                 }
-                is EffectiveMockLocationResolution.Ready ->
-                    MockProviderStatusStore.publish(MockProviderState.Starting(resolution.config))
+                is SystemMockEnableOutcome.Invalid -> {
+                    _publishedConfig.value = outcome.published
+                }
+                is SystemMockEnableOutcome.Started -> {
+                    _publishedConfig.value = outcome.published
+                    _publishFailure.value = null
+                }
             }
-            MockProviderRuntime.enableSystemMock(getApplication())
         } else {
             retryStopSystemMock()
         }

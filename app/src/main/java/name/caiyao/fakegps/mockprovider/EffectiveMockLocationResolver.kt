@@ -31,8 +31,14 @@ object EffectiveMockLocationResolver {
             raw.toFloatOrNull()
                 ?: return EffectiveMockLocationResolution.Invalid("生效档案的精度不是数字")
         } ?: MockLocationConfig.DEFAULT_ACCURACY_METERS
+        val altitude = published.fields["altitude"]?.let { raw ->
+            raw.toDoubleOrNull()?.takeIf(Double::isFinite)
+                ?: return EffectiveMockLocationResolution.Invalid("生效档案的海拔不是有效数字")
+        }
 
-        return runCatching { MockLocationConfig(latitude, longitude, accuracy) }.fold(
+        return runCatching {
+            MockLocationConfig(latitude, longitude, accuracy, altitude)
+        }.fold(
             onSuccess = EffectiveMockLocationResolution::Ready,
             onFailure = {
                 EffectiveMockLocationResolution.Invalid(

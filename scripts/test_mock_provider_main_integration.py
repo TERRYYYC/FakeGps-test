@@ -53,22 +53,29 @@ class MockProviderMainIntegrationContractTest(unittest.TestCase):
 
     def test_settings_exposes_one_system_mock_switch_and_developer_guidance(self) -> None:
         screen = (ROOT / "app/src/main/java/name/caiyao/fakegps/ui/screen/settings/SettingsScreen.kt").read_text()
+        policy = (ROOT / "app/src/main/java/name/caiyao/fakegps/ui/screen/settings/SystemMockPermissionPolicy.kt").read_text()
 
         self.assertIn('Text("系统 Mock 位置")', screen)
         self.assertIn("Switch(", screen)
         self.assertIn("enabled = locationModel.switchEnabled", screen)
         self.assertIn('Text("重试停止")', screen)
         self.assertIn("ACTION_APPLICATION_DEVELOPMENT_SETTINGS", screen)
+        self.assertIn("重新选择当前千网游", screen)
+        self.assertIn("POST_NOTIFICATIONS", screen)
+        self.assertIn("SystemMockPermission.Notifications", policy)
         self.assertIn("生效中档案", screen)
 
     def test_kyiv_is_the_map_and_acceptance_coordinate(self) -> None:
         map_screen = (ROOT / "app/src/main/java/name/caiyao/fakegps/ui/screen/map/MapScreen.kt").read_text()
         harness = (ROOT / "scripts/mock_provider_acceptance.sh").read_text()
+        gateway = (ROOT / "app/src/main/java/name/caiyao/fakegps/mockprovider/AndroidMockProviderGateway.kt").read_text()
 
         self.assertIn("50.4501", map_screen)
         self.assertIn("30.5234", map_screen)
         self.assertIn("50.4501", harness)
         self.assertIn("30.5234", harness)
+        self.assertNotIn("altitude = 179.0", gateway)
+        self.assertIn("sample.altitudeMeters", gateway)
 
     def test_acceptance_asserts_actual_provider_identity_before_restoring_appop(self) -> None:
         harness = (ROOT / "scripts/mock_provider_acceptance.sh").read_text()
@@ -82,7 +89,11 @@ class MockProviderMainIntegrationContractTest(unittest.TestCase):
         self.assertIn("remove_bench_task", harness)
         self.assertIn("assert_service_is_foreground", harness)
         self.assertIn("ACCEPTANCE_TASK_REMOVAL_PHASE_COMPLETE", harness)
-        self.assertIn("重新将您所在位置设为地图中心", harness)
+        self.assertIn("MAPS_RECENTER already-centered-or-control-absent", harness)
+        self.assertIn("APP_OP_RECOVERY_GUIDANCE_VISIBLE", harness)
+        self.assertIn("ACCEPTANCE_APP_OP_RECOVERY_PHASE_COMPLETE", harness)
+        self.assertIn("pm revoke", harness)
+        self.assertNotIn('pm grant "$BENCH_PACKAGE" android.permission.POST_NOTIFICATIONS', harness)
         self.assertIn("GnssService", harness)
         self.assertIn("gps provider", harness)
         self.assertIn('appops set "$BENCH_PACKAGE" android:mock_location allow', harness)

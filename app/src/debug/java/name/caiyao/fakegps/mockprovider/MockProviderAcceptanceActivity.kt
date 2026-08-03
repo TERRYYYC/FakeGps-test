@@ -41,6 +41,7 @@ class MockProviderAcceptanceActivity : ComponentActivity() {
                         addname = "Kyiv acceptance",
                         latitude = KYIV_LATITUDE,
                         longitude = KYIV_LONGITUDE,
+                        altitude = KYIV_ALTITUDE,
                         accuracy = 3f,
                         tac = 27101,
                         wifiSsid = "Kyiv-Acceptance",
@@ -66,6 +67,7 @@ class MockProviderAcceptanceActivity : ComponentActivity() {
         const val COMMAND_STOP = "stop"
         const val KYIV_LATITUDE = 50.4501
         const val KYIV_LONGITUDE = 30.5234
+        const val KYIV_ALTITUDE = 179.0
         private const val TAG = "MockProviderAcceptance"
     }
 }

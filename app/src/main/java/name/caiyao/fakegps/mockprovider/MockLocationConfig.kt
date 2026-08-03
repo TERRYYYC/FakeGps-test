@@ -4,6 +4,7 @@ data class MockLocationConfig(
     val latitude: Double,
     val longitude: Double,
     val accuracyMeters: Float = DEFAULT_ACCURACY_METERS,
+    val altitudeMeters: Double? = null,
 ) {
     init {
         require(latitude.isFinite() && latitude in -90.0..90.0) {
@@ -14,6 +15,9 @@ data class MockLocationConfig(
         }
         require(accuracyMeters.isFinite() && accuracyMeters > 0f) {
             "accuracyMeters must be finite and positive"
+        }
+        require(altitudeMeters == null || altitudeMeters.isFinite()) {
+            "altitudeMeters must be finite when present"
         }
     }
 

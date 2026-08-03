@@ -1,5 +1,9 @@
 package name.caiyao.fakegps.mockprovider
 
+enum class MockProviderRecovery {
+    SelectThisAppAsMockLocation,
+}
+
 sealed interface MockProviderState {
     data object Idle : MockProviderState
     data class Starting(val config: MockLocationConfig) : MockProviderState
@@ -8,7 +12,10 @@ sealed interface MockProviderState {
         val emittedCount: Long,
     ) : MockProviderState
     data object Stopping : MockProviderState
-    data class Failed(val message: String) : MockProviderState
+    data class Failed(
+        val message: String,
+        val recovery: MockProviderRecovery? = null,
+    ) : MockProviderState
 }
 
 class MockProviderSessionController(
@@ -61,7 +68,14 @@ class MockProviderSessionController(
             val cleanup = cleanupFailure?.let {
                 "; cleanup failed: ${it.message ?: it.javaClass.simpleName}"
             }.orEmpty()
-            updateState(MockProviderState.Failed(primary + cleanup))
+            val recovery = if (
+                failure is SecurityException || cleanupFailure is SecurityException
+            ) {
+                MockProviderRecovery.SelectThisAppAsMockLocation
+            } else {
+                null
+            }
+            updateState(MockProviderState.Failed(primary + cleanup, recovery))
         }
     }
 

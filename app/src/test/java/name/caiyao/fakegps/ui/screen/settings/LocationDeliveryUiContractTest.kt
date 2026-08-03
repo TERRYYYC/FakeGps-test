@@ -3,6 +3,7 @@ package name.caiyao.fakegps.ui.screen.settings
 import name.caiyao.fakegps.config.PublishedConfig
 import name.caiyao.fakegps.data.LocationDeliveryMode
 import name.caiyao.fakegps.mockprovider.MockLocationConfig
+import name.caiyao.fakegps.mockprovider.MockProviderRecovery
 import name.caiyao.fakegps.mockprovider.MockProviderState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -55,6 +56,37 @@ class LocationDeliveryUiContractTest {
         assertFalse(model.switchEnabled)
         assertTrue(model.retryStopVisible)
         assertEquals("生效中档案未配置有效经纬度", model.effectiveCoordinate)
+    }
+
+    @Test
+    fun `mock app permission failure explains how to recover before retrying stop`() {
+        val model = LocationDeliveryUiContract.model(
+            LocationDeliveryMode.HOOK,
+            MockProviderState.Failed(
+                "not allowed to perform MOCK_LOCATION",
+                MockProviderRecovery.SelectThisAppAsMockLocation,
+            ),
+            published(),
+        )
+
+        assertTrue(model.mockAppSelectionRequired)
+        assertTrue(model.detail.contains("重新选择当前千网游"))
+        assertTrue(model.detail.contains("重试停止"))
+        assertTrue(model.retryStopVisible)
+        assertFalse(model.switchEnabled)
+    }
+
+    @Test
+    fun `system mock idle state remains enabled and explains service recovery`() {
+        val model = LocationDeliveryUiContract.model(
+            LocationDeliveryMode.SYSTEM_MOCK,
+            MockProviderState.Idle,
+            published(),
+        )
+
+        assertTrue(model.systemMockEnabled)
+        assertTrue(model.switchEnabled)
+        assertTrue(model.status.contains("等待"))
     }
 
     @Test

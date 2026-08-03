@@ -66,6 +66,14 @@
             android:exported="false"
             android:theme="@style/AppTheme.NoActionBar" />
 
+        <!--
+            exported=false (review FC-6): this provider was world-readable with no permission, so
+            ANY app on the device could read the full spoof profile — including the app under test,
+            which turns the tool itself into the giveaway. Nothing outside this APK needs it: the
+            hook stopped querying it when the transport moved to XSharedPreferences, and the only
+            remaining callers (VerifyViewModel / ConfigPrefsSync / SpoofSettings) run in this
+            process, where same-uid access does not require export.
+        -->
         <provider
             android:name=".data.AppInfoProvider"
             android:authorities="${applicationId}.data.AppInfoProvider"
@@ -86,14 +94,6 @@
             android:name=".mockprovider.MockProviderService"
             android:exported="false"
             android:foregroundServiceType="location" />
-        <!--
-            exported=false (review FC-6): this provider was world-readable with no permission, so
-            ANY app on the device could read the full spoof profile — including the app under test,
-            which turns the tool itself into the giveaway. Nothing outside this APK needs it: the
-            hook stopped querying it when the transport moved to XSharedPreferences, and the only
-            remaining callers (VerifyViewModel / ConfigPrefsSync / SpoofSettings) run in this
-            process, where same-uid access does not require export.
-        -->
 
     </application>
 

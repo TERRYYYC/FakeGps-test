@@ -97,6 +97,7 @@ class LocationDeliveryOrchestrator(
         val published = persisted && publishConfig()
         controller.stop()
         val stopped = controller.state is MockProviderState.Idle
+        val cleanupFailure = controller.state as? MockProviderState.Failed
         val markerCleared = persisted && published && stopped && persistCleanupRequired(false)
 
         val detail = when {
@@ -106,7 +107,7 @@ class LocationDeliveryOrchestrator(
             !markerCleared -> "$reason；回滚完成但无法清除恢复标记"
             else -> "System Mock 已回滚：$reason"
         }
-        return MockProviderState.Failed(detail)
+        return MockProviderState.Failed(detail, cleanupFailure?.recovery)
     }
 
 }

@@ -3,12 +3,14 @@ package name.caiyao.fakegps.ui.screen.settings
 import java.util.Locale
 import name.caiyao.fakegps.config.PublishedConfig
 import name.caiyao.fakegps.data.LocationDeliveryMode
+import name.caiyao.fakegps.mockprovider.MockProviderRecovery
 import name.caiyao.fakegps.mockprovider.MockProviderState
 
 data class LocationDeliveryUiModel(
     val systemMockEnabled: Boolean,
     val switchEnabled: Boolean,
     val retryStopVisible: Boolean,
+    val mockAppSelectionRequired: Boolean,
     val status: String,
     val detail: String,
     val effectiveCoordinate: String,
@@ -39,15 +41,24 @@ object LocationDeliveryUiContract {
             "生效中档案未配置有效经纬度"
         }
 
+        val mockAppSelectionRequired =
+            (providerState as? MockProviderState.Failed)?.recovery ==
+                MockProviderRecovery.SelectThisAppAsMockLocation
+
         return LocationDeliveryUiModel(
             systemMockEnabled = mode == LocationDeliveryMode.SYSTEM_MOCK,
             switchEnabled = providerState is MockProviderState.Idle ||
                 providerState is MockProviderState.Running,
             retryStopVisible = providerState is MockProviderState.Failed,
+            mockAppSelectionRequired = mockAppSelectionRequired,
             status = status,
-            detail =
+            detail = if (mockAppSelectionRequired) {
+                "当前千网游已失去模拟位置权限，Android 不允许它移除残留位置。" +
+                    "请打开开发者选项，重新选择当前千网游，再返回这里点“重试停止”。"
+            } else {
                 "此开关只选择位置交付方式；蜂窝/Wi-Fi 等档案字段仍由 Hook 提供。" +
-                    "切回 Hook 后，已运行目标进程会在当前刷新周期内读取新模式。",
+                    "切回 Hook 后，已运行目标进程会在当前刷新周期内读取新模式。"
+            },
             effectiveCoordinate = coordinate,
         )
     }

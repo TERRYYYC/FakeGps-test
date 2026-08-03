@@ -26,7 +26,7 @@ class AndroidMockProviderGateway(
         val location = Location(sample.provider).apply {
             latitude = sample.latitude
             longitude = sample.longitude
-            altitude = 179.0
+            sample.altitudeMeters?.let { altitude = it }
             accuracy = sample.accuracyMeters
             time = sample.timeMillis
             elapsedRealtimeNanos = sample.elapsedRealtimeNanos

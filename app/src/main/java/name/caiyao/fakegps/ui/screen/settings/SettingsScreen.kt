@@ -1,8 +1,10 @@
 package name.caiyao.fakegps.ui.screen.settings
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,6 +49,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import name.caiyao.fakegps.data.SpoofSettings
 import kotlin.math.roundToInt
 
+@SuppressLint("InlinedApi")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -68,10 +71,34 @@ fun SettingsScreen(
         publishedConfig,
     )
     val context = LocalContext.current
-    val locationPermissionLauncher = rememberLauncherForActivityResult(
+    fun missingSystemMockPermissions(): Set<SystemMockPermission> =
+        SystemMockPermissionPolicy.missing(
+            sdkInt = Build.VERSION.SDK_INT,
+            fineLocationGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED,
+            coarseLocationGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED,
+            notificationsGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED,
+        )
+
+    val systemMockPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { grants ->
-        if (grants.values.any { it }) vm.setSystemMockEnabled(true)
+    ) {
+        val missing = missingSystemMockPermissions()
+        if (missing.isEmpty()) {
+            vm.setSystemMockEnabled(true)
+        } else {
+            vm.reportSystemMockPermissionFailure(
+                "System Mock 未启动：请授予定位权限和通知权限，确保运行状态与停止入口可见",
+            )
+        }
     }
 
     fun requestSystemMock(enabled: Boolean) {
@@ -79,18 +106,18 @@ fun SettingsScreen(
             vm.setSystemMockEnabled(false)
             return
         }
-        val granted = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED
-        if (granted) {
+        val missing = missingSystemMockPermissions()
+        if (missing.isEmpty()) {
             vm.setSystemMockEnabled(true)
         } else {
-            locationPermissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION,
-                ),
+            systemMockPermissionLauncher.launch(
+                missing.map { permission ->
+                    when (permission) {
+                        SystemMockPermission.FineLocation -> Manifest.permission.ACCESS_FINE_LOCATION
+                        SystemMockPermission.CoarseLocation -> Manifest.permission.ACCESS_COARSE_LOCATION
+                        SystemMockPermission.Notifications -> Manifest.permission.POST_NOTIFICATIONS
+                    }
+                }.toTypedArray(),
             )
         }
     }
@@ -164,9 +191,26 @@ fun SettingsScreen(
                 },
             )
             ListItem(
-                headlineContent = { Text("选择模拟位置 App") },
+                headlineContent = {
+                    Text(
+                        if (locationModel.mockAppSelectionRequired) "重新选择当前千网游"
+                        else "选择模拟位置 App",
+                        color = if (locationModel.mockAppSelectionRequired) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                },
                 supportingContent = {
-                    Text("System Mock 需要在开发者选项中选择当前安装的千网游版本")
+                    Text(
+                        if (locationModel.mockAppSelectionRequired) {
+                            "1. 打开开发者选项；2. 将模拟位置 App 重新选为当前千网游；" +
+                                "3. 返回后点“重试停止”"
+                        } else {
+                            "System Mock 需要在开发者选项中选择当前安装的千网游版本"
+                        },
+                    )
                 },
                 modifier = Modifier.clickable {
                     context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))

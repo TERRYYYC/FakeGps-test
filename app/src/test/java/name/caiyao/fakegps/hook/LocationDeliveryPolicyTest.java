@@ -29,8 +29,20 @@ public class LocationDeliveryPolicyTest {
         Snapshot hook = configuredSnapshot();
         Snapshot unknown = configuredSnapshot();
 
-        assertEquals(hook, LocationDeliveryPolicy.apply(hook, "hook"));
-        assertEquals(unknown, LocationDeliveryPolicy.apply(unknown, "future_mode"));
+        LocationDeliveryPolicy.apply(hook, "hook");
+        LocationDeliveryPolicy.apply(unknown, "future_mode");
+
+        assertConfiguredLocation(hook);
+        assertConfiguredLocation(unknown);
+    }
+
+    private static void assertConfiguredLocation(Snapshot snapshot) {
+        assertEquals(Double.valueOf(50.4501), snapshot.latitude);
+        assertEquals(Double.valueOf(30.5234), snapshot.longitude);
+        assertEquals(Double.valueOf(179.0), snapshot.altitude);
+        assertEquals(Float.valueOf(0.0f), snapshot.speed);
+        assertEquals(Float.valueOf(0.0f), snapshot.bearing);
+        assertEquals(Float.valueOf(3.0f), snapshot.accuracy);
     }
 
     private static Snapshot configuredSnapshot() {

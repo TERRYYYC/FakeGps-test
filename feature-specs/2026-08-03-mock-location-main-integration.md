@@ -18,11 +18,12 @@ created: 2026-08-03
 
 1. `name.caiyao.fakegps` 主 App 的设置页提供“系统 Mock 位置”开关。
 2. 开关关闭时位置由现有 Xposed Hook 注入；开启时 Hook 只旁路位置字段，蜂窝、Wi-Fi 等其他档案字段继续 Hook。
-3. System Mock 不保存第二份坐标，也不保存第二个“当前档案”指针；每次都从 `ConfigPrefsSync` 已发布的第一条/生效中档案读取经纬度。
+3. System Mock 不保存第二份位置，也不保存第二个“当前档案”指针；每次都从 `ConfigPrefsSync` 已发布的第一条/生效中档案读取经纬度、可选海拔与精度。
 4. 档案经纬度在 System Mock 运行中发生变化时，服务在下一次采样周期自动采用新值。
-5. 开启前校验有效经纬度；没有 mock-location app-op、缺定位权限或 provider 调用失败时，设置页显示实际失败，不能显示为已运行。
+5. 开启前校验有效经纬度；没有 mock-location app-op、缺定位权限/通知权限或 provider 调用失败时，设置页显示实际失败，不能显示为已运行。Android 13+ 由产品请求通知权限，不能由验收脚本代授。
 6. 切回 Hook、通知栏 Stop，以及“清理标记尚未清除”的 Hook 启动恢复三条路径都执行 `removeTestProvider("gps")`。普通 Hook 启动不碰系统 provider。设备验收直接检查 `dumpsys location` 中 `gps` provider 已恢复 `GnssService`，不再用 PID/app-op 代理结果。
 7. 地图默认中心与坐标搜索示例为 Kyiv `50.4501, 30.5234`；隔离 debug bench 真机验收使用该档案，不读取或改动 release 用户数据。
+8. System Mock 运行中若用户改选了模拟位置 App，设置页必须识别权限恢复动作，指导“重新选择当前千网游 → 重试停止”；只有真实恢复 GNSS 后才清理恢复标记。
 
 ## 根因与边界
 
@@ -46,7 +47,7 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 ### 2. 生效档案坐标
 
 - 唯一数据源：`ConfigPrefsSync` 发布的 `fields`，其来源仍是 `id ASC` 第一条档案。
-- System Mock 只解析 `latitude`、`longitude` 与可选 `accuracy`；不引入新表、新 preference 或 service extra 坐标。
+- System Mock 只解析 `latitude`、`longitude`、可选 `altitude` 与 `accuracy`；不引入新表、新 preference 或 service extra 位置。
 - 档案更新由既有 repository republish 收口；运行服务每秒读取已发布快照，所以不增加并行通知链。
 
 ### 3. Hook 快照
@@ -76,6 +77,8 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 - **INV-7 升级兼容：** 缺 `locationDeliveryMode` 的 v2/v3 payload 解释为 Hook；v4 的模式字段参与运行决策。
 - **INV-8 数据安全：** 真机开发只改 debug bench 数据；release App、参考 Fake GPS Location 的数据不读取、不迁移、不删除。
 - **INV-9 任务移除不改用户意图：** 从最近任务移除主 App 不停止 System Mock FGS；设备验收须证明 provider 与 Kyiv 输出仍存活，随后显式 Stop 恢复真实 GNSS。
+- **INV-10 权限丢失可恢复：** 若运行中改选模拟位置 App，系统可能保留原 test provider 却拒绝原 owner 移除。App 不伪造成功、不自行改 app-op；UI 指导用户重新选择当前千网游并重试，恢复标记在真实 cleanup 前保持。
+- **INV-11 前台状态可见：** Android 13+ 开启 System Mock 前请求通知权限；用户拒绝时不开启 provider，并说明定位/通知权限缺口。
 
 ## TDD 实施顺序
 
@@ -127,6 +130,8 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 - `MapScreen.kt` 默认中心与 placeholder 改为 `50.4501,30.5234`。
 - 改写 `scripts/mock_provider_acceptance.sh`：目标为 `.bench` 主 App，trap 恢复参考 mock app；Start 后断言 gps/fused 坐标为 Kyiv；Stop 后断言 gps provider 不是 mock 且 owner 为 GNSS。
 - 新增结构测试，禁止脚本仅用 PID/app-op 判 Stop 成功。
+- 验收先撤销通知权限并通过产品运行时权限弹窗授予；禁止 `pm grant POST_NOTIFICATIONS` 掩盖真实入口。
+- 增加 app-op 改选恢复阶段：provider 仍 mock → UI 指引可见 → 重新选择 bench → 重试 Stop → GNSS。
 - 更新 evidence doc，旧 NYC Lab 证据保留为历史，不冒充本次主 App 证据。
 
 ### Task 6 — 验证与交付
@@ -142,5 +147,6 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 
 - 不隐藏 `Location.isMock()`；System Mock 明确保留 mock marker。
 - 不修改/复制 release 用户档案，不自动替用户选择开发者选项 mock app。
+- 不宣称失去 mock app-op 后仍能自动移除 system_server test provider；Android 要求用户先重新选择原 App，本产品负责让这条恢复路径可发现、可验证。
 - 不承诺 force-stop 已死亡进程后仍能即时执行代码；通过用户意图持久化、下次启动恢复与真相验收封住该窗口。
 - 不把 System Mock 开关等同于全局“伪装模式”；蜂窝/Wi-Fi Hook 不受位置通道切换影响。

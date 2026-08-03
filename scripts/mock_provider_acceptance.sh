@@ -44,11 +44,39 @@ tap_node() {
     return 1
 }
 
+tap_node_optional() {
+    local selector dump line coordinates x1 y1 x2 y2
+    selector="$1"
+    dump=$(ui_dump || true)
+    line=$(printf '%s\n' "$dump" | awk -v selector="$selector" '
+        index($0, selector) && first == "" { first = $0 }
+        END { print first }
+    ')
+    coordinates=$(printf '%s\n' "$line" \
+        | sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p')
+    if [[ -z "$coordinates" ]]; then
+        return 1
+    fi
+    read -r x1 y1 x2 y2 <<<"$coordinates"
+    "${ADB[@]}" shell input tap "$(((x1 + x2) / 2))" "$(((y1 + y2) / 2))"
+    echo "UI_TAP_OPTIONAL selector=$selector"
+}
+
 open_settings() {
-    local dump
+    local clean_start="${1:-false}" dump
     "${ADB[@]}" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
     "${ADB[@]}" shell wm dismiss-keyguard >/dev/null 2>&1 || true
-    "${ADB[@]}" shell am start --user 0 -W -n "$BENCH_ACTIVITY" >/dev/null
+    if [[ "$clean_start" == "true" ]]; then
+        # An unfinished profile import can leave DocumentsUI above ComposeActivity in the same
+        # task. A clean first launch prevents that unrelated picker from hiding Settings.
+        "${ADB[@]}" shell am force-stop "$BENCH_PACKAGE" >/dev/null 2>&1 || true
+        # FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TASK. Moto's `am start` does not accept
+        # the long-form --activity-* switches, while the numeric Intent flag is portable.
+        "${ADB[@]}" shell am start --user 0 -W -f 0x10008000 \
+            -n "$BENCH_ACTIVITY" >/dev/null
+    else
+        "${ADB[@]}" shell am start --user 0 -W -n "$BENCH_ACTIVITY" >/dev/null
+    fi
     dump=$(ui_dump || true)
     if [[ "$dump" != *'text="系统 Mock 位置"'* ]]; then
         tap_node 'content-desc="菜单"'
@@ -72,6 +100,14 @@ assert_provider_is_mock() {
     echo "PROVIDER_MOCK owner=$BENCH_PACKAGE coordinate=$KYIV_LATITUDE,$KYIV_LONGITUDE"
 }
 
+assert_gps_provider_residue_is_mock() {
+    local section
+    section=$(gps_section)
+    printf '%s\n' "$section" | rg -q 'gps provider \[mock\]'
+    printf '%s\n' "$section" | rg -q "$BENCH_PACKAGE"
+    echo "PROVIDER_MOCK_RESIDUE owner=$BENCH_PACKAGE"
+}
+
 assert_provider_is_real() {
     local section
     section=$(gps_section)
@@ -90,6 +126,11 @@ assert_service_is_foreground() {
     services=$("${ADB[@]}" shell dumpsys activity services "$BENCH_PACKAGE")
     printf '%s\n' "$services" | rg -q 'MockProviderService'
     printf '%s\n' "$services" | rg -q 'isForeground=true'
+}
+
+notification_permission_is_granted() {
+    "${ADB[@]}" shell dumpsys package "$BENCH_PACKAGE" \
+        | rg -q 'android\.permission\.POST_NOTIFICATIONS: granted=true'
 }
 
 remove_bench_task() {
@@ -146,6 +187,13 @@ restore() {
         "${ADB[@]}" shell am force-stop "$BENCH_PACKAGE" >/dev/null 2>&1
         "${ADB[@]}" shell cmd appops set "$BENCH_PACKAGE" android:mock_location deny \
             >/dev/null 2>&1 || restore_status=1
+        if [[ "$INITIAL_NOTIFICATION_GRANTED" == "true" ]]; then
+            "${ADB[@]}" shell pm grant "$BENCH_PACKAGE" \
+                android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || restore_status=1
+        else
+            "${ADB[@]}" shell pm revoke "$BENCH_PACKAGE" \
+                android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || restore_status=1
+        fi
     fi
     "${ADB[@]}" shell cmd appops set "$REFERENCE_PACKAGE" android:mock_location allow \
         >/dev/null 2>&1 || restore_status=1
@@ -164,6 +212,11 @@ if [[ "$current_mock_app" != "$REFERENCE_PACKAGE" ]]; then
 fi
 
 assert_provider_is_real
+if notification_permission_is_granted; then
+    INITIAL_NOTIFICATION_GRANTED=true
+else
+    INITIAL_NOTIFICATION_GRANTED=false
+fi
 trap restore EXIT
 
 "${ADB[@]}" install -r "$BENCH_APK"
@@ -172,8 +225,10 @@ for package_name in "$REFERENCE_PACKAGE" "$PRODUCT_PACKAGE" "$BENCH_PACKAGE"; do
 done
 
 "${ADB[@]}" shell pm grant "$BENCH_PACKAGE" android.permission.ACCESS_FINE_LOCATION
-"${ADB[@]}" shell pm grant "$BENCH_PACKAGE" android.permission.POST_NOTIFICATIONS \
+"${ADB[@]}" shell pm revoke "$BENCH_PACKAGE" android.permission.POST_NOTIFICATIONS \
     >/dev/null 2>&1 || true
+"${ADB[@]}" shell pm clear-permission-flags "$BENCH_PACKAGE" \
+    android.permission.POST_NOTIFICATIONS user-set user-fixed >/dev/null 2>&1 || true
 
 # The debug-only DUMP-protected seam resets only .bench test data, then saves Kyiv through the
 # real ProfileRepository so ConfigPrefsSync and the service consume the normal effective profile.
@@ -183,9 +238,14 @@ sleep 2
 "${ADB[@]}" shell cmd appops set "$REFERENCE_PACKAGE" android:mock_location deny
 "${ADB[@]}" shell cmd appops set "$BENCH_PACKAGE" android:mock_location allow
 
-open_settings
+open_settings true
 tap_node 'checkable="true" checked="false"'
+# The product must request notification permission itself. The harness deliberately starts from
+# revoked state instead of granting it out of band.
+tap_node 'resource-id="com.android.permissioncontroller:id/permission_allow_button"'
 sleep 3
+notification_permission_is_granted
+echo "NOTIFICATION_PERMISSION_GRANTED via=product-runtime-request"
 assert_provider_is_mock
 
 bench_pid=$("${ADB[@]}" shell pidof -s "$BENCH_PACKAGE" | tr -d '\r')
@@ -209,7 +269,16 @@ echo "ACCEPTANCE_TASK_REMOVAL_PHASE_COMPLETE"
 
 "${ADB[@]}" shell monkey -p com.google.android.apps.maps 1 >/dev/null
 sleep "$OBSERVE_SECONDS"
-tap_node 'content-desc="重新将您所在位置设为地图中心"'
+if tap_node_optional 'content-desc="重新将您所在位置设为地图中心"' || \
+    tap_node_optional 'content-desc="Re-center map to your location"' || \
+    tap_node_optional 'content-desc="Recenter map to your location"'; then
+    echo "MAPS_RECENTER tapped"
+else
+    # When Maps already follows the blue dot it omits the recenter control. Provider truth and the
+    # screenshot remain the acceptance evidence; absence of a transient locale-specific button is
+    # not a product failure.
+    echo "MAPS_RECENTER already-centered-or-control-absent"
+fi
 sleep 3
 echo "MAPS_FOREGROUND coordinate=$KYIV_LATITUDE,$KYIV_LONGITUDE"
 "${ADB[@]}" shell dumpsys activity activities \
@@ -221,11 +290,26 @@ if [[ -n "$SCREENSHOT_PATH" ]]; then
 fi
 echo "ACCEPTANCE_ACTIVE_PHASE_COMPLETE"
 
+# Reproduce the real recovery boundary: Android lets the user select another mock-location app
+# while our provider remains installed. Without the original app-op, Stop cannot remove it.
+"${ADB[@]}" shell cmd appops set "$BENCH_PACKAGE" android:mock_location deny
+"${ADB[@]}" shell cmd appops set "$REFERENCE_PACKAGE" android:mock_location allow
+sleep 3
+assert_gps_provider_residue_is_mock
 open_settings
-tap_node 'checkable="true" checked="true"'
+recovery_dump=$(ui_dump || true)
+printf '%s\n' "$recovery_dump" | rg -q 'text="重新选择当前千网游"'
+printf '%s\n' "$recovery_dump" | rg -q 'text="重试停止"'
+echo "APP_OP_RECOVERY_GUIDANCE_VISIBLE"
+
+# This simulates the user following the inline Developer Options instruction, then exercising the
+# shipped retry button. The app never attempts to grant this app-op itself.
+"${ADB[@]}" shell cmd appops set "$REFERENCE_PACKAGE" android:mock_location deny
+"${ADB[@]}" shell cmd appops set "$BENCH_PACKAGE" android:mock_location allow
+tap_node 'text="重试停止"'
 sleep 2
 assert_provider_is_real
-echo "ACCEPTANCE_STOP_PHASE_COMPLETE"
+echo "ACCEPTANCE_APP_OP_RECOVERY_PHASE_COMPLETE"
 
 restore
 restored_mock_app=$("${ADB[@]}" shell cmd appops query-op android:mock_location allow | tr -d '\r')
