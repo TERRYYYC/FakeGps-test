@@ -15,11 +15,14 @@ created: 2026-08-03
 - Remediation implementation commit: `d79cd735feaa6bd7ad26854dc84e08562277ec24`
 - R2 finding base: `65834f713443a92dde14560a84b9d3d6b988e786`
 - R3 first-start recovery implementation: `5dbcfa43b17d2982772c81ee9eb2c8897f49ee94`
+- R4 picker-reachability implementation: `fdcc55a2c78166c1828a51ab4add6a189930ddde`
 - Device: moto g54 5G `ZY22JHW9M4`, Android 15
 - Debug main APK: `app/build/outputs/apk/debug/app-debug.apk`
-- Author dogfood Debug APK SHA-256 (exact source, Android Studio JBR 21.0.10): `0aa312f2e5fe9b6ce6ef67e17e1e90a6dadd540fcb2ac4ef1cf69d14396f9cbc`
-- Independent R3 reviewer Debug APK SHA-256 (exact source, Homebrew OpenJDK 17.0.20): `83e725aac7615f2d646b34fd920ecce8fbab5ca70cf6066a206bf891ad62ebc4`
-- Release APK SHA-256 (informational): `ae3c923eb42b080a73edeeb0836cef1783ec68b7f122ef07f50d919b9f490863`
+- R4 author dogfood Debug APK SHA-256 (exact implementation, Android Studio JBR 21.0.10): `07b9a7c589149175c04913e595af22316addabfd3d167f384dd8d8979f8c23ef`
+- R4 Release APK SHA-256 samples (same implementation + Android Studio JBR 21.0.10, informational): `ba3a4086337791096bf7bcc64a0289dd6bfdbcf3216d1db725087cd77616f523` / `8e98b5ba2bb77eb31fb8ad97b8bbc31a7b16f4a5e9f9e2a28a0cab156dfdd4d5` / final rerun `4db1c3be082c2a7d2fc152b658923b4f99319cc3a5c8cde4886907fe04e86a46`
+- Historical pre-R4 R3 author Debug APK SHA-256 (Android Studio JBR 21.0.10): `0aa312f2e5fe9b6ce6ef67e17e1e90a6dadd540fcb2ac4ef1cf69d14396f9cbc`
+- Historical pre-R4 independent reviewer Debug APK SHA-256 (Homebrew OpenJDK 17.0.20): `83e725aac7615f2d646b34fd920ecce8fbab5ca70cf6066a206bf891ad62ebc4`
+- Historical pre-R4 Release APK SHA-256 (Android Studio JBR 21.0.10, informational): `ae3c923eb42b080a73edeeb0836cef1783ec68b7f122ef07f50d919b9f490863`
 - Private screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/maps-main-kyiv-appop-recovery.png`
 - Screenshot SHA-256: `6ae4f78e3ea1f7a3f2d99e201181974aa06658bdd2ea38e3c1a1a5bf63ee2c96`
 - Recovery guidance screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-appop-recovery.png`
@@ -31,7 +34,7 @@ created: 2026-08-03
 
 截图留在设备备份目录而不进入 Git。画面显示 Google Maps 蓝点位于 Kyiv 的 Independence Square / Maidan Nezalezhnosti 附近，与主 App 生效中档案 `50.4501,30.5234` 一致。
 
-## 对 co-creator 四项纠正的闭环
+## 对 co-creator 纠正与手动发现的闭环
 
 | 纠正 | 产品终态 | 验收证据 |
 |---|---|---|
@@ -39,6 +42,7 @@ created: 2026-08-03
 | 数据应来自主 App 档案，开关决定 Hook/Mock | schema v4 发布 `locationDeliveryMode`；System Mock 每 tick 解析 `ConfigPrefsSync` 的同一份生效档案；System Mock 时 Hook 仅清空位置字段，cell/Wi-Fi 保留 | JVM 契约覆盖 v2/v3 兼容、档案解析、位置旁路与非位置字段保留；真机用 `ProfileRepository` 保存 Kyiv 后经正常 transport 输出 |
 | 虚拟位置不能停 | cleanup marker 表示未完成切换事务；显式 Stop 无条件 remove；失去 mock app-op 时给出“重新选择当前千网游 → 重试停止”；移除任务卡不停止 FGS | 任务卡移除后 FGS 与 Kyiv gps/fused 仍持续；验收会在运行中改选 mock app，确认指引后重新授权并由同一 Stop primitive 恢复 `identity=1000/android[GnssService]` |
 | 地址改为基辅 | 地图默认、示例与隔离验收档案统一为 `50.4501,30.5234` | gps、fused 和 Maps 蓝点三路一致 |
+| 手动验收在系统选择器找不到千网游 | main manifest 声明 Settings 候选发现所需的 `ACCESS_MOCK_LOCATION`，并解释性压制只适用于普通 App 的 `MockLocation` lint 假设 | Debug/Release merged manifest 都有声明；真机 harness 在首次 shell app-op 前打开真实系统 picker，输出 `MOCK_APP_PICKER_ENTRY_VISIBLE` |
 
 ## Exact-code 真机结果
 
@@ -46,6 +50,8 @@ created: 2026-08-03
 
 ```text
 PROVIDER_REAL owner=GnssService
+MOCK_LOCATION_PERMISSION_DECLARED package=name.caiyao.fakegps.bench
+MOCK_APP_PICKER_ENTRY_VISIBLE package=name.caiyao.fakegps.bench label=千网游·测试
 NOTIFICATION_PERMISSION_GRANTED via=product-runtime-request
 FIRST_START_PERMISSION_GUIDANCE_VISIBLE
 PROVIDER_REAL owner=GnssService
@@ -69,7 +75,7 @@ ACCEPTANCE_RESTORE_PHASE_COMPLETE
 
 恢复后又单独启动一次 `.bench` 的默认 Hook 模式：mock app-op 仍由参考 App 独占、`MockProviderService` 不存在、gps provider 仍是真实 GNSS、日志无启动失败。最后再次 force-stop `.bench` 并打开参考 App。
 
-Settings OFF 图与 15 秒录屏来自首轮主 App 集成，覆盖用户入口、同一生效档案坐标和开关动作。本轮 exact build 的 Maps 图由脚本先移除任务卡并确认 FGS/gps/fused 继续；Maps 已跟随蓝点而没有渲染 recenter 控件，脚本按可选控件处理并截图。画面蓝点位于 Kyiv Independence Square。随后脚本改选 app-op，验证残留 provider 与恢复指引，再重新授权当前千网游并由“重试停止”恢复 GNSS。最后确认 `.bench` 仍安装、服务无残留，并恢复参考 App。
+Settings OFF 图与 15 秒录屏来自首轮主 App 集成，覆盖用户入口、同一生效档案坐标和开关动作。R4 exact build `07b9a7c5…c23ef` 先验证 installed permission，再真实打开 Android picker 并看到“千网游·测试”，之后才允许 shell app-op 自动化后续步骤。Maps 阶段先移除任务卡并确认 FGS/gps/fused 继续；Maps 已跟随蓝点而没有渲染 recenter 控件，脚本按可选控件处理。随后脚本改选 app-op，验证残留 provider 与恢复指引，再重新授权当前千网游并由“重试停止”恢复 GNSS。最后确认 `.bench` 仍安装、服务无残留，并恢复参考 App。
 
 R3 first-start 图来自作者用 Android Studio JBR 21.0.10 构建的 debug APK `0aa312f2…f9cbc`：开关保持关闭，状态明确说明 System Mock 未启动，动作是“选择当前千网游 → 重新打开开关”；画面没有“残留位置”或“重试停止”。截图后同一 harness force-stop/reopen，并以 `FIRST_START_RESTART_CLEAN` 证明失败未持久化为 cleanup transaction。Fable5 另用 Homebrew OpenJDK 17.0.20 从 exact HEAD 构建 `83e725aa…ebc4` 并跑完整真机链 exit 0。
 
@@ -79,22 +85,22 @@ R3 first-start 图来自作者用 Android Studio JBR 21.0.10 构建的 debug APK
 |---|---|
 | `./gradlew testDebugUnitTest --rerun-tasks` | 412 tests；0 failure/error/skipped（从 XML 重算） |
 | `./gradlew assembleDebug assembleRelease --rerun-tasks` | BUILD SUCCESSFUL；release `lintVital` 通过 |
-| `python3 scripts/test_mock_provider_main_integration.py` | 6/6 pass |
+| `python3 scripts/test_mock_provider_main_integration.py` | 7/7 pass；结构锁定 main manifest 权限、解释性 lint suppression 与 picker 前置门禁 |
 | `bash -n scripts/mock_provider_acceptance.sh` | pass |
 | `git diff --check` | pass |
-| APK manifest inspection | debug `.bench` / release main identity 正确；两者保留 Xposed metadata、动态 provider authority 与 `foregroundServiceType=location` |
+| APK manifest inspection | debug `.bench` / release main identity 正确；两者都声明 `ACCESS_MOCK_LOCATION`，并保留 Xposed metadata、动态 provider authority 与 `foregroundServiceType=location` |
 | reviewer 原始 5 个变异 | `readCleanupRequired`、refresh mode guard、`cleanupRuntimeOnly.stop()`、Hook passthrough、sample fixed clock 任一破坏均使定向测试变红 |
 | R3 新增 4 个变异 | 合并 start/stop recovery、跳过首次失败 marker clear、删除普通 Hook cleanup guard、丢失 refresh ownership context 均编译成功并触发定向断言失败 |
-| `scripts/mock_provider_acceptance.sh ZY22JHW9M4` | notification prompt / first-start denial / restart clean / task removal / Maps / app-op recovery / restore 全阶段，exit 0 |
+| `scripts/mock_provider_acceptance.sh ZY22JHW9M4` | installed permission / real system picker / notification prompt / first-start denial / restart clean / task removal / Maps / app-op recovery / restore 全阶段，exit 0；picker 两项在首次 shell app-op 前完成 |
 | `./gradlew lintDebug --rerun-tasks` | inherited baseline：20 errors / 158 warnings；20 个 error 全部位于未改动的 `HookProbe.kt`、`MainActivity.java`、`TempDao.java` 与 `res/values/strings.xml`，本 diff 零 lint error；release `lintVital` 通过 |
 
 ## Quality Gate 审计
 
-- Vision / delivery completeness：四项 operator 纠正已逐项映射到产品入口、同源档案、真实 Stop 与 Kyiv；本次产物是可扩展的主 App 实现，不再需要把 Lab 重写一遍。
+- Vision / delivery completeness：operator 纠正已逐项映射到产品入口、同源档案、真实 Stop、Kyiv 与系统选择器可达性；本次产物是可扩展的主 App 实现，不再需要把 Lab 重写一遍。
 - Close gate：当前只申请 code review，不关闭整个 F001；follow-up-tail scan 除本句的审计术语外零命中，无未满足 AC 被包装为“后续”。
 - Architecture ownership：`Android application / location delivery`；`Map delta: none`，因为仓库无 ownership registry 且组件均在既有 `:app` 内。新增 gateway/service 是该 cell 内实现边界，不引入外部服务或第二份状态存储。
-- Fallback audit：仓库无自动脚本。本轮 diff 人工扫描到 orchestrator 的 marker/ownership guards、controller 的两种 recovery 分支与 Settings 两种动作渲染；它们是同一显式状态坐标的互斥边，不是逐层 fallback。单个调用链最大嵌套为 controller catch 内两层，未达到同文件新增三层 fallback 治理阈值。
-- Design check：仓库 glob 无 `.pen`，而本 diff 有 Compose UI 改动，因此标记“⚠️ 无设计稿”；以真实设备的恢复指引节点、Settings OFF 截图、15 秒开关录屏和 Maps 下游截图验收。
+- Fallback audit：仓库无自动脚本。R4 新 picker 函数只在一个真实 Settings 真相源内做有界的页面滚动、中文/英文行名匹配与 label/package 候选匹配；这些不会退化到 app-op、manifest 或缓存代理证据，失败统一返回并交给 trap restore，因而不是逐层降低标准的 fallback。既有 orchestrator marker/ownership guards、controller recovery 与 Settings 动作仍是同一显式状态坐标的互斥边。
+- Design check：仓库 glob 无 `.pen`；主 App 集成整体含 Compose UI，已有真实设备恢复指引、Settings OFF、15 秒开关录屏与 Maps 下游证据。R4 delta 仅改 manifest、验收 harness、结构测试与文档，没有新增 UI 布局或文案。
 - Artifact hygiene：Git 工作树与 `origin/master...HEAD` 均无仓库根目录媒体；设备图片/视频仅在正式 backup evidence 目录。
 - Capability tips / Cat Café architecture scripts：该 Android 仓库无对应 surface，not applicable。
 
@@ -102,7 +108,7 @@ R3 first-start 图来自作者用 Android Studio JBR 21.0.10 构建的 debug APK
 
 Scope verdict：✅ 必做。
 
-真实路径：隔离 `.bench` 经 `ProfileRepository` 保存 Kyiv → 产品弹窗授予通知权限 → 正常 `ConfigPrefsSync` 发布 → 设置页打开 System Mock → gps/fused/Maps 验证 → 运行中改选 mock app → 恢复指引可见 → 重新选择当前千网游 → 重试停止 → GNSS → 恢复参考 App。
+真实路径：安装 `.bench` → 验 installed manifest → 打开 Android 真实模拟位置 App 选择器并看到“千网游·测试” → 隔离 `.bench` 经 `ProfileRepository` 保存 Kyiv → 产品弹窗授予通知权限 → 正常 `ConfigPrefsSync` 发布 → 设置页打开 System Mock → gps/fused/Maps 验证 → 运行中改选 mock app → 恢复指引可见 → 重新选择当前千网游 → 重试停止 → GNSS → 恢复参考 App。
 
 Dogfood 当轮发现并修复：
 
@@ -115,11 +121,13 @@ Dogfood 当轮发现并修复：
 7. 验收脚本 `pm grant POST_NOTIFICATIONS` 掩盖首次用户路径 → 改为 revoke 后驱动产品权限弹窗，并核验最终 permission state。
 8. 独立复跑撞到 DocumentsUI 残留 task 与 Maps 瞬态 recenter 按钮 → 首次设置页用 portable clear-task flag；recenter 变为多语言可选控件，gps/fused/provider truth 与截图仍是硬证据。
 9. R2 首次未授权被误报为残留且 marker 永久保留 → recovery 拆成 start/cleanup 两条边，失败状态显式携带 cleanup ownership；harness 新增首次指引与进程重启清洁阶段。
+10. co-creator 按首次指引手动进入系统选择器，却找不到千网游 → main manifest 补齐 `ACCESS_MOCK_LOCATION`；harness 在任何 shell app-op 旁路前验证 installed permission 与真实 picker 候选，堵住“开发者路径替代用户路径”的同类假绿。
 
 ## Fable review findings 处置
 
 | Finding | 处置 |
 |---|---|
+| R4 P0 系统选择器没有千网游 | main manifest 声明 `ACCESS_MOCK_LOCATION` 并带原因压制 release lint；结构契约先红后绿；真机真实 picker 前置门禁与完整链 exit 0。 |
 | P1 app-op 改选后 Stop 死局 | 结构化 `MockProviderRecovery` + 内联 Developer Options 指引；真机完整复现与恢复。 |
 | P1 `cleanupRuntimeOnly()` 零覆盖 | 新增 side-effect/order test；删除 `controller.stop()` 的 reviewer 变异现会失败。 |
 | P2 Hook 空测试 | 改为逐字段断言；破坏 Hook passthrough 的变异现会失败。 |
@@ -146,8 +154,8 @@ Dogfood 当轮发现并修复：
 
 - System Mock 位置保留 Android mock marker；本功能不尝试隐藏 `Location.isMock()`。
 - API 24–30 legacy registration 有纯代码契约和 review 覆盖；本轮真机是 API 35。
-- Android 不允许 App 自行成为“模拟位置信息应用”。若用户在运行中改选别的 App，原 test provider 可能残留；设置页会明确要求重新选择当前千网游后重试，绝不把权限失败显示成已停止。
+- Android 不允许 App 自行成为“模拟位置信息应用”。main manifest 的 legacy `ACCESS_MOCK_LOCATION` 只让产品进入 Settings 候选列表，真正授权仍由用户选择后的 `mock_location` app-op 控制。若用户在运行中改选别的 App，原 test provider 可能残留；设置页会明确要求重新选择当前千网游后重试，绝不把权限失败显示成已停止。
 - 已运行的 Hook 目标进程按既有 5–60 秒可配置周期读取 mode。切换期间 provider 与旧 Snapshot 可能短暂重叠，但两者来自同一生效档案坐标；目标在下一次刷新读取新模式，这是现有 transport 的传播语义，不伪装成跨进程同步切换。
 - debug acceptance Activity 受 debug-only `android.permission.DUMP` gate 保护且不进入 release；它只操作 `.bench` 数据。该权限可由 adb 授予，正是无 root 验收 seam 的有意取舍。
-- APK hash 必须与 exact source **及执行 Gradle 的 JDK**一起解释，不能单独作为跨环境 artifact identity。R3 已从 clean exact HEAD 决定性复现：JBR 21.0.10 为 `0aa312f2…f9cbc`，OpenJDK 17.0.20 为 `83e725aa…ebc4`；两者签名证书、资源及 16/18 个 DEX 相同，差异来自 javac 对 enum switch 的 lowering（JDK 17 额外生成 `UnavailableValueResolver$1`），继而改变两个 DEX。项目当前只固定 Java source/target 17，未固定 Gradle runtime JDK。Release SHA-256 同样只记录作者 JBR 21 构建，不声称跨 JDK 逐位复现；R8/resource shrinking 仍可能扩大环境差异。
+- APK hash 必须与 exact source **及执行 Gradle 的 JDK**一起解释，不能单独作为跨环境 artifact identity。R4 JBR 21 debug 稳定为 `07b9a7c5…c23ef`；release 在同一源码/JBR 的三次 R8 构建得到 `ba3a4086…f523`、`8e98b5ba…d4d5` 与 `4db1c3be…6a46`，因此只作 informational build sample。R3 曾从 clean exact HEAD 决定性复现 debug：JBR 21.0.10 为 `0aa312f2…f9cbc`，OpenJDK 17.0.20 为 `83e725aa…ebc4`；两者签名证书、资源及 16/18 个 DEX 相同，差异来自 javac 对 enum switch 的 lowering（JDK 17 额外生成 `UnavailableValueResolver$1`），继而改变两个 DEX。项目当前只固定 Java source/target 17，未固定 Gradle runtime JDK。Release R8/resource shrinking 的逐位输出不作为 exact source identity。
 - 退役 Lab APK `name.caiyao.fakegps.mockprovider` 可能仍安装在开发设备；产品不会擅自卸载它。验收前置守卫要求参考 App 是唯一获准 mock app，避免 stale Lab 争用 app-op。
