@@ -10,6 +10,31 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MockProviderMainIntegrationContractTest(unittest.TestCase):
+    def test_picker_acceptance_wakes_device_before_opening_settings(self) -> None:
+        harness = (ROOT / "scripts/mock_provider_acceptance.sh").read_text()
+
+        wake_helper = re.search(
+            r"wake_and_unlock_device\(\) \{(?P<body>.*?)\n\}",
+            harness,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(wake_helper)
+        self.assertIn("KEYCODE_WAKEUP", wake_helper.group("body"))
+        self.assertIn("dismiss-keyguard", wake_helper.group("body"))
+
+        picker = re.search(
+            r"assert_mock_app_listed_in_picker\(\) \{(?P<body>.*?)\n\}\n\nremove_bench_task",
+            harness,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(picker)
+        picker_body = picker.group("body")
+        self.assertIn("wake_and_unlock_device", picker_body)
+        self.assertLess(
+            picker_body.index("wake_and_unlock_device"),
+            picker_body.index("android.settings.APPLICATION_DEVELOPMENT_SETTINGS"),
+        )
+
     def test_product_manifest_declares_mock_location_permission_for_system_picker(self) -> None:
         manifest = (ROOT / "app/src/main/AndroidManifest.xml").read_text()
 

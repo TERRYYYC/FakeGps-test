@@ -64,10 +64,14 @@ tap_node_optional() {
     echo "UI_TAP_OPTIONAL selector=$selector"
 }
 
-open_settings() {
-    local clean_start="${1:-false}" dump
+wake_and_unlock_device() {
     "${ADB[@]}" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
     "${ADB[@]}" shell wm dismiss-keyguard >/dev/null 2>&1 || true
+}
+
+open_settings() {
+    local clean_start="${1:-false}" dump
+    wake_and_unlock_device
     if [[ "$clean_start" == "true" ]]; then
         # An unfinished profile import can leave DocumentsUI above ComposeActivity in the same
         # task. A clean first launch prevents that unrelated picker from hiding Settings.
@@ -155,6 +159,7 @@ assert_mock_app_listed_in_picker() {
         'text="Select mock location app"'
     )
 
+    wake_and_unlock_device
     "${ADB[@]}" shell am start -a android.settings.APPLICATION_DEVELOPMENT_SETTINGS >/dev/null
     sleep 2
 

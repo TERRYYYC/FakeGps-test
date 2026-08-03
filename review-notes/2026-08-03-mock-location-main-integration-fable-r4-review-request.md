@@ -11,7 +11,7 @@ Review-Target-ID: `f001-mock-location-main-integration`
 Branch: `feat/mock-provider-main-integration`
 PR: `https://github.com/TERRYYYC/FakeGps-test/pull/10`
 Withdrawn-approval base: `48f28da0fb84f8553cb6dbe7b67e297255e56ca9`
-R4 implementation commit: `fdcc55a2c78166c1828a51ab4add6a189930ddde`
+R4 implementation commit: `fdcc55a7326820f139b3955dc9b56c412ef22656`
 Reviewer: `@fable5`（只读 review + 独立验证）
 
 > Review packet/evidence 的 carrier commit 不属于产品逻辑。请从 PR #10 remote pull head 解析 exact HEAD，并与本轮路由消息中的 SHA 三方核对。
@@ -48,7 +48,7 @@ RED 先于实现：
 
 GREEN：
 
-- 结构契约 7/7，`bash -n` 通过。
+- 结构契约 8/8，`bash -n` 通过；R4 reviewer follow-up 新增 picker 自身 wake/unlock 顺序契约。
 - JBR 21 全门禁 412/412，Debug/Release/`lintVitalRelease` BUILD SUCCESSFUL。
 - debug/release merged manifest 与 APK permissions 都包含 `ACCESS_MOCK_LOCATION`。
 - moto g54 exact debug APK 在第一次 shell app-op 前输出：
@@ -104,7 +104,7 @@ Pattern：自动化用开发者旁路替代产品文案承诺的用户入口。
 
 从 GitHub 全新 clone/detached checkout PR #10 exact remote HEAD：
 
-1. 独立运行 412 JVM、结构 7/7、Debug/Release 与 `lintVitalRelease`。
+1. 独立运行 412 JVM、结构 8/8、Debug/Release 与 `lintVitalRelease`。
 2. 运行上述 3 个 R4 变异并区分真实断言失败、编译假击杀与变异未生效。
 3. moto g54 先验 permission + 真实 picker，再跑完整 harness；核对最终参考 App sole allow、真实 GNSS、Bench 无残留 service。
 4. 返回 `APPROVE` 或带文件/行号的 `REQUEST CHANGES`；不改代码、不 commit、不 push、不 merge。
@@ -125,7 +125,7 @@ ANDROID_HOME='/Users/terry/Library/Android/sdk' \
 # BUILD SUCCESSFUL; 412/412; 0 failure/error/skipped
 
 python3 scripts/test_mock_provider_main_integration.py
-# 7/7 OK
+# 8/8 OK
 
 bash -n scripts/mock_provider_acceptance.sh
 # exit 0
@@ -140,6 +140,11 @@ OBSERVE_SECONDS=1 scripts/mock_provider_acceptance.sh ZY22JHW9M4
 - Final device: reference App sole mock app；gps `identity=1000/android[GnssService]`；四包均在；Bench service absent；notification permission 恢复原值。
 - 本轮没有修改 controller/orchestrator fallback；新 shell 函数线性扫描真实 Settings 页面，失败即返回并由既有 trap 恢复 app-op/provider。
 - Root artifact gate：工作树与 `origin/master...HEAD` 均无仓库根目录媒体/设计工件；仓库 glob 无 `.pen`，R4 delta 无 UI 布局/文案改动。
+
+## R4 Review Follow-up
+
+- P2 Dozing：结构 RED 因 `wake_and_unlock_device` 缺失而失败；抽取单一 seam 后 picker 与 `open_settings` 共用，GREEN 8/8。moto g54 明确从 `mWakefulness=Dozing` 起跑，真实 picker 及完整 restore 链 exit 0。
+- P3 provenance：implementation commit 已更正为可解析的 `fdcc55a7326820f139b3955dc9b56c412ef22656`；错误对象在本地/远端均不存在。
 
 ## 相关文档
 

@@ -26,6 +26,19 @@ resolved: 2026-08-03
 
 这与 R2 的通知权限 finding 同属“验收脚本用开发者旁路替代用户入口”。不变量：任何产品文案指向的系统授权动作，harness 在使用 adb/appops 旁路继续后续阶段前，必须先证明真实系统入口存在且目标 App 可达。扫描范围为 notification runtime prompt 与 mock-location picker；前者已有产品弹窗门禁，本轮补齐后者。
 
+### R4 review follow-up：息屏设备打不开 picker
+
+| 栏位 | 内容 |
+|---|---|
+| **1. 现象** | R4 picker 门禁在 `mWakefulness=Dozing` 时以 `Unable to open the system mock-location app picker` 失败；唤醒同一设备后立即找到真实行。期望 harness 从正常息屏起点也能验证 picker。 |
+| **2. 证据** | Fable5 独立 exact-HEAD 复跑：picker assertion 位于首次 `open_settings` 之前，函数内 `KEYCODE_WAKEUP` / `dismiss-keyguard` 调用数为 0；真实文案和扫描预算在唤醒后均通过。 |
+| **3. 根因** | 屏幕/锁屏归一化被私有地放在稍后才调用的 `open_settings()`，而更早执行的 picker 系统 UI 门禁没有自己的前置条件。 |
+| **4. 诊断策略** | 按调用顺序检查所有 UI 驱动函数，区分“选择器不存在”和“设备不可交互”；抽取单一 wake/unlock seam，并由结构测试锁住 picker 在启动 Settings 前调用它。 |
+| **5. 超时策略** | 若抽取 seam 后 Dozing 仍失败，停止增加 sleep/scroll 次数，改采集 wakefulness、keyguard 与 `am start -W` 状态，定位 OEM 电源/锁屏边界。 |
+| **6. 预警策略** | 复制 wake 两行到多个调用点、增加扫描预算、或把 `Unable to open` 混成“App 不在列表”都表示修错坐标。 |
+| **7. 用户可见交互修正** | 无产品 UI 变化；reviewer/operator 可从手机正常息屏状态直接运行验收。 |
+| **8. 验收** | RED：`test_picker_acceptance_wakes_device_before_opening_settings` 因 helper 不存在失败。GREEN：抽取 `wake_and_unlock_device`，picker 与 `open_settings` 共用；结构契约 8/8、`bash -n` 通过，并从 Dozing 起点重跑真实 picker/完整链。 |
+
 ## 报告人
 
 co-creator 在 PR #10 final-HEAD 手动验收中发现；Fable5 复现、定位 manifest 根因并用一次性实验包验证方向；Sol 负责独立复现、TDD 修复与最终验收。

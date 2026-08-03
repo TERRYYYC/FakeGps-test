@@ -15,7 +15,7 @@ created: 2026-08-03
 - Remediation implementation commit: `d79cd735feaa6bd7ad26854dc84e08562277ec24`
 - R2 finding base: `65834f713443a92dde14560a84b9d3d6b988e786`
 - R3 first-start recovery implementation: `5dbcfa43b17d2982772c81ee9eb2c8897f49ee94`
-- R4 picker-reachability implementation: `fdcc55a2c78166c1828a51ab4add6a189930ddde`
+- R4 picker-reachability implementation: `fdcc55a7326820f139b3955dc9b56c412ef22656`
 - Device: moto g54 5G `ZY22JHW9M4`, Android 15
 - Debug main APK: `app/build/outputs/apk/debug/app-debug.apk`
 - R4 author dogfood Debug APK SHA-256 (exact implementation, Android Studio JBR 21.0.10): `07b9a7c589149175c04913e595af22316addabfd3d167f384dd8d8979f8c23ef`
@@ -46,7 +46,7 @@ created: 2026-08-03
 
 ## Exact-code 真机结果
 
-验收从真实 GNSS 且参考 App 独占 mock app-op 开始，只安装 `.bench` debug main APK，并仅重置 `.bench` 的隔离数据：
+验收从真实 GNSS 且参考 App 独占 mock app-op 开始，只安装 `.bench` debug main APK，并仅重置 `.bench` 的隔离数据。R4 reviewer follow-up 另从明确的 `mWakefulness=Dozing` 起点运行同一脚本，picker 门禁自行唤醒设备后继续全链：
 
 ```text
 PROVIDER_REAL owner=GnssService
@@ -85,13 +85,13 @@ R3 first-start 图来自作者用 Android Studio JBR 21.0.10 构建的 debug APK
 |---|---|
 | `./gradlew testDebugUnitTest --rerun-tasks` | 412 tests；0 failure/error/skipped（从 XML 重算） |
 | `./gradlew assembleDebug assembleRelease --rerun-tasks` | BUILD SUCCESSFUL；release `lintVital` 通过 |
-| `python3 scripts/test_mock_provider_main_integration.py` | 7/7 pass；结构锁定 main manifest 权限、解释性 lint suppression 与 picker 前置门禁 |
+| `python3 scripts/test_mock_provider_main_integration.py` | 8/8 pass；结构锁定 main manifest 权限、解释性 lint suppression、picker 前置门禁与 picker 自身 wake/unlock 前置条件 |
 | `bash -n scripts/mock_provider_acceptance.sh` | pass |
 | `git diff --check` | pass |
 | APK manifest inspection | debug `.bench` / release main identity 正确；两者都声明 `ACCESS_MOCK_LOCATION`，并保留 Xposed metadata、动态 provider authority 与 `foregroundServiceType=location` |
 | reviewer 原始 5 个变异 | `readCleanupRequired`、refresh mode guard、`cleanupRuntimeOnly.stop()`、Hook passthrough、sample fixed clock 任一破坏均使定向测试变红 |
 | R3 新增 4 个变异 | 合并 start/stop recovery、跳过首次失败 marker clear、删除普通 Hook cleanup guard、丢失 refresh ownership context 均编译成功并触发定向断言失败 |
-| `scripts/mock_provider_acceptance.sh ZY22JHW9M4` | installed permission / real system picker / notification prompt / first-start denial / restart clean / task removal / Maps / app-op recovery / restore 全阶段，exit 0；picker 两项在首次 shell app-op 前完成 |
+| `scripts/mock_provider_acceptance.sh ZY22JHW9M4` | 从 `mWakefulness=Dozing` 起点完成 installed permission / real system picker / notification prompt / first-start denial / restart clean / task removal / Maps / app-op recovery / restore 全阶段，exit 0；picker 两项在首次 shell app-op 前完成 |
 | `./gradlew lintDebug --rerun-tasks` | inherited baseline：20 errors / 158 warnings；20 个 error 全部位于未改动的 `HookProbe.kt`、`MainActivity.java`、`TempDao.java` 与 `res/values/strings.xml`，本 diff 零 lint error；release `lintVital` 通过 |
 
 ## Quality Gate 审计
@@ -122,11 +122,14 @@ Dogfood 当轮发现并修复：
 8. 独立复跑撞到 DocumentsUI 残留 task 与 Maps 瞬态 recenter 按钮 → 首次设置页用 portable clear-task flag；recenter 变为多语言可选控件，gps/fused/provider truth 与截图仍是硬证据。
 9. R2 首次未授权被误报为残留且 marker 永久保留 → recovery 拆成 start/cleanup 两条边，失败状态显式携带 cleanup ownership；harness 新增首次指引与进程重启清洁阶段。
 10. co-creator 按首次指引手动进入系统选择器，却找不到千网游 → main manifest 补齐 `ACCESS_MOCK_LOCATION`；harness 在任何 shell app-op 旁路前验证 installed permission 与真实 picker 候选，堵住“开发者路径替代用户路径”的同类假绿。
+11. R4 reviewer 从息屏设备运行 picker 门禁，因 wake/unlock 只存在于稍后的 `open_settings()` 而无法打开系统页 → 抽取单一 `wake_and_unlock_device` seam，由 picker 与设置页共用；结构契约锁定 picker 在启动 Settings 前调用它。
 
 ## Fable review findings 处置
 
 | Finding | 处置 |
 |---|---|
+| R4 P2 picker 门禁不唤醒息屏设备 | 共用 `wake_and_unlock_device` seam；RED 因 helper 缺失失败，GREEN 8/8；从 Dozing 起点重跑真实 picker/链路。 |
+| R4 P3 implementation SHA 不存在 | evidence 与 R4 packet 统一更正为真实 commit `fdcc55a7326820f139b3955dc9b56c412ef22656`，并用 `git cat-file -e` 验证对象存在。 |
 | R4 P0 系统选择器没有千网游 | main manifest 声明 `ACCESS_MOCK_LOCATION` 并带原因压制 release lint；结构契约先红后绿；真机真实 picker 前置门禁与完整链 exit 0。 |
 | P1 app-op 改选后 Stop 死局 | 结构化 `MockProviderRecovery` + 内联 Developer Options 指引；真机完整复现与恢复。 |
 | P1 `cleanupRuntimeOnly()` 零覆盖 | 新增 side-effect/order test；删除 `controller.stop()` 的 reviewer 变异现会失败。 |
