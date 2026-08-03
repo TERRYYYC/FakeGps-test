@@ -10,6 +10,9 @@ created: 2026-08-03
 **Feature:** F001 — Google Maps 蓝点跨 GMS 进程缺口
 **Goal:** 把已验证的 System Mock Provider 从独立 Lab 合入千网游主 App，并用一个用户开关在 Hook 与 System Mock 之间选择位置注入方式。
 **Acceptance:** 使用主 App 生效中档案；位置只走一种注入路径；切回 Hook 后系统 `gps` test provider 确实消失；默认/验收地点为基辅；真机 Maps 蓝点与 Stop 均有可复核证据。
+**Architecture cell:** Android application / location delivery
+**Map delta:** none
+**Map delta why:** 仓库没有 ownership-cell registry；改动将实验性 gateway/service 收入现有 `:app` 边界，没有新增跨进程存储或外部服务。
 
 ## 完成定义
 
