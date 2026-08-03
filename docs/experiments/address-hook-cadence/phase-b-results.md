@@ -290,3 +290,75 @@ restarting, publishes transiently falling back to `MODE_PRIVATE`). Escalated
 to co-creator; will complete once device control is exclusive again.
 
 [墨墨/kimi-k3🐾]
+
+---
+
+# R3 P1 #1: Does the served value actually change for the user? (HEAD `2699f67`)
+
+Answer: **yes on every hooked surface, no on the GMS fused surface** — and the
+"no" is not a latency problem but a pre-existing coverage gap that refresh
+speed cannot fix.
+
+## Method (all real UI, no file injection)
+
+1. Baseline: profile at Zhytomyr (50.22983352306213, 28.712424219647062),
+   real device physically in Kyiv (editor shows 本机真实值 50.450956 /
+   30.4102236).
+2. Real UI path: 收藏档案 → profile row → editor → typed Lviv
+   (49.8397, 24.0297) into the 纬度/经度 fields → 保存并验证.
+3. Observed three independent readouts of what apps actually receive.
+
+## Evidence
+
+**(a) Publish → accept (transport):** `published crossProcess=true fp=sha256:1928d4f045a08764`
+at 10:32:18.439; `:hook_verify` probe process accepted the same fingerprint at
+10:32:18.732 — **293 ms including a cold probe-process start**.
+
+**(b) Hooked public-API readback follows the change.** The verify screen
+(independent `:hook_verify` process reading public `LocationManager` through
+the hooks, request-ID + fingerprint matched to THIS publish):
+
+| | 配置 | 探针观测 | verdict |
+|---|---|---|---|
+| before | 50.22983352306213 | 50.22983352306213 | 已生效 |
+| after | 49.8397 | 49.8397 | 已生效 |
+
+The hooked surfaces serve the new coordinates within one observer event of
+the UI save. The refresh-speed work is validated end to end.
+
+**(c) Google Maps does NOT follow — it shows the REAL location.** Blue dot
+sat on Kyiv Nyvky (~50.458, 30.405) before AND after the Zhytomyr→Lviv
+change. Root cause confirmed in logcat from the Maps main process (pid 14008):
+
+```
+FakeGPS: fused impl NOT found, falling back to abstract com.google.android.gms.location.FusedLocationProviderClient
+FakeGPS: Hook registration skipped: Cannot hook abstract methods: … getLastLocation()
+FakeGPS: Hook registration skipped: Cannot hook abstract methods: … getCurrentLocation(int,bkve)
+FakeGPS: Hook registration skipped: Cannot hook abstract methods: … requestLocationUpdates(…)
+```
+
+`resolveFusedImpl()` knows only two historical impl class names; the GMS
+build on this device (Android 15, current Play Services) renamed it again, so
+every fused hook is silently skipped and Maps receives genuine fused
+location. This is the Phase A §6 GMS-obfuscation gap manifesting
+user-visibly: for Maps there is no staleness problem because **no spoofed
+value ever arrives**.
+
+## Implications
+
+- The mission's latency claims stand for the ~25 hooked surfaces (validated
+  by (b)). They are meaningless for the fused path until `resolveFusedImpl`
+  handles current GMS obfuscation — a **separate work item**, not a refresh
+  fix (adding a third hardcoded class name would repeat the fragile pattern;
+  the resolution strategy itself needs redesign).
+- README:12's fused coverage claims should be reconciled with this reality in
+  that follow-up.
+
+## Environment restored
+
+Profile edited back via the same UI path; publish log confirms
+`fp=sha256:a46f31b771af1555 bytes=241` = exact pre-test baseline. Interval
+untouched (5s). Device retains the branch release build (`2699f67`) installed
+during testing.
+
+[墨墨/kimi-k3🐾]
