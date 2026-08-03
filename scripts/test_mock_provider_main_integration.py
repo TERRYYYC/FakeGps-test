@@ -10,6 +10,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MockProviderMainIntegrationContractTest(unittest.TestCase):
+    def test_product_manifest_declares_mock_location_permission_for_system_picker(self) -> None:
+        manifest = (ROOT / "app/src/main/AndroidManifest.xml").read_text()
+
+        self.assertIn('xmlns:tools="http://schemas.android.com/tools"', manifest)
+        permission = re.search(
+            r'<uses-permission\s+[^>]*android:name="android\.permission\.ACCESS_MOCK_LOCATION"[^>]*/>',
+            manifest,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(permission)
+        self.assertIn('tools:ignore="MockLocation"', permission.group(0))
+
     def test_lab_build_type_is_retired_in_favor_of_main_app_service(self) -> None:
         gradle = (ROOT / "app/build.gradle").read_text()
         manifest = (ROOT / "app/src/main/AndroidManifest.xml").read_text()
@@ -95,6 +107,9 @@ class MockProviderMainIntegrationContractTest(unittest.TestCase):
         self.assertIn("FIRST_START_PERMISSION_GUIDANCE_VISIBLE", harness)
         self.assertIn("FIRST_START_RESTART_CLEAN", harness)
         self.assertIn("FIRST_START_SCREENSHOT_PATH", harness)
+        self.assertGreaterEqual(harness.count("assert_mock_location_permission_declared"), 2)
+        self.assertGreaterEqual(harness.count("assert_mock_app_listed_in_picker"), 2)
+        self.assertIn("MOCK_APP_PICKER_ENTRY_VISIBLE", harness)
         self.assertIn('text="选择当前千网游"', harness)
         self.assertIn("pm revoke", harness)
         self.assertNotIn('pm grant "$BENCH_PACKAGE" android.permission.POST_NOTIFICATIONS', harness)

@@ -135,6 +135,77 @@ notification_permission_is_granted() {
         | rg -q 'android\.permission\.POST_NOTIFICATIONS: granted=true'
 }
 
+assert_mock_location_permission_declared() {
+    local requested_permissions
+    requested_permissions=$("${ADB[@]}" shell dumpsys package "$BENCH_PACKAGE" \
+        | sed -n '/requested permissions:/,/install permissions:/p')
+    if ! printf '%s\n' "$requested_permissions" \
+        | rg -q 'android\.permission\.ACCESS_MOCK_LOCATION'; then
+        echo "$BENCH_PACKAGE does not declare ACCESS_MOCK_LOCATION in the installed manifest" >&2
+        return 1
+    fi
+    echo "MOCK_LOCATION_PERMISSION_DECLARED package=$BENCH_PACKAGE"
+}
+
+assert_mock_app_listed_in_picker() {
+    local attempt dump selector line coordinates x1 y1 x2 y2
+    local selectors=(
+        'text="选择模拟位置信息应用"'
+        'text="选择模拟位置应用"'
+        'text="Select mock location app"'
+    )
+
+    "${ADB[@]}" shell am start -a android.settings.APPLICATION_DEVELOPMENT_SETTINGS >/dev/null
+    sleep 2
+
+    # Settings may reuse an existing Developer Options activity at an arbitrary scroll position.
+    # Normalize to the top, then scan downward for the real system picker row.
+    for attempt in $(seq 1 10); do
+        "${ADB[@]}" shell input swipe 540 500 540 1900 120 >/dev/null
+    done
+    for attempt in $(seq 0 15); do
+        dump=$(ui_dump || true)
+        line=""
+        for selector in "${selectors[@]}"; do
+            line=$(printf '%s\n' "$dump" | awk -v selector="$selector" '
+                index($0, selector) && first == "" { first = $0 }
+                END { print first }
+            ')
+            [[ -n "$line" ]] && break
+        done
+        if [[ -n "$line" ]]; then
+            coordinates=$(printf '%s\n' "$line" \
+                | sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p')
+            read -r x1 y1 x2 y2 <<<"$coordinates"
+            "${ADB[@]}" shell input tap "$(((x1 + x2) / 2))" "$(((y1 + y2) / 2))"
+            sleep 2
+            break
+        fi
+        "${ADB[@]}" shell input swipe 540 1900 540 450 250 >/dev/null
+        sleep 1
+    done
+    if [[ -z "$line" ]]; then
+        echo "Unable to open the system mock-location app picker" >&2
+        return 1
+    fi
+
+    for attempt in $(seq 0 8); do
+        dump=$(ui_dump || true)
+        if [[ "$dump" == *"text=\"$BENCH_LABEL\""* ]] || [[ "$dump" == *"text=\"$BENCH_PACKAGE\""* ]]; then
+            echo "MOCK_APP_PICKER_ENTRY_VISIBLE package=$BENCH_PACKAGE label=$BENCH_LABEL"
+            "${ADB[@]}" shell input keyevent KEYCODE_BACK >/dev/null
+            return 0
+        fi
+        "${ADB[@]}" shell input swipe 540 1900 540 450 250 >/dev/null
+        sleep 1
+    done
+
+    echo "$BENCH_PACKAGE is absent from the system mock-location app picker" >&2
+    printf '%s\n' "$dump" | rg 'android:id/(title|summary)' >&2 || true
+    "${ADB[@]}" shell input keyevent KEYCODE_BACK >/dev/null
+    return 1
+}
+
 remove_bench_task() {
     local attempt dump line coordinates x1 y1 x2 y2 center_x center_y
     "${ADB[@]}" shell input keyevent KEYCODE_HOME
@@ -225,6 +296,8 @@ trap restore EXIT
 for package_name in "$REFERENCE_PACKAGE" "$PRODUCT_PACKAGE" "$BENCH_PACKAGE"; do
     "${ADB[@]}" shell pm path "$package_name" | sed "s/^/INSTALLED $package_name /"
 done
+assert_mock_location_permission_declared
+assert_mock_app_listed_in_picker
 
 "${ADB[@]}" shell pm grant "$BENCH_PACKAGE" android.permission.ACCESS_FINE_LOCATION
 "${ADB[@]}" shell pm revoke "$BENCH_PACKAGE" android.permission.POST_NOTIFICATIONS \

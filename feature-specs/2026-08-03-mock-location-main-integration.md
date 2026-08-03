@@ -9,7 +9,7 @@ created: 2026-08-03
 
 **Feature:** F001 — Google Maps 蓝点跨 GMS 进程缺口
 **Goal:** 把已验证的 System Mock Provider 从独立 Lab 合入千网游主 App，并用一个用户开关在 Hook 与 System Mock 之间选择位置注入方式。
-**Acceptance:** 使用主 App 生效中档案；用户只选择一种位置交付意图，运行中目标按既有刷新周期收敛到该意图；切回 Hook 后系统 `gps` test provider 确实消失；默认/验收地点为基辅；真机 Maps 蓝点与 Stop 均有可复核证据。
+**Acceptance:** 使用主 App 生效中档案；用户只选择一种位置交付意图，运行中目标按既有刷新周期收敛到该意图；debug/release 主 App 都能在 Android“选择模拟位置信息应用”中被真实用户发现；切回 Hook 后系统 `gps` test provider 确实消失；默认/验收地点为基辅；真机 Maps 蓝点与 Stop 均有可复核证据。
 **Architecture cell:** Android application / location delivery
 **Map delta:** none
 **Map delta why:** 仓库没有 ownership-cell registry；改动将实验性 gateway/service 收入现有 `:app` 边界，没有新增跨进程存储或外部服务。
@@ -25,6 +25,7 @@ created: 2026-08-03
 7. 地图默认中心与坐标搜索示例为 Kyiv `50.4501, 30.5234`；隔离 debug bench 真机验收使用该档案，不读取或改动 release 用户数据。
 8. System Mock 运行中若用户改选了模拟位置 App，设置页必须识别权限恢复动作，指导“重新选择当前千网游 → 重试停止”；只有真实恢复 GNSS 后才清理恢复标记。
 9. 首次开启时若尚未选择当前千网游，系统未发生 provider mutation：设置页指导“选择当前千网游 → 重新打开开关”，不得声称存在残留或显示“重试停止”；预写 cleanup marker 必须清除，进程重启后回到干净 Hook。
+10. release 与 `.bench` 的安装 manifest 都声明 `ACCESS_MOCK_LOCATION`，因此 Android 开发者选项的真实模拟位置 App 选择器能列出当前千网游；验收必须在首次 shell app-op 旁路前打开系统选择器并证明目标可见。
 
 ## 根因与边界
 
@@ -81,6 +82,7 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 - **INV-10 权限丢失可恢复：** 若运行中改选模拟位置 App，系统可能保留原 test provider 却拒绝原 owner 移除。App 不伪造成功、不自行改 app-op；UI 指导用户重新选择当前千网游并重试，恢复标记在真实 cleanup 前保持。
 - **INV-11 前台状态可见：** Android 13+ 开启 System Mock 前请求通知权限；用户拒绝时不开启 provider，并说明定位/通知权限缺口。
 - **INV-12 恢复动作与 ownership 一致：** start 在首次 provider mutation 前被拒绝时没有 cleanup ownership，清 marker 并允许重新打开开关；已有 System Mock session 或 Stop cleanup 被拒绝时保留 cleanup ownership、恢复标记与“重试停止”。
+- **INV-13 用户授权入口可达：** 产品文案指向的“选择当前千网游”必须能在 Android Settings 真实选择器完成；harness 不得用 `cmd appops set` 的后续成功代替候选 App 可达性证据。
 
 ## TDD 实施顺序
 
@@ -119,7 +121,7 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 
 - 通用 config/gateway/controller/service/status 移到 `src/main/.../mockprovider`。
 - 服务只接受 `START_FROM_EFFECTIVE_PROFILE` / `STOP_AND_USE_HOOK`，移除坐标 extras。
-- main manifest 声明 FGS 权限和非导出 location service。
+- main manifest 声明 FGS 权限、非导出 location service，以及 Settings 用来发现模拟位置候选 App 的 legacy `ACCESS_MOCK_LOCATION`。后者属于产品核心能力而非误带测试代码，需用带原因注释的 `tools:ignore="MockLocation"` 压制 lint 的通用 test-only 假设，且 release manifest 不能缺失。
 - 删除独立 `mockProvider` build type、variant launcher/UI 与 variant-only测试；功能入口只留主 App 设置页。
 
 ### Task 4 — 设置页开关与状态反馈
@@ -133,14 +135,15 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 - 改写 `scripts/mock_provider_acceptance.sh`：目标为 `.bench` 主 App，trap 恢复参考 mock app；Start 后断言 gps/fused 坐标为 Kyiv；Stop 后断言 gps provider 不是 mock 且 owner 为 GNSS。
 - 新增结构测试，禁止脚本仅用 PID/app-op 判 Stop 成功。
 - 验收先撤销通知权限并通过产品运行时权限弹窗授予；禁止 `pm grant POST_NOTIFICATIONS` 掩盖真实入口。
+- 验收安装 exact APK 后，先检查 installed manifest 声明 `ACCESS_MOCK_LOCATION`，再打开 Android 真实“选择模拟位置信息应用”页面并断言 `.bench` 可见；只有这两项通过后，才允许用 shell app-op 继续自动化后续 provider 场景。
 - 增加 app-op 改选恢复阶段：provider 仍 mock → UI 指引可见 → 重新选择 bench → 重试 Stop → GNSS。
 - 更新 evidence doc，旧 NYC Lab 证据保留为历史，不冒充本次主 App 证据。
 
 ### Task 6 — 验证与交付
 
 1. `testDebugUnitTest --rerun-tasks`、结构契约、`assembleDebug`、`assembleRelease`。
-2. `aapt` 检查 main/debug 包名、Xposed metadata、service exported/type。
-3. 在 moto g54 上用 `.bench` 建立 Kyiv 生效档案；选择 `.bench` 为 mock app，验证服务、gps/fused/Maps 蓝点。
+2. `aapt` 检查 main/debug 包名、Xposed metadata、service exported/type 与两种 APK 的 `ACCESS_MOCK_LOCATION` 声明；`lintVitalRelease` 必须通过。
+3. 在 moto g54 上先从真实系统选择器确认 `.bench` 可见，再建立 Kyiv 生效档案；选择 `.bench` 为 mock app，验证服务、gps/fused/Maps 蓝点。
 4. 从最近任务移除主 App，确认 FGS/provider/Kyiv 输出仍持续；再由 UI 切回 Hook并直接检查系统 provider 已恢复；force-stop/reopen 场景验证 startup reconciliation。
 5. 每轮 trap 恢复 `com.hopefactory2021.fakegpslocation` 且再次确认真实 GNSS。
 6. quality-gate 后请求跨个体 exact-HEAD review；reviewer 独立构建与真机复跑，放行后再进入 merge gate。
