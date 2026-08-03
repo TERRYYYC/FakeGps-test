@@ -13,14 +13,18 @@ created: 2026-08-03
 - Branch: `feat/mock-provider-main-integration`
 - Review-finding base: `e9274cd26997a76f4fad7840926d9384d636f119`
 - Remediation implementation commit: `d79cd735feaa6bd7ad26854dc84e08562277ec24`
+- R2 finding base: `65834f713443a92dde14560a84b9d3d6b988e786`
+- R3 first-start recovery implementation: `5dbcfa43b17d2982772c81ee9eb2c8897f49ee94`
 - Device: moto g54 5G `ZY22JHW9M4`, Android 15
 - Debug main APK: `app/build/outputs/apk/debug/app-debug.apk`
-- Debug APK SHA-256: `a9cd6361a50270ace6a35ac99897c072cef269edd3b36767c2f61f343eafdaed`
-- Release APK SHA-256 (informational): `f204793bc0cd59f91f62b9167a8705a057a9e3ccb598250da2088ec4da73a90f`
+- Debug APK SHA-256: `0aa312f2e5fe9b6ce6ef67e17e1e90a6dadd540fcb2ac4ef1cf69d14396f9cbc`
+- Release APK SHA-256 (informational): `ae3c923eb42b080a73edeeb0836cef1783ec68b7f122ef07f50d919b9f490863`
 - Private screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/maps-main-kyiv-appop-recovery.png`
 - Screenshot SHA-256: `6ae4f78e3ea1f7a3f2d99e201181974aa06658bdd2ea38e3c1a1a5bf63ee2c96`
 - Recovery guidance screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-appop-recovery.png`
 - Recovery screenshot SHA-256: `a1b667893813253e93707f455565919bba5d05ba7923af1e19cd2b6a896625fd`
+- First-start permission screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-first-start-permission.png`
+- First-start screenshot SHA-256: `cd9fecb9326a6743065a903e174353571f380802642e4f2ce6ad0903e05519c9`
 - Settings OFF screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-system-mock-off.png` (`08bb96ae13d77e3e48ece5def00649663474a9bef9b5f41b59cb905f4e1d6d0b`)
 - 15-second switch recording: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-toggle.mp4` (`bb359df2d29db50e67a5b00aea12965448aa47f97544bc891071653b307f9df1`)
 
@@ -42,6 +46,9 @@ created: 2026-08-03
 ```text
 PROVIDER_REAL owner=GnssService
 NOTIFICATION_PERMISSION_GRANTED via=product-runtime-request
+FIRST_START_PERMISSION_GUIDANCE_VISIBLE
+PROVIDER_REAL owner=GnssService
+FIRST_START_RESTART_CLEAN
 PROVIDER_MOCK owner=name.caiyao.fakegps.bench coordinate=50.4501,30.5234
 isForeground=true ... types=0x00000008
 last location=Location[gps 50.450100,30.523400 ... mock]
@@ -63,18 +70,21 @@ ACCEPTANCE_RESTORE_PHASE_COMPLETE
 
 Settings OFF 图与 15 秒录屏来自首轮主 App 集成，覆盖用户入口、同一生效档案坐标和开关动作。本轮 exact build 的 Maps 图由脚本先移除任务卡并确认 FGS/gps/fused 继续；Maps 已跟随蓝点而没有渲染 recenter 控件，脚本按可选控件处理并截图。画面蓝点位于 Kyiv Independence Square。随后脚本改选 app-op，验证残留 provider 与恢复指引，再重新授权当前千网游并由“重试停止”恢复 GNSS。最后确认 `.bench` 仍安装、服务无残留，并恢复参考 App。
 
+R3 first-start 图来自 debug APK `0aa312f2…f9cbc`：开关保持关闭，状态明确说明 System Mock 未启动，动作是“选择当前千网游 → 重新打开开关”；画面没有“残留位置”或“重试停止”。截图后同一 harness force-stop/reopen，并以 `FIRST_START_RESTART_CLEAN` 证明失败未持久化为 cleanup transaction。
+
 ## Fresh verification
 
 | Gate | Result |
 |---|---|
-| `./gradlew testDebugUnitTest --rerun-tasks` | 407 tests；0 failure/error/skipped（从 XML 重算） |
+| `./gradlew testDebugUnitTest --rerun-tasks` | 412 tests；0 failure/error/skipped（从 XML 重算） |
 | `./gradlew assembleDebug assembleRelease --rerun-tasks` | BUILD SUCCESSFUL；release `lintVital` 通过 |
 | `python3 scripts/test_mock_provider_main_integration.py` | 6/6 pass |
 | `bash -n scripts/mock_provider_acceptance.sh` | pass |
 | `git diff --check` | pass |
 | APK manifest inspection | debug `.bench` / release main identity 正确；两者保留 Xposed metadata、动态 provider authority 与 `foregroundServiceType=location` |
 | reviewer 原始 5 个变异 | `readCleanupRequired`、refresh mode guard、`cleanupRuntimeOnly.stop()`、Hook passthrough、sample fixed clock 任一破坏均使定向测试变红 |
-| `scripts/mock_provider_acceptance.sh ZY22JHW9M4` | notification prompt / task removal / Maps / app-op recovery / restore 全阶段，exit 0 |
+| R3 新增 4 个变异 | 合并 start/stop recovery、跳过首次失败 marker clear、删除普通 Hook cleanup guard、丢失 refresh ownership context 均编译成功并触发定向断言失败 |
+| `scripts/mock_provider_acceptance.sh ZY22JHW9M4` | notification prompt / first-start denial / restart clean / task removal / Maps / app-op recovery / restore 全阶段，exit 0 |
 | `./gradlew lintDebug --rerun-tasks` | inherited baseline：20 errors / 158 warnings；20 个 error 全部位于未改动的 `HookProbe.kt`、`MainActivity.java`、`TempDao.java` 与 `res/values/strings.xml`，本 diff 零 lint error；release `lintVital` 通过 |
 
 ## Quality Gate 审计
@@ -82,7 +92,7 @@ Settings OFF 图与 15 秒录屏来自首轮主 App 集成，覆盖用户入口�
 - Vision / delivery completeness：四项 operator 纠正已逐项映射到产品入口、同源档案、真实 Stop 与 Kyiv；本次产物是可扩展的主 App 实现，不再需要把 Lab 重写一遍。
 - Close gate：当前只申请 code review，不关闭整个 F001；follow-up-tail scan 除本句的审计术语外零命中，无未满足 AC 被包装为“后续”。
 - Architecture ownership：`Android application / location delivery`；`Map delta: none`，因为仓库无 ownership registry 且组件均在既有 `:app` 内。新增 gateway/service 是该 cell 内实现边界，不引入外部服务或第二份状态存储。
-- Fallback audit：仓库无自动脚本。`EffectiveMockLocationResolver` 的 early-return 分别校验 schema、latitude、longitude、altitude 与 accuracy；它们是独立输入边界，不是层叠补锅。Settings 的权限/恢复分支分别表达授权状态与 UI 渲染状态，没有链式兜底。Hook 默认值只用于 v2/v3 升级兼容；platform `runCatching` 只把 Android 启动失败转换成用户可见状态。
+- Fallback audit：仓库无自动脚本。本轮 diff 人工扫描到 orchestrator 的 marker/ownership guards、controller 的两种 recovery 分支与 Settings 两种动作渲染；它们是同一显式状态坐标的互斥边，不是逐层 fallback。单个调用链最大嵌套为 controller catch 内两层，未达到同文件新增三层 fallback 治理阈值。
 - Design check：仓库 glob 无 `.pen`，而本 diff 有 Compose UI 改动，因此标记“⚠️ 无设计稿”；以真实设备的恢复指引节点、Settings OFF 截图、15 秒开关录屏和 Maps 下游截图验收。
 - Artifact hygiene：Git 工作树与 `origin/master...HEAD` 均无仓库根目录媒体；设备图片/视频仅在正式 backup evidence 目录。
 - Capability tips / Cat Café architecture scripts：该 Android 仓库无对应 surface，not applicable。
@@ -103,6 +113,7 @@ Dogfood 当轮发现并修复：
 6. reviewer 复现运行中改选 mock app 后无法 Stop → `SecurityException` 映射为结构化恢复动作；设置页内联 Developer Options 入口和重试步骤；验收必须复现并恢复该边界。
 7. 验收脚本 `pm grant POST_NOTIFICATIONS` 掩盖首次用户路径 → 改为 revoke 后驱动产品权限弹窗，并核验最终 permission state。
 8. 独立复跑撞到 DocumentsUI 残留 task 与 Maps 瞬态 recenter 按钮 → 首次设置页用 portable clear-task flag；recenter 变为多语言可选控件，gps/fused/provider truth 与截图仍是硬证据。
+9. R2 首次未授权被误报为残留且 marker 永久保留 → recovery 拆成 start/cleanup 两条边，失败状态显式携带 cleanup ownership；harness 新增首次指引与进程重启清洁阶段。
 
 ## Fable review findings 处置
 
@@ -117,6 +128,7 @@ Dogfood 当轮发现并修复：
 | P2 时钟/controller 覆盖回退 | 恢复 exact clocks、tick count、重复 start、幂等 stop、边界与非有限海拔断言。 |
 | P2 orchestrator 失败分支 | 21 个 orchestrator tests 覆盖 marker、mode、publish、provider side effect、rollback message 与 refresh guards；三个原始变异均被击杀。 |
 | P2 F001 main 文档仍误报 resolved | 修正文档已在 insight branch `docs/f001-mock-provider-main-integration` / `356000b`，状态为 `in-progress`；co-creator 明令所有 merge 需其确认，因此此处只准备、不越权合入 insight main。 |
+| R2 P1 首次 start denial 被误报为残留 | `providerCleanupRequired` + start/stop recovery 分流；首次失败清 marker、普通 Hook onDestroy no-op、refresh 保留已有 ownership；4 个新变异与 moto g54 两阶段验收均通过。 |
 
 ## Fresh-context findings 处置
 

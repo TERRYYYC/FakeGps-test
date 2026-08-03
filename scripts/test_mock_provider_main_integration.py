@@ -94,6 +94,7 @@ class MockProviderMainIntegrationContractTest(unittest.TestCase):
         self.assertIn("ACCEPTANCE_APP_OP_RECOVERY_PHASE_COMPLETE", harness)
         self.assertIn("FIRST_START_PERMISSION_GUIDANCE_VISIBLE", harness)
         self.assertIn("FIRST_START_RESTART_CLEAN", harness)
+        self.assertIn("FIRST_START_SCREENSHOT_PATH", harness)
         self.assertIn('text="选择当前千网游"', harness)
         self.assertIn("pm revoke", harness)
         self.assertNotIn('pm grant "$BENCH_PACKAGE" android.permission.POST_NOTIFICATIONS', harness)

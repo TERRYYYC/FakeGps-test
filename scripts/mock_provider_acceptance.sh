@@ -14,6 +14,7 @@ KYIV_LONGITUDE="30.5234"
 OBSERVE_SECONDS="${OBSERVE_SECONDS:-8}"
 SCREENSHOT_PATH="${SCREENSHOT_PATH:-}"
 RECOVERY_SCREENSHOT_PATH="${RECOVERY_SCREENSHOT_PATH:-}"
+FIRST_START_SCREENSHOT_PATH="${FIRST_START_SCREENSHOT_PATH:-}"
 ADB=(adb -s "$SERIAL")
 
 ui_dump() {
@@ -256,6 +257,10 @@ if printf '%s\n' "$first_start_dump" | rg -q '重试停止|残留位置'; then
     exit 1
 fi
 echo "FIRST_START_PERMISSION_GUIDANCE_VISIBLE"
+if [[ -n "$FIRST_START_SCREENSHOT_PATH" ]]; then
+    "${ADB[@]}" exec-out screencap -p >"$FIRST_START_SCREENSHOT_PATH"
+    echo "FIRST_START_SCREENSHOT path=$FIRST_START_SCREENSHOT_PATH"
+fi
 
 # A process restart must reconcile to clean Hook intent. This is the durable marker assertion: a
 # stale marker would launch StopAndUseHook and recreate the red recovery state here.
