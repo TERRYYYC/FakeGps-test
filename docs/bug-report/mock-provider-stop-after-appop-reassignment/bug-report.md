@@ -33,4 +33,3 @@ Fable5 在 PR #10 exact HEAD `e9274cd` 的 moto g54 独立验收中发现；Sol 
 - `MockProviderSessionControllerTest`: 权限错误的 recovery action 与 cleanup 失败文本。
 - `LocationDeliveryUiContractTest`: Failed 的开发者选项指引、switch gating 与 retry Stop。
 - `mock_provider_acceptance.sh`: 实际改选 mock app、失败 UI、重新选择与真实 GNSS 恢复。
-

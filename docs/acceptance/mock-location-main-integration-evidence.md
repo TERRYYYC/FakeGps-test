@@ -11,13 +11,16 @@ created: 2026-08-03
 
 - Repository: `https://github.com/TERRYYYC/FakeGps-test.git`
 - Branch: `feat/mock-provider-main-integration`
-- Accepted code commit: `653f4c376a62127663de9bd1ce384df99a3ecad0`
+- Review-finding base: `e9274cd26997a76f4fad7840926d9384d636f119`
+- Remediation implementation commit: `d79cd735feaa6bd7ad26854dc84e08562277ec24`
 - Device: moto g54 5G `ZY22JHW9M4`, Android 15
 - Debug main APK: `app/build/outputs/apk/debug/app-debug.apk`
-- Debug APK SHA-256: `c8a14c2e9a02ba793f33b449479d5e85ba19c87d77dafc19401f112a3facf172`
-- Release APK SHA-256: `ab1ab45f99e4edcf0b2b6d520d3d53f265835ce951a3c0f05c51ee939c3a376c`
-- Private screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/maps-main-kyiv-lifecycle-hardening.png`
-- Screenshot SHA-256: `471ec56abf6d8d6293b8f126264e8a7f159550583806eb107c37eee303665670`
+- Debug APK SHA-256: `a9cd6361a50270ace6a35ac99897c072cef269edd3b36767c2f61f343eafdaed`
+- Release APK SHA-256 (informational): `f204793bc0cd59f91f62b9167a8705a057a9e3ccb598250da2088ec4da73a90f`
+- Private screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/maps-main-kyiv-appop-recovery.png`
+- Screenshot SHA-256: `6ae4f78e3ea1f7a3f2d99e201181974aa06658bdd2ea38e3c1a1a5bf63ee2c96`
+- Recovery guidance screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-appop-recovery.png`
+- Recovery screenshot SHA-256: `a1b667893813253e93707f455565919bba5d05ba7923af1e19cd2b6a896625fd`
 - Settings OFF screenshot: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-system-mock-off.png` (`08bb96ae13d77e3e48ece5def00649663474a9bef9b5f41b59cb905f4e1d6d0b`)
 - 15-second switch recording: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-toggle.mp4` (`bb359df2d29db50e67a5b00aea12965448aa47f97544bc891071653b307f9df1`)
 
@@ -29,7 +32,7 @@ created: 2026-08-03
 |---|---|---|
 | Lab 没有合入主 App | 删除独立 `mockProvider` build type；service/controller/gateway 进入 `src/main`，设置页成为唯一入口 | debug/release 均含非导出 `MockProviderService`；不再生成 Lab APK |
 | 数据应来自主 App 档案，开关决定 Hook/Mock | schema v4 发布 `locationDeliveryMode`；System Mock 每 tick 解析 `ConfigPrefsSync` 的同一份生效档案；System Mock 时 Hook 仅清空位置字段，cell/Wi-Fi 保留 | JVM 契约覆盖 v2/v3 兼容、档案解析、位置旁路与非位置字段保留；真机用 `ProfileRepository` 保存 Kyiv 后经正常 transport 输出 |
-| 虚拟位置不能停 | cleanup marker 表示未完成切换事务；显式 Stop 无条件 remove；失败态提供“重试停止”；移除任务卡不停止 FGS | 任务卡移除后 FGS 与 Kyiv gps/fused 仍持续；UI 关闭后 `gps provider:` 恢复 `identity=1000/android[GnssService]`；失败回滚/重试与 marker 优先恢复有单测 |
+| 虚拟位置不能停 | cleanup marker 表示未完成切换事务；显式 Stop 无条件 remove；失去 mock app-op 时给出“重新选择当前千网游 → 重试停止”；移除任务卡不停止 FGS | 任务卡移除后 FGS 与 Kyiv gps/fused 仍持续；验收会在运行中改选 mock app，确认指引后重新授权并由同一 Stop primitive 恢复 `identity=1000/android[GnssService]` |
 | 地址改为基辅 | 地图默认、示例与隔离验收档案统一为 `50.4501,30.5234` | gps、fused 和 Maps 蓝点三路一致 |
 
 ## Exact-code 真机结果
@@ -38,6 +41,7 @@ created: 2026-08-03
 
 ```text
 PROVIDER_REAL owner=GnssService
+NOTIFICATION_PERMISSION_GRANTED via=product-runtime-request
 PROVIDER_MOCK owner=name.caiyao.fakegps.bench coordinate=50.4501,30.5234
 isForeground=true ... types=0x00000008
 last location=Location[gps 50.450100,30.523400 ... mock]
@@ -46,8 +50,10 @@ TASK_REMOVED label=千网游·测试
 ACCEPTANCE_TASK_REMOVAL_PHASE_COMPLETE
 MAPS_FOREGROUND ... com.google.android.apps.maps/com.google.android.maps.MapsActivity
 ACCEPTANCE_ACTIVE_PHASE_COMPLETE
+PROVIDER_MOCK_RESIDUE owner=name.caiyao.fakegps.bench
+APP_OP_RECOVERY_GUIDANCE_VISIBLE
 PROVIDER_REAL owner=GnssService
-ACCEPTANCE_STOP_PHASE_COMPLETE
+ACCEPTANCE_APP_OP_RECOVERY_PHASE_COMPLETE
 RESTORE bench=deny reference=allow provider=real status=0
 REFERENCE_APP_FOREGROUND ... com.adevinta.leku.LocationPickerActivity
 ACCEPTANCE_RESTORE_PHASE_COMPLETE
@@ -55,28 +61,29 @@ ACCEPTANCE_RESTORE_PHASE_COMPLETE
 
 恢复后又单独启动一次 `.bench` 的默认 Hook 模式：mock app-op 仍由参考 App 独占、`MockProviderService` 不存在、gps provider 仍是真实 GNSS、日志无启动失败。最后再次 force-stop `.bench` 并打开参考 App。
 
-Settings OFF 图与 15 秒录屏来自首轮主 App 集成，覆盖用户入口、同一生效档案坐标和开关动作。当前 lifecycle-hardening exact build 的 Maps 图由脚本先移除任务卡、确认 FGS/gps/fused 继续，再点击 Maps“重新将您所在位置设为地图中心”后截取；画面蓝点位于 Kyiv Independence Square。脚本结束时再次确认 `.bench` 仍安装、开关为 OFF、provider 为 GNSS，并恢复参考 App。
+Settings OFF 图与 15 秒录屏来自首轮主 App 集成，覆盖用户入口、同一生效档案坐标和开关动作。本轮 exact build 的 Maps 图由脚本先移除任务卡并确认 FGS/gps/fused 继续；Maps 已跟随蓝点而没有渲染 recenter 控件，脚本按可选控件处理并截图。画面蓝点位于 Kyiv Independence Square。随后脚本改选 app-op，验证残留 provider 与恢复指引，再重新授权当前千网游并由“重试停止”恢复 GNSS。最后确认 `.bench` 仍安装、服务无残留，并恢复参考 App。
 
 ## Fresh verification
 
 | Gate | Result |
 |---|---|
-| `./gradlew testDebugUnitTest --rerun-tasks` | 382 tests；0 failure/error/skipped |
+| `./gradlew testDebugUnitTest --rerun-tasks` | 407 tests；0 failure/error/skipped（从 XML 重算） |
 | `./gradlew assembleDebug assembleRelease --rerun-tasks` | BUILD SUCCESSFUL；release `lintVital` 通过 |
 | `python3 scripts/test_mock_provider_main_integration.py` | 6/6 pass |
 | `bash -n scripts/mock_provider_acceptance.sh` | pass |
 | `git diff --check` | pass |
 | APK manifest inspection | debug `.bench` / release main identity 正确；两者保留 Xposed metadata、动态 provider authority 与 `foregroundServiceType=location` |
-| `scripts/mock_provider_acceptance.sh ZY22JHW9M4` | active / task removal / Maps recenter / Stop / restore 全阶段完成，exit 0 |
-| `./gradlew lintDebug --rerun-tasks` | inherited baseline：20 errors / 148 warnings；20 个 error 全部位于未改动的 `HookProbe.kt`、`MainActivity.java`、`TempDao.java` 与 `res/values/strings.xml`，本 diff 零 lint error；release `lintVital` 通过 |
+| reviewer 原始 5 个变异 | `readCleanupRequired`、refresh mode guard、`cleanupRuntimeOnly.stop()`、Hook passthrough、sample fixed clock 任一破坏均使定向测试变红 |
+| `scripts/mock_provider_acceptance.sh ZY22JHW9M4` | notification prompt / task removal / Maps / app-op recovery / restore 全阶段，exit 0 |
+| `./gradlew lintDebug --rerun-tasks` | inherited baseline：20 errors / 158 warnings；20 个 error 全部位于未改动的 `HookProbe.kt`、`MainActivity.java`、`TempDao.java` 与 `res/values/strings.xml`，本 diff 零 lint error；release `lintVital` 通过 |
 
 ## Quality Gate 审计
 
 - Vision / delivery completeness：四项 operator 纠正已逐项映射到产品入口、同源档案、真实 Stop 与 Kyiv；本次产物是可扩展的主 App 实现，不再需要把 Lab 重写一遍。
-- Close gate：当前只申请 code review，不关闭整个 F001；follow-up-tail scan 零命中，无未满足 AC 被包装为“后续”。
+- Close gate：当前只申请 code review，不关闭整个 F001；follow-up-tail scan 除本句的审计术语外零命中，无未满足 AC 被包装为“后续”。
 - Architecture ownership：`Android application / location delivery`；`Map delta: none`，因为仓库无 ownership registry 且组件均在既有 `:app` 内。新增 gateway/service 是该 cell 内实现边界，不引入外部服务或第二份状态存储。
-- Fallback audit：仓库无自动脚本。`EffectiveMockLocationResolver` 的多处 early-return 分别校验 latitude、longitude、accuracy 与 schema；它们是独立输入边界，不是层叠补锅。Hook 默认值只用于 v2/v3 升级兼容，不能删除；platform `runCatching` 只把 Android 启动失败转换成用户可见状态。
-- Design check：仓库无 `.pen`。Compose 设置入口以 Settings OFF 截图、15 秒开关录屏和 Maps 下游截图验收。
+- Fallback audit：仓库无自动脚本。`EffectiveMockLocationResolver` 的 early-return 分别校验 schema、latitude、longitude、altitude 与 accuracy；它们是独立输入边界，不是层叠补锅。Settings 的权限/恢复分支分别表达授权状态与 UI 渲染状态，没有链式兜底。Hook 默认值只用于 v2/v3 升级兼容；platform `runCatching` 只把 Android 启动失败转换成用户可见状态。
+- Design check：仓库 glob 无 `.pen`，而本 diff 有 Compose UI 改动，因此标记“⚠️ 无设计稿”；以真实设备的恢复指引节点、Settings OFF 截图、15 秒开关录屏和 Maps 下游截图验收。
 - Artifact hygiene：Git 工作树与 `origin/master...HEAD` 均无仓库根目录媒体；设备图片/视频仅在正式 backup evidence 目录。
 - Capability tips / Cat Café architecture scripts：该 Android 仓库无对应 surface，not applicable。
 
@@ -84,7 +91,7 @@ Settings OFF 图与 15 秒录屏来自首轮主 App 集成，覆盖用户入口�
 
 Scope verdict：✅ 必做。
 
-真实路径：隔离 `.bench` 经 `ProfileRepository` 保存 Kyiv → 正常 `ConfigPrefsSync` 发布 → 设置页打开 System Mock → gps/fused/Maps 验证 → 设置页关闭 → provider identity 验证 → 恢复参考 App。
+真实路径：隔离 `.bench` 经 `ProfileRepository` 保存 Kyiv → 产品弹窗授予通知权限 → 正常 `ConfigPrefsSync` 发布 → 设置页打开 System Mock → gps/fused/Maps 验证 → 运行中改选 mock app → 恢复指引可见 → 重新选择当前千网游 → 重试停止 → GNSS → 恢复参考 App。
 
 Dogfood 当轮发现并修复：
 
@@ -93,6 +100,23 @@ Dogfood 当轮发现并修复：
 3. 普通 Hook 启动若无 app-op 会产生伪失败 → 只在 cleanup marker 为 true 时恢复清理，并增加 startup-plan test 与真机 no-op 验证。
 4. debug 数据准备在 app-op 切换前做无意义 cleanup → 准备步骤仅重置隔离数据/marker，最终运行日志不再有伪失败。
 5. 初版 Maps 截图停留在旧视野，蓝点不能证明 Kyiv → harness 明确点击“重新将您所在位置设为地图中心”后再截图，当前图显示 Independence Square。
+6. reviewer 复现运行中改选 mock app 后无法 Stop → `SecurityException` 映射为结构化恢复动作；设置页内联 Developer Options 入口和重试步骤；验收必须复现并恢复该边界。
+7. 验收脚本 `pm grant POST_NOTIFICATIONS` 掩盖首次用户路径 → 改为 revoke 后驱动产品权限弹窗，并核验最终 permission state。
+8. 独立复跑撞到 DocumentsUI 残留 task 与 Maps 瞬态 recenter 按钮 → 首次设置页用 portable clear-task flag；recenter 变为多语言可选控件，gps/fused/provider truth 与截图仍是硬证据。
+
+## Fable review findings 处置
+
+| Finding | 处置 |
+|---|---|
+| P1 app-op 改选后 Stop 死局 | 结构化 `MockProviderRecovery` + 内联 Developer Options 指引；真机完整复现与恢复。 |
+| P1 `cleanupRuntimeOnly()` 零覆盖 | 新增 side-effect/order test；删除 `controller.stop()` 的 reviewer 变异现会失败。 |
+| P2 Hook 空测试 | 改为逐字段断言；破坏 Hook passthrough 的变异现会失败。 |
+| P2 notification 由 harness 代授 | 产品 Android 13+ 运行时请求；harness 从 revoked state 驱动真实弹窗并恢复原权限状态。 |
+| P2 海拔硬编码 | `altitude` 从同一 PublishedConfig 档案解析；缺失时保持 absent，不发明城市常量。 |
+| P2 harness 不可复跑 | 清理 DocumentsUI task；Maps recenter 可选且多语言；新增 app-op recovery phase。 |
+| P2 时钟/controller 覆盖回退 | 恢复 exact clocks、tick count、重复 start、幂等 stop、边界与非有限海拔断言。 |
+| P2 orchestrator 失败分支 | 21 个 orchestrator tests 覆盖 marker、mode、publish、provider side effect、rollback message 与 refresh guards；三个原始变异均被击杀。 |
+| P2 F001 main 文档仍误报 resolved | 修正文档已在 insight branch `docs/f001-mock-provider-main-integration` / `356000b`，状态为 `in-progress`；co-creator 明令所有 merge 需其确认，因此此处只准备、不越权合入 insight main。 |
 
 ## Fresh-context findings 处置
 
@@ -109,5 +133,8 @@ Dogfood 当轮发现并修复：
 
 - System Mock 位置保留 Android mock marker；本功能不尝试隐藏 `Location.isMock()`。
 - API 24–30 legacy registration 有纯代码契约和 review 覆盖；本轮真机是 API 35。
+- Android 不允许 App 自行成为“模拟位置信息应用”。若用户在运行中改选别的 App，原 test provider 可能残留；设置页会明确要求重新选择当前千网游后重试，绝不把权限失败显示成已停止。
 - 已运行的 Hook 目标进程按既有 5–60 秒可配置周期读取 mode。切换期间 provider 与旧 Snapshot 可能短暂重叠，但两者来自同一生效档案坐标；目标在下一次刷新读取新模式，这是现有 transport 的传播语义，不伪装成跨进程同步切换。
-- debug acceptance Activity 受 signature-level `android.permission.DUMP` 保护且不进入 release；它只操作 `.bench` 数据。
+- debug acceptance Activity 受 debug-only `android.permission.DUMP` gate 保护且不进入 release；它只操作 `.bench` 数据。该权限可由 adb 授予，正是无 root 验收 seam 的有意取舍。
+- Release SHA-256 仅记录作者构建产物，不作为 exact-code 可复现身份；R8/resource shrinking 在独立 reviewer 构建中未逐位复现。Debug APK hash 与 exact source checkout 仍作为可复核 artifact identity。
+- 退役 Lab APK `name.caiyao.fakegps.mockprovider` 可能仍安装在开发设备；产品不会擅自卸载它。验收前置守卫要求参考 App 是唯一获准 mock app，避免 stale Lab 争用 app-op。

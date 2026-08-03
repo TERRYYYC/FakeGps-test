@@ -13,6 +13,7 @@ KYIV_LATITUDE="50.4501"
 KYIV_LONGITUDE="30.5234"
 OBSERVE_SECONDS="${OBSERVE_SECONDS:-8}"
 SCREENSHOT_PATH="${SCREENSHOT_PATH:-}"
+RECOVERY_SCREENSHOT_PATH="${RECOVERY_SCREENSHOT_PATH:-}"
 ADB=(adb -s "$SERIAL")
 
 ui_dump() {
@@ -301,6 +302,10 @@ recovery_dump=$(ui_dump || true)
 printf '%s\n' "$recovery_dump" | rg -q 'text="重新选择当前千网游"'
 printf '%s\n' "$recovery_dump" | rg -q 'text="重试停止"'
 echo "APP_OP_RECOVERY_GUIDANCE_VISIBLE"
+if [[ -n "$RECOVERY_SCREENSHOT_PATH" ]]; then
+    "${ADB[@]}" exec-out screencap -p >"$RECOVERY_SCREENSHOT_PATH"
+    echo "APP_OP_RECOVERY_SCREENSHOT path=$RECOVERY_SCREENSHOT_PATH"
+fi
 
 # This simulates the user following the inline Developer Options instruction, then exercising the
 # shipped retry button. The app never attempts to grant this app-op itself.
