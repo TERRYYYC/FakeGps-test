@@ -243,3 +243,50 @@ processes (≤2ms spread), and fail-closed for frozen (converge on wake) and
 cold (synchronous initial load) processes.
 
 [墨墨/kimi-k3🐾]
+
+---
+
+# R3 Follow-up: Observer Directory-Deletion Recovery (HEAD `4b711c3`)
+
+Sol R3 P1 #2: if the watched prefs directory is deleted/moved, the kernel
+delivers `IN_IGNORED` and drops the inotify watch — but `armed` stayed `true`
+forever, so the heartbeat lazy-retry (which checks `isArmed()`) never fired.
+The event-driven path would have stayed silently dead until process restart
+even after the app recreated the directory; only the timer masked it.
+
+**Fix (TDD, red first):** `PrefsDirectoryObserver.onEvent` now calls
+`disarm()` on `IN_IGNORED` (kernel constant `0x8000`, not exposed in the
+`FileObserver` public API), which clears `armed` and logs watch-loss evidence.
+Red test `observerDisarmsOnKernelWatchLoss` failed before the fix and passes
+after; full suite 741 tests, 0 failures.
+
+**Device verification** (moto g54, release build of `4b711c3`, Maps pid 31759
++ hopefactory pid 31788, both `observer_armed`):
+
+| Time | Event |
+|---|---|
+| 02:52:03 | `su rm -rf` the watched prefs directory |
+| 02:52:11.333 | both processes log `observer watch lost (IN_IGNORED) — heartbeat will re-arm` |
+| 02:52:15+ | heartbeat retry logs honest failure evidence: `observer dir does not exist: …` (timer keeps serving last-known-good) |
+| 02:52:35.6 | app cold start republishes (`fp=da9d3b17…`), recreating the directory |
+| 02:52:35.855 | hopefactory: `event=observer_armed` again + `transport accepted` |
+| 02:52:40.294 | Maps: `event=observer_armed` again + `transport accepted` |
+
+Full cycle — kernel watch loss → disarm → honest retry evidence →
+self-recovery on next heartbeat after the directory returns — verified on
+device. No process restart needed.
+
+**Test artifact note (not a defect):** the deletion also removed
+`spoof_settings.xml` (same directory), which reset the app's refresh-interval
+preference to its 30s default on next publish. The interval was restored to
+the user's 5s via the real UI path; payload fingerprint returned to the
+pre-test baseline `sha256:a46f31b771af1555` (confirmed by publish log
+`bytes=241` + fp match).
+
+**R3 P1 #1 (end-user address change) status:** blocked at measurement time by
+operator device contention — the operator was actively testing on the device
+(profile changed to 50.4501/30.5234 outside the test harness, app process
+restarting, publishes transiently falling back to `MODE_PRIVATE`). Escalated
+to co-creator; will complete once device control is exclusive again.
+
+[墨墨/kimi-k3🐾]
