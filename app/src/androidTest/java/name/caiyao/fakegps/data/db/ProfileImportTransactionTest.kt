@@ -87,16 +87,30 @@ class ProfileImportTransactionTest {
 
     @Test
     fun savePublishesTheExactRowThatWasSaved() = runBlocking {
-        var selectedId: Long? = null
-        val repo = ProfileRepository(db, publishOverride = { id ->
-            selectedId = id
+        var request: ProfileRepository.PublishRequest? = null
+        val repo = ProfileRepository(db, publishOverride = { value ->
+            request = value
             true
         })
         db.profileDao().insert(ProfileEntity(addname = "older", latitude = 1.0))
 
         val result = repo.save(ProfileEntity(addname = "selected", latitude = 22.5461))
 
-        assertEquals(result.id, selectedId)
+        assertEquals(ProfileRepository.PublishRequest(result.id, clearIfMissing = false), request)
         assertEquals(true, result.published)
+    }
+
+    @Test
+    fun deleteAllowsTheMissingActiveRowToClearPublication() = runBlocking {
+        var request: ProfileRepository.PublishRequest? = null
+        val repo = ProfileRepository(db, publishOverride = { value ->
+            request = value
+            true
+        })
+        val id = db.profileDao().insert(ProfileEntity(addname = "selected", latitude = 22.5461))
+
+        repo.deleteById(id)
+
+        assertEquals(ProfileRepository.PublishRequest(profileId = null, clearIfMissing = true), request)
     }
 }

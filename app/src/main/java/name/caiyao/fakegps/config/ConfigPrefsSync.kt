@@ -68,10 +68,28 @@ object ConfigPrefsSync {
     */
     @JvmStatic
     @JvmOverloads
-    fun sync(context: Context, profileId: Long? = null): Boolean {
+    fun sync(
+        context: Context,
+        profileId: Long? = null,
+        clearIfMissing: Boolean = false,
+    ): Boolean {
         Log.w(TAG, "sync() ENTER")
         return try {
-            val built = buildFieldMapJson(context, profileId ?: readActiveProfileId(context))
+            val requestedProfileId = profileId ?: readActiveProfileId(context)
+            val built = buildFieldMapJson(context, requestedProfileId)
+            if (ConfigPublicationContract.shouldKeepLastGoodPayload(
+                    requestedProfileId = requestedProfileId,
+                    resolvedProfileId = built.profileId,
+                    clearIfMissing = clearIfMissing,
+                )
+            ) {
+                Log.w(
+                    TAG,
+                    "profileId=$requestedProfileId temporarily unavailable; keeping last-good payload",
+                )
+                markPublicationFailure(context)
+                return false
+            }
             val jsonStr = built.json
 
             // MODE_WORLD_READABLE throws SecurityException on Android N+ unless the Xposed

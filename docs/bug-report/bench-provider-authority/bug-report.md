@@ -24,6 +24,19 @@ created: 2026-08-03
 | User-visible correction | Saving an imported or existing profile in the bench app must report publication success and make that exact profile the published Hook payload; production package/data remain untouched. |
 | Acceptance | Red→Green authority contract; full JVM/build gates; isolated bench instrumentation or device journey proving provider routes and save publication; no production install, uninstall, or data clear. |
 
+### Review follow-up capsule: transient empty startup query
+
+| Field | Evidence |
+|---|---|
+| Symptom | After an update/restart, a first startup sync can temporarily resolve zero profile fields and remove the durable active id even though that row still exists. |
+| Evidence | DeepSeek reproduced `field map built: 0` once on exact PR HEAD while a prior active id existed; code tracing shows every `resolvedProfileId=null` result is currently committed as an empty payload and removes `KEY_ACTIVE_PROFILE_ID`. |
+| Root cause | The publication API represents both “reuse the durable active row” and “explicitly clear after deletion” as the same nullable id. A transient missing query is therefore indistinguishable from an intentional delete. |
+| Diagnostic strategy | Extract the missing-profile decision into the existing publication contract; verify persisted-id/missing-row preserves last-known-good, while explicit delete and a genuinely empty fresh install may publish empty. |
+| Timeout strategy | If the contract cannot express all three cases without another nullable/fallback layer, stop and replace the boolean policy with a typed publication request. |
+| Warning strategy | Any fix that delays startup arbitrarily, retries blindly, or silently activates Room's oldest remaining row is rejected. |
+| User-visible correction | Updating or restarting the bench app must not erase the currently effective profile because of a transient provider read; an explicit delete must still clear it. |
+| Acceptance | Red→Green contract tests for transient missing versus explicit clear; repository delete-policy behavior; full JVM/AVD/Release gates; update/restart device journey retains selected profile. |
+
 ## Reporter and reproduction
 
 Reported by the co-creator during CSV import acceptance and independently traced by
