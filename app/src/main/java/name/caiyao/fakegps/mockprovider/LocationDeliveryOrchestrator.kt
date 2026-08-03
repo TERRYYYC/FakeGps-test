@@ -29,14 +29,25 @@ class LocationDeliveryOrchestrator(
             return MockProviderState.Failed(reason)
         }
 
+        val providerMayAlreadyExist =
+            readMode() == LocationDeliveryMode.SYSTEM_MOCK || readCleanupRequired()
+
         // Durable before the first system mutation: if the process dies after addTestProvider but
         // before mode publication, the next app launch still knows cleanup is required.
         if (!persistCleanupRequired(true)) {
             return MockProviderState.Failed("无法保存 Mock Provider 恢复标记")
         }
 
-        controller.start(ready.config)
-        if (controller.state !is MockProviderState.Running) return controller.state
+        controller.start(ready.config, providerMayAlreadyExist)
+        if (controller.state !is MockProviderState.Running) {
+            val failure = controller.state as? MockProviderState.Failed
+            if (failure?.providerCleanupRequired == false && !persistCleanupRequired(false)) {
+                return failure.copy(
+                    message = "${failure.message}；System Mock 未启动，但无法清除恢复标记",
+                )
+            }
+            return controller.state
+        }
 
         if (!persistMode(LocationDeliveryMode.SYSTEM_MOCK)) {
             return rollbackToHook("无法保存 System Mock 位置模式")
@@ -81,13 +92,16 @@ class LocationDeliveryOrchestrator(
         if (running?.config == ready.config) {
             controller.tick()
         } else {
-            controller.start(ready.config)
+            controller.start(ready.config, providerMayAlreadyExist = true)
         }
         return controller.state
     }
 
     /** Best-effort provider cleanup without changing persisted user intent. */
     fun cleanupRuntimeOnly(): MockProviderState {
+        if (readMode() != LocationDeliveryMode.SYSTEM_MOCK && !readCleanupRequired()) {
+            return controller.state
+        }
         controller.stop()
         return controller.state
     }

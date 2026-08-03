@@ -41,23 +41,29 @@ object LocationDeliveryUiContract {
             "生效中档案未配置有效经纬度"
         }
 
-        val mockAppSelectionRequired =
-            (providerState as? MockProviderState.Failed)?.recovery ==
-                MockProviderRecovery.SelectThisAppAsMockLocation
+        val recovery = (providerState as? MockProviderState.Failed)?.recovery
+        val retryStartAfterSelection =
+            recovery == MockProviderRecovery.SelectThisAppAndRetryStart
+        val mockAppSelectionRequired = recovery != null
 
         return LocationDeliveryUiModel(
             systemMockEnabled = mode == LocationDeliveryMode.SYSTEM_MOCK,
             switchEnabled = providerState is MockProviderState.Idle ||
-                providerState is MockProviderState.Running,
-            retryStopVisible = providerState is MockProviderState.Failed,
+                providerState is MockProviderState.Running || retryStartAfterSelection,
+            retryStopVisible = providerState is MockProviderState.Failed &&
+                !retryStartAfterSelection,
             mockAppSelectionRequired = mockAppSelectionRequired,
             status = status,
-            detail = if (mockAppSelectionRequired) {
-                "当前千网游已失去模拟位置权限，Android 不允许它移除残留位置。" +
+            detail = when (recovery) {
+                MockProviderRecovery.SelectThisAppAndRetryStart ->
+                    "当前千网游尚未取得模拟位置权限，System Mock 未启动。" +
+                        "请在开发者选项中选择当前千网游，再返回这里重新打开开关。"
+                MockProviderRecovery.ReselectThisAppAndRetryStop ->
+                    "当前千网游已失去模拟位置权限，Android 不允许它移除残留位置。" +
                     "请打开开发者选项，重新选择当前千网游，再返回这里点“重试停止”。"
-            } else {
-                "此开关只选择位置交付方式；蜂窝/Wi-Fi 等档案字段仍由 Hook 提供。" +
-                    "切回 Hook 后，已运行目标进程会在当前刷新周期内读取新模式。"
+                null ->
+                    "此开关只选择位置交付方式；蜂窝/Wi-Fi 等档案字段仍由 Hook 提供。" +
+                        "切回 Hook 后，已运行目标进程会在当前刷新周期内读取新模式。"
             },
             effectiveCoordinate = coordinate,
         )

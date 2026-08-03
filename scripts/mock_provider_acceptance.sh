@@ -236,9 +236,9 @@ done
 acceptance_command prepare_kyiv
 sleep 2
 
-"${ADB[@]}" shell cmd appops set "$REFERENCE_PACKAGE" android:mock_location deny
-"${ADB[@]}" shell cmd appops set "$BENCH_PACKAGE" android:mock_location allow
-
+# First-use boundary: the reference app still owns mock_location, so Bench has never had authority
+# and cannot have created a provider. The product must describe selection + switch retry, never a
+# fictitious residue or Stop recovery.
 open_settings true
 tap_node 'checkable="true" checked="false"'
 # The product must request notification permission itself. The harness deliberately starts from
@@ -247,6 +247,34 @@ tap_node 'resource-id="com.android.permissioncontroller:id/permission_allow_butt
 sleep 3
 notification_permission_is_granted
 echo "NOTIFICATION_PERMISSION_GRANTED via=product-runtime-request"
+assert_provider_is_real
+first_start_dump=$(ui_dump || true)
+printf '%s\n' "$first_start_dump" | rg -q 'text="选择当前千网游"'
+printf '%s\n' "$first_start_dump" | rg -q '重新打开.*开关'
+if printf '%s\n' "$first_start_dump" | rg -q '重试停止|残留位置'; then
+    echo "First start permission guidance falsely claims provider cleanup work" >&2
+    exit 1
+fi
+echo "FIRST_START_PERMISSION_GUIDANCE_VISIBLE"
+
+# A process restart must reconcile to clean Hook intent. This is the durable marker assertion: a
+# stale marker would launch StopAndUseHook and recreate the red recovery state here.
+"${ADB[@]}" shell am force-stop "$BENCH_PACKAGE"
+open_settings true
+first_restart_dump=$(ui_dump || true)
+printf '%s\n' "$first_restart_dump" | rg -q 'Hook 位置注入'
+if printf '%s\n' "$first_restart_dump" | rg -q '重试停止|重新选择当前千网游'; then
+    echo "First start permission failure survived process restart as a cleanup error" >&2
+    exit 1
+fi
+assert_provider_is_real
+echo "FIRST_START_RESTART_CLEAN"
+
+# Simulate the user following the selection guidance, then retry through the same product switch.
+"${ADB[@]}" shell cmd appops set "$REFERENCE_PACKAGE" android:mock_location deny
+"${ADB[@]}" shell cmd appops set "$BENCH_PACKAGE" android:mock_location allow
+tap_node 'checkable="true" checked="false"'
+sleep 3
 assert_provider_is_mock
 
 bench_pid=$("${ADB[@]}" shell pidof -s "$BENCH_PACKAGE" | tr -d '\r')

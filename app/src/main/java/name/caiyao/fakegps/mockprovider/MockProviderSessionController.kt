@@ -1,7 +1,8 @@
 package name.caiyao.fakegps.mockprovider
 
 enum class MockProviderRecovery {
-    SelectThisAppAsMockLocation,
+    SelectThisAppAndRetryStart,
+    ReselectThisAppAndRetryStop,
 }
 
 sealed interface MockProviderState {
@@ -15,6 +16,7 @@ sealed interface MockProviderState {
     data class Failed(
         val message: String,
         val recovery: MockProviderRecovery? = null,
+        val providerCleanupRequired: Boolean = false,
     ) : MockProviderState
 }
 
@@ -25,16 +27,24 @@ class MockProviderSessionController(
     var state: MockProviderState = MockProviderState.Idle
         private set
 
-    fun start(config: MockLocationConfig) {
+    fun start(
+        config: MockLocationConfig,
+        providerMayAlreadyExist: Boolean = state is MockProviderState.Running,
+    ) {
+        var providerMutationStarted = providerMayAlreadyExist
         updateState(MockProviderState.Starting(config))
         transition(
             sideEffect = {
                 // System test providers can survive process death. Always repair stale state first.
                 gateway.removeGpsProvider()
+                // From this boundary onward registration may have partially changed system state,
+                // even when replaceGpsProvider itself throws before returning.
+                providerMutationStarted = true
                 gateway.replaceGpsProvider()
                 gateway.publish(config)
             },
             success = MockProviderState.Running(config, emittedCount = 1),
+            cleanupRequiredOnFailure = { providerMutationStarted },
         )
     }
 
@@ -58,12 +68,18 @@ class MockProviderSessionController(
     private fun transition(
         sideEffect: () -> Unit,
         success: MockProviderState,
+        cleanupRequiredOnFailure: () -> Boolean = { true },
     ) {
         try {
             sideEffect()
             updateState(success)
         } catch (failure: Throwable) {
-            val cleanupFailure = runCatching(gateway::removeGpsProvider).exceptionOrNull()
+            val providerCleanupRequired = cleanupRequiredOnFailure()
+            val cleanupFailure = if (providerCleanupRequired) {
+                runCatching(gateway::removeGpsProvider).exceptionOrNull()
+            } else {
+                null
+            }
             val primary = failure.message ?: failure.javaClass.simpleName
             val cleanup = cleanupFailure?.let {
                 "; cleanup failed: ${it.message ?: it.javaClass.simpleName}"
@@ -71,11 +87,21 @@ class MockProviderSessionController(
             val recovery = if (
                 failure is SecurityException || cleanupFailure is SecurityException
             ) {
-                MockProviderRecovery.SelectThisAppAsMockLocation
+                if (providerCleanupRequired) {
+                    MockProviderRecovery.ReselectThisAppAndRetryStop
+                } else {
+                    MockProviderRecovery.SelectThisAppAndRetryStart
+                }
             } else {
                 null
             }
-            updateState(MockProviderState.Failed(primary + cleanup, recovery))
+            updateState(
+                MockProviderState.Failed(
+                    primary + cleanup,
+                    recovery,
+                    providerCleanupRequired = providerCleanupRequired,
+                ),
+            )
         }
     }
 

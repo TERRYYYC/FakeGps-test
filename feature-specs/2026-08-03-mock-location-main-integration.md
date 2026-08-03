@@ -24,6 +24,7 @@ created: 2026-08-03
 6. 切回 Hook、通知栏 Stop，以及“清理标记尚未清除”的 Hook 启动恢复三条路径都执行 `removeTestProvider("gps")`。普通 Hook 启动不碰系统 provider。设备验收直接检查 `dumpsys location` 中 `gps` provider 已恢复 `GnssService`，不再用 PID/app-op 代理结果。
 7. 地图默认中心与坐标搜索示例为 Kyiv `50.4501, 30.5234`；隔离 debug bench 真机验收使用该档案，不读取或改动 release 用户数据。
 8. System Mock 运行中若用户改选了模拟位置 App，设置页必须识别权限恢复动作，指导“重新选择当前千网游 → 重试停止”；只有真实恢复 GNSS 后才清理恢复标记。
+9. 首次开启时若尚未选择当前千网游，系统未发生 provider mutation：设置页指导“选择当前千网游 → 重新打开开关”，不得声称存在残留或显示“重试停止”；预写 cleanup marker 必须清除，进程重启后回到干净 Hook。
 
 ## 根因与边界
 
@@ -79,6 +80,7 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 - **INV-9 任务移除不改用户意图：** 从最近任务移除主 App 不停止 System Mock FGS；设备验收须证明 provider 与 Kyiv 输出仍存活，随后显式 Stop 恢复真实 GNSS。
 - **INV-10 权限丢失可恢复：** 若运行中改选模拟位置 App，系统可能保留原 test provider 却拒绝原 owner 移除。App 不伪造成功、不自行改 app-op；UI 指导用户重新选择当前千网游并重试，恢复标记在真实 cleanup 前保持。
 - **INV-11 前台状态可见：** Android 13+ 开启 System Mock 前请求通知权限；用户拒绝时不开启 provider，并说明定位/通知权限缺口。
+- **INV-12 恢复动作与 ownership 一致：** start 在首次 provider mutation 前被拒绝时没有 cleanup ownership，清 marker 并允许重新打开开关；已有 System Mock session 或 Stop cleanup 被拒绝时保留 cleanup ownership、恢复标记与“重试停止”。
 
 ## TDD 实施顺序
 

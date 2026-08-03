@@ -193,7 +193,13 @@ fun SettingsScreen(
             ListItem(
                 headlineContent = {
                     Text(
-                        if (locationModel.mockAppSelectionRequired) "重新选择当前千网游"
+                        if (locationModel.mockAppSelectionRequired &&
+                            locationModel.retryStopVisible
+                        ) {
+                            "重新选择当前千网游"
+                        } else if (locationModel.mockAppSelectionRequired) {
+                            "选择当前千网游"
+                        }
                         else "选择模拟位置 App",
                         color = if (locationModel.mockAppSelectionRequired) {
                             MaterialTheme.colorScheme.error
@@ -205,8 +211,13 @@ fun SettingsScreen(
                 supportingContent = {
                     Text(
                         if (locationModel.mockAppSelectionRequired) {
-                            "1. 打开开发者选项；2. 将模拟位置 App 重新选为当前千网游；" +
-                                "3. 返回后点“重试停止”"
+                            if (locationModel.retryStopVisible) {
+                                "1. 打开开发者选项；2. 将模拟位置 App 重新选为当前千网游；" +
+                                    "3. 返回后点“重试停止”"
+                            } else {
+                                "1. 打开开发者选项；2. 将模拟位置 App 选为当前千网游；" +
+                                    "3. 返回后重新打开 System Mock 开关"
+                            }
                         } else {
                             "System Mock 需要在开发者选项中选择当前安装的千网游版本"
                         },

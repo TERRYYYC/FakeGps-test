@@ -64,7 +64,7 @@ class LocationDeliveryUiContractTest {
             LocationDeliveryMode.HOOK,
             MockProviderState.Failed(
                 "not allowed to perform MOCK_LOCATION",
-                MockProviderRecovery.SelectThisAppAsMockLocation,
+                MockProviderRecovery.ReselectThisAppAndRetryStop,
             ),
             published(),
         )
@@ -74,6 +74,25 @@ class LocationDeliveryUiContractTest {
         assertTrue(model.detail.contains("重试停止"))
         assertTrue(model.retryStopVisible)
         assertFalse(model.switchEnabled)
+    }
+
+    @Test
+    fun `first start permission failure offers selection then switch retry without residue claim`() {
+        val model = LocationDeliveryUiContract.model(
+            LocationDeliveryMode.HOOK,
+            MockProviderState.Failed(
+                "not allowed to perform MOCK_LOCATION",
+                MockProviderRecovery.SelectThisAppAndRetryStart,
+            ),
+            published(),
+        )
+
+        assertTrue(model.mockAppSelectionRequired)
+        assertTrue(model.switchEnabled)
+        assertFalse(model.retryStopVisible)
+        assertTrue(model.detail.contains("重新打开开关"))
+        assertFalse(model.detail.contains("残留位置"))
+        assertFalse(model.detail.contains("重试停止"))
     }
 
     @Test

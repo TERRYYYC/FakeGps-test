@@ -98,6 +98,31 @@ class LocationDeliveryOrchestratorTest {
     }
 
     @Test
+    fun `first enable permission denial clears marker because no provider mutation occurred`() {
+        val denied = SecurityException("not allowed to perform MOCK_LOCATION")
+        val fixture = Fixture(
+            providerFailure = "remove",
+            providerFailureThrowable = denied,
+        )
+
+        val result = fixture.orchestrator.enable()
+
+        assertEquals(
+            MockProviderState.Failed(
+                "not allowed to perform MOCK_LOCATION",
+                MockProviderRecovery.SelectThisAppAndRetryStart,
+            ),
+            result,
+        )
+        assertEquals(LocationDeliveryMode.HOOK, fixture.mode)
+        assertFalse(fixture.cleanupRequired)
+        assertEquals(
+            listOf("cleanup:true", "provider:remove", "cleanup:false"),
+            fixture.events,
+        )
+    }
+
+    @Test
     fun `disable persists hook intent then cleans orphan even from fresh controller`() {
         val fixture = Fixture(initialMode = LocationDeliveryMode.SYSTEM_MOCK)
 
@@ -254,7 +279,10 @@ class LocationDeliveryOrchestratorTest {
         val result = fixture.orchestrator.disable()
 
         assertEquals(
-            MockProviderState.Failed("remove failed; cleanup failed: remove failed"),
+            MockProviderState.Failed(
+                "remove failed; cleanup failed: remove failed",
+                providerCleanupRequired = true,
+            ),
             result,
         )
         assertEquals(LocationDeliveryMode.HOOK, fixture.mode)
@@ -352,6 +380,30 @@ class LocationDeliveryOrchestratorTest {
     }
 
     @Test
+    fun `refresh permission denial keeps cleanup recovery for an existing system mock session`() {
+        val denied = SecurityException("not allowed to perform MOCK_LOCATION")
+        val fixture = Fixture(
+            initialMode = LocationDeliveryMode.SYSTEM_MOCK,
+            providerFailure = "remove",
+            providerFailureThrowable = denied,
+        )
+
+        val result = fixture.orchestrator.refresh()
+
+        assertEquals(
+            MockProviderState.Failed(
+                "not allowed to perform MOCK_LOCATION; cleanup failed: " +
+                    "not allowed to perform MOCK_LOCATION",
+                MockProviderRecovery.ReselectThisAppAndRetryStop,
+                providerCleanupRequired = true,
+            ),
+            result,
+        )
+        assertEquals(LocationDeliveryMode.SYSTEM_MOCK, fixture.mode)
+        assertEquals(listOf("provider:remove", "provider:remove"), fixture.events)
+    }
+
+    @Test
     fun `refresh invalid profile stops provider then preserves the profile failure reason`() {
         val fixture = Fixture(
             initialMode = LocationDeliveryMode.SYSTEM_MOCK,
@@ -382,6 +434,19 @@ class LocationDeliveryOrchestratorTest {
         assertEquals(LocationDeliveryMode.SYSTEM_MOCK, fixture.mode)
         assertTrue(fixture.cleanupRequired)
         assertEquals(listOf("provider:remove"), fixture.events)
+    }
+
+    @Test
+    fun `runtime cleanup does not invent an orphan in ordinary hook mode`() {
+        val fixture = Fixture(
+            initialMode = LocationDeliveryMode.HOOK,
+            initialCleanupRequired = false,
+        )
+
+        val result = fixture.orchestrator.cleanupRuntimeOnly()
+
+        assertEquals(MockProviderState.Idle, result)
+        assertTrue(fixture.events.isEmpty())
     }
 
     @Test
@@ -442,6 +507,7 @@ class LocationDeliveryOrchestratorTest {
         private val persistModeResults: ArrayDeque<Boolean> = ArrayDeque(listOf(true, true, true)),
         private val cleanupResults: ArrayDeque<Boolean> = ArrayDeque(listOf(true, true, true)),
         private val providerFailure: String? = null,
+        private val providerFailureThrowable: Throwable? = null,
         private val removeFailureCalls: Set<Int> = emptySet(),
         readPublished: () -> PublishedConfig? = { published(50.4501, 30.5234) },
     ) {
@@ -452,16 +518,22 @@ class LocationDeliveryOrchestratorTest {
         private val gateway = object : MockProviderGateway {
             override fun replaceGpsProvider() {
                 events += "provider:replace"
-                if (providerFailure == "replace") error("replace failed")
+                if (providerFailure == "replace") {
+                    throw providerFailureThrowable ?: error("replace failed")
+                }
             }
             override fun publish(config: MockLocationConfig) {
                 events += "provider:publish"
-                if (providerFailure == "publish") error("publish failed")
+                if (providerFailure == "publish") {
+                    throw providerFailureThrowable ?: error("publish failed")
+                }
             }
             override fun removeGpsProvider() {
                 events += "provider:remove"
                 removeCallCount += 1
-                if (providerFailure == "remove") error("remove failed")
+                if (providerFailure == "remove") {
+                    throw providerFailureThrowable ?: error("remove failed")
+                }
                 if (removeCallCount in removeFailureCalls) error("remove $removeCallCount failed")
             }
         }

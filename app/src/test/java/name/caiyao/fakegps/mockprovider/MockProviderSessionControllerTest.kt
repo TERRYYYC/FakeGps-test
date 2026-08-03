@@ -111,7 +111,29 @@ class MockProviderSessionControllerTest {
             MockProviderState.Failed(
                 message = "not allowed to perform MOCK_LOCATION; cleanup failed: " +
                     "not allowed to perform MOCK_LOCATION",
-                recovery = MockProviderRecovery.SelectThisAppAsMockLocation,
+                recovery = MockProviderRecovery.ReselectThisAppAndRetryStop,
+                providerCleanupRequired = true,
+            ),
+            controller.state,
+        )
+    }
+
+    @Test
+    fun `first start permission denial requests selection without inventing cleanup work`() {
+        val gateway = RecordingMockProviderGateway(
+            failure = SecurityException("not allowed to perform MOCK_LOCATION"),
+            failAt = "remove",
+        )
+        val controller = MockProviderSessionController(gateway)
+
+        controller.start(MockLocationConfig(50.4501, 30.5234))
+
+        assertEquals(listOf("remove"), gateway.calls)
+        assertEquals(
+            MockProviderState.Failed(
+                message = "not allowed to perform MOCK_LOCATION",
+                recovery = MockProviderRecovery.SelectThisAppAndRetryStart,
+                providerCleanupRequired = false,
             ),
             controller.state,
         )

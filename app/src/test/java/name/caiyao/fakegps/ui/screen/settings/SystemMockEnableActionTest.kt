@@ -39,7 +39,12 @@ class SystemMockEnableActionTest {
             result,
         )
         assertEquals(
-            listOf("sync", "read", "state:Failed(message=生效档案缺少有效纬度, recovery=null)"),
+            listOf(
+                "sync",
+                "read",
+                "state:Failed(message=生效档案缺少有效纬度, recovery=null, " +
+                    "providerCleanupRequired=false)",
+            ),
             events,
         )
     }
