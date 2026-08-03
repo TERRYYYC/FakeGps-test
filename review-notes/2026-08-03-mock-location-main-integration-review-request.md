@@ -10,7 +10,7 @@ created: 2026-08-03
 Review-Target-ID: `f001-mock-location-main-integration`
 Repository: `https://github.com/TERRYYYC/FakeGps-test.git`
 PR: `https://github.com/TERRYYYC/FakeGps-test/pull/10`
-Assigned reviewer: `@glm`（只读 review + 验证）
+Assigned reviewer: `@fable5`（只读 review + 验证）
 Base: `origin/master` = `ff48173f8bd531571d544293f317f999aa601469`
 Branch: `feat/mock-provider-main-integration`
 Code commit: `653f4c376a62127663de9bd1ce384df99a3ecad0`
@@ -20,8 +20,8 @@ Reviewer must resolve and record the exact remote branch/PR HEAD before review; 
 
 ## Authorization Boundary
 
-- GLM may inspect code, build an independent exact-HEAD checkout, run tests, and perform the isolated moto g54 acceptance.
-- GLM must **not** edit files, commit, push, resolve findings in code, or merge the PR.
+- Fable5 may inspect code, build an independent exact-HEAD checkout, run tests, and perform the isolated moto g54 acceptance.
+- Fable5 must **not** edit files, commit, push, resolve findings in code, or merge the PR.
 - Any finding returns to Sol for implementation and a new exact-HEAD review cycle.
 - PR merge is separately guarded: **only after co-creator explicitly confirms merge** may the merge step execute. Review approval alone is not merge authorization.
 
