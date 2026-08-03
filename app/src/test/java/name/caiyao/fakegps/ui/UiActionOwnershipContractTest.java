@@ -63,6 +63,20 @@ public class UiActionOwnershipContractTest {
         assertTrue(viewModel.contains("importAll"));
     }
 
+    @Test
+    public void templateWriteOwnsOnlyTheSelectedDocumentUri() throws Exception {
+        String templateWrite = classBytecode(
+                "name.caiyao.fakegps.ui.screen.collection.CollectionViewModel$saveImportTemplate$1")
+                + classBytecode(
+                        "name.caiyao.fakegps.ui.screen.collection.CollectionViewModel$saveImportTemplate$1$result$1");
+
+        assertTrue(templateWrite.contains("ContentResolver"));
+        assertTrue(templateWrite.contains("ProfileImportTemplate"));
+        assertFalse(templateWrite.contains("ProfileRepository"));
+        assertFalse(templateWrite.contains("ConfigPrefsSync"));
+        assertFalse(templateWrite.contains("AppDatabase"));
+    }
+
     private static String classBytecode(String className) throws Exception {
         String resource = className.replace('.', '/') + ".class";
         try (InputStream input = UiActionOwnershipContractTest.class

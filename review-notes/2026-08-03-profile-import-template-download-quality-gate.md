@@ -45,6 +45,7 @@ Adapter, Dispatcher or Binding.
 | No storage permission | writes only the returned Uri via `ContentResolver` | pass |
 | No data/publication side effect | template path has no repository, DAO or `ConfigPrefsSync` call | pass |
 | Explicit feedback | Saving/Success/Failure are ViewModel-owned; result uses Snackbar | pass |
+| Feedback cannot be interrupted by re-entry | only Idle may launch another template save | pass |
 
 Failure-mode audit found one output stream, one typed UI state and one failure message. The change
 does not add retry/fallback layers, a second schema list, a profile export path or an XLSX writer.
@@ -80,10 +81,15 @@ AVD `f001_ui_test` (`emulator-5554`) was used; physical device `ZY22JHW9M4` and 
    last `neighbor_cells_json`, UTF-8 BOM and CRLF present.
 5. Shut down the isolated AVD after evidence capture.
 
+After fresh-context fixes, the exact candidate was installed on the AVD again. During the success
+Snackbar the outer download action reported `enabled=false`; the created bytes retained the same
+SHA-256. This binds the re-entry guard to runtime evidence rather than reducer tests alone.
+
 Evidence:
 
 - `/tmp/cat-cafe-evidence/profile-import-template/collection-download-button.png`
 - `/tmp/cat-cafe-evidence/profile-import-template/template-save-success.png`
+- `/tmp/cat-cafe-evidence/profile-import-template/template-save-success-final.png`
 - `/tmp/cat-cafe-evidence/profile-import-template/template-download-flow.mp4`
 - `/tmp/cat-cafe-evidence/profile-import-template/downloaded-template-after-fix.csv`
 - downloaded CSV SHA-256:
@@ -97,7 +103,9 @@ Evidence:
 | Template targeted Green | canonical bytes + production-parser round trip passed |
 | Dogfood Red | saved file existed but success Snackbar was cancelled |
 | Dogfood Green | visible success Snackbar + valid downloaded file |
-| Debug JVM (`--rerun-tasks`) | 359/359 passed, 55 suites, 0 failures/errors/skips |
+| Fresh-context Red | missing `ProfileTemplateSaveReducer` caused targeted test compilation failure |
+| Fresh-context Green | state/re-entry tests + no-DB bytecode contract passed |
+| Debug JVM (`--rerun-tasks`) | 362/362 passed, 55 suites, 0 failures/errors/skips |
 | Debug APK | passed |
 | androidTest Kotlin compilation | passed |
 | Release APK + R8 | passed (`minifyReleaseWithR8`) |
@@ -116,6 +124,16 @@ The reviewer should verify:
 - SAF cancellation is a no-op and output failures surface without database/publication changes;
 - the Snackbar state lifecycle does not reintroduce cancellation;
 - no existing import, active-profile or Hook publication invariant regresses.
+
+## Fresh-context findings and disposition
+
+Sonnet generated findings only; it did not provide a review verdict.
+
+| Finding | Severity | Author disposition |
+|---|---|---|
+| FC-1: template state/dismiss and INV-12 ownership lacked direct JVM coverage | P2 | fixed: pure reducer transition tests plus compiled coroutine assertions forbidding Repository/DB/Hook references |
+| FC-2: Success/Failure permitted re-entry while Snackbar was suspended | P3 | fixed: `canStart` returns true only for Idle; AVD verified disabled action during success feedback |
+| FC-3: shared schema contract was hidden in the template file | P3 | fixed: extracted to `ProfileArchiveContract.kt` with explicit ownership documentation |
 
 ---
 

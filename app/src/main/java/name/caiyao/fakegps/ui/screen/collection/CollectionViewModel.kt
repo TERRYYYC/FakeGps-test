@@ -134,7 +134,7 @@ class CollectionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun saveImportTemplate(uri: Uri) {
-        if (_templateSaveState.value is ProfileTemplateSaveState.Saving) return
+        if (!ProfileTemplateSaveReducer.canStart(_templateSaveState.value)) return
         _templateSaveState.value = ProfileTemplateSaveState.Saving
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -154,9 +154,7 @@ class CollectionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun dismissTemplateSaveResult() {
-        if (_templateSaveState.value !is ProfileTemplateSaveState.Saving) {
-            _templateSaveState.value = ProfileTemplateSaveState.Idle
-        }
+        _templateSaveState.value = ProfileTemplateSaveReducer.dismiss(_templateSaveState.value)
     }
 
     private fun resolveDisplayName(uri: Uri): String {

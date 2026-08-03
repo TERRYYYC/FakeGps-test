@@ -101,7 +101,7 @@ fun CollectionScreen(
                     val importBusy = importState is ProfileImportUiState.Parsing ||
                         importState is ProfileImportUiState.Importing
                     IconButton(
-                        enabled = templateSaveState !is ProfileTemplateSaveState.Saving,
+                        enabled = ProfileTemplateSaveReducer.canStart(templateSaveState),
                         onClick = { templateLauncher.launch(ProfileImportTemplate.DEFAULT_FILE_NAME) },
                     ) {
                         Icon(Icons.Default.Download, contentDescription = "下载导入模板")

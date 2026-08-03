@@ -2,18 +2,6 @@ package name.caiyao.fakegps.data.importer
 
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
-import name.caiyao.fakegps.data.model.FieldSpec
-
-internal object ProfileArchiveContract {
-    const val NAME_COLUMN = "addname"
-
-    val specsByColumn = FieldSpec.allCategories()
-        .values
-        .flatten()
-        .associateBy { it.dbColumn }
-    val canonicalHeaders = listOf(NAME_COLUMN) + specsByColumn.keys
-    val allowedColumns = canonicalHeaders.toSet()
-}
 
 /** Canonical, header-only CSV template shared with the import parser contract. */
 object ProfileImportTemplate {
