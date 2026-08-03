@@ -4,7 +4,6 @@ import java.io.InputStream
 import java.util.Locale
 import name.caiyao.fakegps.data.db.ProfileEntity
 import name.caiyao.fakegps.data.db.ProfileEntityCodec
-import name.caiyao.fakegps.data.model.FieldSpec
 import name.caiyao.fakegps.data.model.ProfileFieldValueValidator
 
 class ProfileArchiveParser {
@@ -88,9 +87,9 @@ class ProfileArchiveParser {
 }
 
 internal object ProfileArchiveSchema {
-    private const val NAME_COLUMN = "addname"
-    private val specs = FieldSpec.allCategories().values.flatten().associateBy { it.dbColumn }
-    private val allowedColumns = specs.keys + NAME_COLUMN
+    private const val NAME_COLUMN = ProfileArchiveContract.NAME_COLUMN
+    private val specs = ProfileArchiveContract.specsByColumn
+    private val allowedColumns = ProfileArchiveContract.allowedColumns
 
     fun analyze(table: TabularDocument): ProfileImportAnalysis {
         val headerRow = table.rows.firstOrNull()

@@ -23,6 +23,7 @@ import name.caiyao.fakegps.data.importer.ImportIssueCode
 import name.caiyao.fakegps.data.importer.ProfileArchiveParser
 import name.caiyao.fakegps.data.importer.ProfileImportAnalysis
 import name.caiyao.fakegps.data.importer.ProfileImportIssue
+import name.caiyao.fakegps.data.importer.ProfileImportTemplate
 import name.caiyao.fakegps.data.repository.ProfileRepository
 
 class CollectionViewModel(app: Application) : AndroidViewModel(app) {
@@ -35,6 +36,10 @@ class CollectionViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _importState = MutableStateFlow<ProfileImportUiState>(ProfileImportUiState.Idle)
     val importState: StateFlow<ProfileImportUiState> = _importState
+
+    private val _templateSaveState =
+        MutableStateFlow<ProfileTemplateSaveState>(ProfileTemplateSaveState.Idle)
+    val templateSaveState: StateFlow<ProfileTemplateSaveState> = _templateSaveState
 
     val profiles: StateFlow<List<ProfileSummary>> = repo.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -126,6 +131,32 @@ class CollectionViewModel(app: Application) : AndroidViewModel(app) {
         parseJob?.cancel()
         importGeneration++
         _importState.value = ProfileImportUiState.Idle
+    }
+
+    fun saveImportTemplate(uri: Uri) {
+        if (_templateSaveState.value is ProfileTemplateSaveState.Saving) return
+        _templateSaveState.value = ProfileTemplateSaveState.Saving
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    getApplication<Application>().contentResolver.openOutputStream(uri, "wt")
+                        ?.use(ProfileImportTemplate::writeTo)
+                        ?: throw IOException("无法创建模板文件")
+                }
+            }
+            _templateSaveState.value = result.fold(
+                onSuccess = { ProfileTemplateSaveState.Success },
+                onFailure = { failure ->
+                    ProfileTemplateSaveState.Failure(failure.message ?: "模板保存失败")
+                },
+            )
+        }
+    }
+
+    fun dismissTemplateSaveResult() {
+        if (_templateSaveState.value !is ProfileTemplateSaveState.Saving) {
+            _templateSaveState.value = ProfileTemplateSaveState.Idle
+        }
     }
 
     private fun resolveDisplayName(uri: Uri): String {

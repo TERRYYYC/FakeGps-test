@@ -53,9 +53,12 @@ public class UiActionOwnershipContractTest {
                         "name.caiyao.fakegps.ui.screen.collection.CollectionViewModel$confirmImport$1$1$1");
 
         assertTrue(screen.contains("OpenDocument"));
+        assertTrue(screen.contains("CreateDocument"));
+        assertTrue(screen.contains("text/csv"));
         assertTrue(screen.contains("ProfileImportDialogs"));
         assertTrue(screen.contains("ProfileImportUiState$Preview"));
         assertTrue(viewModel.contains("previewImport"));
+        assertTrue(viewModel.contains("saveImportTemplate"));
         assertTrue(viewModel.contains("beginImport"));
         assertTrue(viewModel.contains("importAll"));
     }

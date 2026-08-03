@@ -13,8 +13,8 @@ created: 2026-08-02
 # 收藏档案 CSV / Excel 导入 Implementation Plan
 
 **Feature:** P1 dispatch mission — 收藏档案 CSV / Excel 导入
-**Goal:** 用户可在收藏页预览并确认导入 UTF-8 CSV 或单工作表 XLSX，且无效文件零写入、有效批次原子写入，并且不改变当前活动档案或已发布 hook 配置。
-**Acceptance Criteria:** CSV/XLSX 真实 fixture；覆盖完整字段映射、Unicode、空值、类型/范围、文件内与库内重复、跨行错误、公式、空行及事务回滚；用户旅程为文件选择 → 预解析/校验 → 错误或预览 → 确认 → 单一 Room 事务 → 成功摘要；原档案和已发布配置不变；Debug/Release/R8/JVM 门禁与真机旅程通过。
+**Goal:** 用户可先从收藏页下载 canonical CSV 模板，再预览并确认导入 UTF-8 CSV 或单工作表 XLSX；无效文件零写入、有效批次原子写入，并且不改变当前活动档案或已发布 hook 配置。
+**Acceptance Criteria:** 收藏页提供“下载导入模板”按钮，通过 SAF 保存 Excel 可直接打开的 UTF-8 BOM CSV；模板列顺序与 importer 共用同一字段真相源；CSV/XLSX 真实 fixture；覆盖完整字段映射、Unicode、空值、类型/范围、文件内与库内重复、跨行错误、公式、空行及事务回滚；用户旅程为模板下载或文件选择 → 预解析/校验 → 错误或预览 → 确认 → 单一 Room 事务 → 成功摘要；原档案和已发布配置不变；Debug/Release/R8/JVM 门禁与真机旅程通过。
 **Architecture cell:** collection UI → import parser/validator → profile repository → Room `temp`
 **Map delta:** none
 **Map delta why:** 这是收藏档案持久化单元的增量入口，不创建新进程、数据库或跨进程契约。
@@ -26,24 +26,30 @@ created: 2026-08-02
 
 ## Finish line
 
-从收藏页选择一个合法 CSV/XLSX 后，用户能看到文件名、数据行数、可导入数和文件内重复数；只有点“确认导入”才写入。全部候选行在一个 Room transaction 内插入，库内完全重复项跳过；任何解析、校验或数据库异常都不会留下半批数据。导入前最早创建的档案仍是生效档案，`ConfigPrefsSync` 的已发布 fingerprint 不因导入发生变化。
+用户可从收藏页把 header-only canonical CSV 模板保存到自己选择的位置，填写后再选择该 CSV/XLSX 导入。选择合法文件后，用户能看到文件名、数据行数、可导入数和文件内重复数；只有点“确认导入”才写入。全部候选行在一个 Room transaction 内插入，库内完全重复项跳过；任何解析、校验或数据库异常都不会留下半批数据。下载模板和导入均不改变 `ConfigPrefsSync` 的已发布 fingerprint。
 
-不构建：导出、旧版 `.xls`、云端同步、列映射向导、部分成功模式、地址 hook cadence、Google Mock Location 或 LSPosed scope 变更。
+不构建：导出现有收藏数据、旧版 `.xls`、云端同步、列映射向导、部分成功模式、地址 hook cadence、Google Mock Location 或 LSPosed scope 变更。
 
 ## User Journey
 
-1. 收藏页顶栏点“导入 CSV/Excel”。
-2. Android 文件选择器只引导选择 `.csv` / `.xlsx`；实际解析仍以扩展名和内容签名 fail-closed。
-3. ViewModel 受限读取并预解析：
+1. 用户可点收藏页顶栏“下载导入模板”，在 Android 创建文档界面选择位置并保存；成功或失败都在收藏页明确提示。
+2. 模板为 UTF-8 BOM、CRLF、header-only CSV，包含 `addname` 和全部 85 个 configurable headers；下载不读取数据库、不改变收藏或 Hook 配置。
+3. 收藏页顶栏点“导入 CSV/Excel”。
+4. Android 文件选择器只引导选择 `.csv` / `.xlsx`；实际解析仍以扩展名和内容签名 fail-closed。
+5. ViewModel 受限读取并预解析：
    - 有问题：弹出按行/列定位的错误列表，数据库不变；
    - 合法：弹出摘要，明确“不会替换现有档案，也不会改变生效中的档案”。
-4. 用户取消：丢弃内存预览，无副作用。
-5. 用户确认：一次 Room transaction 重查重复、批量插入。
-6. 显示“新增 N、跳过重复 M”；收藏 Flow 自行刷新。
+6. 用户取消：丢弃内存预览，无副作用。
+7. 用户确认：一次 Room transaction 重查重复、批量插入。
+8. 显示“新增 N、跳过重复 M”；收藏 Flow 自行刷新。
 
 ## Canonical file contract
 
 ### Shared rules
+
+- 下载模板与 parser 共同消费一个 ordered contract：`addname` 后接 `FieldSpec.allCategories()` 的 85 个 configurable headers；不得复制手写列清单。
+- 模板只有 header，不含会被误导入的示例档案；用户可删除不需要填写的可选列，但必须保留至少一个 configurable header。
+- 模板写入走 Android SAF `CreateDocument`，不申请传统存储权限，不保留目标 Uri 权限。
 
 - 第一行是 canonical header；header 去首尾空白、区分大小写，禁止空 header、重复 header、未知 header 和 `id`。
 - 可选元数据列：`addname`。可配置列来自 `FieldSpec.allCategories()`；文件可只提供其中一部分，但至少提供一个可配置列。
@@ -84,6 +90,7 @@ created: 2026-08-02
 1. **Import UI session** — lifecycle owner: `CollectionViewModel`; state is an in-memory projection, never persisted.
 2. **Pending preview batch** — lifecycle owner: the same ViewModel generation; a newer file selection cancels/replaces the older generation.
 3. **Room batch transaction** — lifecycle owner: `ProfileRepository.importAll`; no screen or parser may insert rows directly.
+4. **Template save session** — lifecycle owner: `CollectionViewModel`; it owns one SAF output Uri write and exposes only Saving/Success/Failure UI state.
 
 ### State × event transitions
 
@@ -98,6 +105,9 @@ created: 2026-08-02
 | UI session | Importing(G) | repeated confirm | no-op |
 | UI session | Importing(G) | transaction succeeds | Success(imported, duplicates) |
 | UI session | Importing(G) | transaction throws/cancels | Failure; Room rollback, retry from new selection |
+| Template save | Idle | destination created | Saving; write canonical bytes on `Dispatchers.IO` |
+| Template save | Saving | write succeeds | Success snackbar; no DB/publication call |
+| Template save | Saving | open/write fails | Failure snackbar; existing profiles/config unchanged |
 | Room batch | transaction opened | existing/candidate duplicate | skip candidate |
 | Room batch | transaction opened | unique candidate | queue insert with generated id |
 | Room batch | inserting | any insert failure | rollback every insert |
@@ -115,6 +125,8 @@ created: 2026-08-02
 - **INV-8:** Duplicate comparison happens again inside the transaction, so preview/confirm races cannot create exact duplicates. Concurrency/transaction test.
 - **INV-9:** Stale parse completion cannot overwrite a newer file session. State-generation test.
 - **INV-10:** Reader limits apply before unbounded allocation; XLSX XML/ZIP parser never resolves external entities. Adversarial JVM tests.
+- **INV-11:** Template headers equal `addname + FieldSpec` exactly, contain no `id`, are unique, and a user-filled row parses through the production importer. JVM contract test.
+- **INV-12:** Template creation owns no DAO/repository/publication dependency and writes only to the user-selected SAF Uri. Compiled UI ownership contract + device journey.
 
 ### Adversarial scenarios
 
