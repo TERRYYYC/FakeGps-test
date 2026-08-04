@@ -18,7 +18,7 @@ created: 2026-08-03
 
 1. `name.caiyao.fakegps` 主 App 的设置页提供“系统 Mock 位置”开关。
 2. 开关关闭时位置由现有 Xposed Hook 注入；开启时 Hook 只旁路位置字段，蜂窝、Wi-Fi 等其他档案字段继续 Hook。
-3. System Mock 不保存第二份位置，也不保存第二个“当前档案”指针；每次都从 `ConfigPrefsSync` 已发布的第一条/生效中档案读取经纬度、可选海拔与精度。
+3. System Mock 不保存第二份位置，也不新增 System-Mock 专属“当前档案”指针；每次都从 `ConfigPrefsSync` 已发布的生效中档案读取经纬度、可选海拔与精度。现有 transport 会把显式保存的 profile id 与 payload 原子提交，System Mock 只消费 payload，不另行选档案。
 4. 档案经纬度在 System Mock 运行中发生变化时，服务在下一次采样周期自动采用新值。
 5. 开启前校验有效经纬度；没有 mock-location app-op、缺定位权限/通知权限或 provider 调用失败时，设置页显示实际失败，不能显示为已运行。Android 13+ 由产品请求通知权限，不能由验收脚本代授。
 6. 切回 Hook、通知栏 Stop，以及“清理标记尚未清除”的 Hook 启动恢复三条路径都执行 `removeTestProvider("gps")`。普通 Hook 启动不碰系统 provider。设备验收直接检查 `dumpsys location` 中 `gps` provider 已恢复 `GnssService`，不再用 PID/app-op 代理结果。
@@ -48,7 +48,8 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 
 ### 2. 生效档案坐标
 
-- 唯一数据源：`ConfigPrefsSync` 发布的 `fields`，其来源仍是 `id ASC` 第一条档案。
+- 唯一数据源：`ConfigPrefsSync` 发布的 `fields`。保存档案时 repository 把该 profile id 显式传给 publisher；无显式 id 时 publisher 复用与上一份 payload 同 commit 的 active profile id，fresh install 才回落到首条。
+- active profile id 是既有 Hook transport 的路由元数据，不是 System Mock 的第二份状态；若显式目标暂时查不到，publisher 保留 last-good payload，删除场景才允许发布空档案。
 - System Mock 只解析 `latitude`、`longitude`、可选 `altitude` 与 `accuracy`；不引入新表、新 preference 或 service extra 位置。
 - 档案更新由既有 repository republish 收口；运行服务每秒读取已发布快照，所以不增加并行通知链。
 
@@ -71,7 +72,7 @@ PR #8 的控制器能正确调用 `removeTestProvider`；复现中显式点 Stop
 ## 不变量
 
 - **INV-1 单位置意图与有界交接：** System Mock 成功启用后，持久/发布快照的所有 Hook 位置字段为空，其他字段不变；已运行目标进程最迟在它当前的 5–60 秒刷新周期内采用新意图。交接窗口可能短暂重叠，但两路都来自同一生效档案坐标；不宣称跨进程瞬时原子切换。
-- **INV-2 单档案真相：** Mock 服务输出坐标等于已发布有效档案坐标，不接受 UI/Intent 中另一套坐标。
+- **INV-2 单档案真相：** Mock 服务输出坐标等于已发布有效档案坐标；保存哪条档案就发布哪条，payload 与 active profile id 原子提交；服务不接受 UI/Intent 中另一套坐标或指针。
 - **INV-3 启用失败回滚：** provider 注册、首次发布或 Hook 配置发布任一失败，最终 intent 为 Hook，provider best-effort 清理，UI 为 Failed。
 - **INV-4 Stop 不信内存：** stop/reconcile 即使 controller 刚创建且 state=Idle，仍调用 `removeTestProvider`。
 - **INV-5 真 Stop：** Stop 验收必须看到 `gps` provider 非 `[mock]` 且 identity 为系统 GNSS；PID 与 app-op 只作辅助证据。恢复成功后清除 durable cleanup marker。
