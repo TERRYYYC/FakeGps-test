@@ -18,6 +18,9 @@ import android.util.Log
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import com.google.android.gms.location.LocationServices
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import name.caiyao.fakegps.R
 import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.config.PublishedConfig
@@ -28,15 +31,11 @@ class MockProviderService : Service() {
     private lateinit var controller: MockProviderSessionController
     private lateinit var orchestrator: LocationDeliveryOrchestrator
     private val handler = Handler(Looper.getMainLooper())
+    private val commandExecutor = Executors.newSingleThreadExecutor()
+    private lateinit var sessionRunner: MockProviderSessionRunner
     private val tick = object : Runnable {
         override fun run() {
-            val state = orchestrator.refresh()
-            publishState("refresh", state)
-            if (state is MockProviderState.Running) {
-                handler.postDelayed(this, TICK_MILLIS)
-            } else {
-                finishService()
-            }
+            runSession("refresh", orchestrator::refresh, continueWhileRunning = true)
         }
     }
 
@@ -44,9 +43,19 @@ class MockProviderService : Service() {
         super.onCreate()
         createNotificationChannel()
         val manager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val gateway = CoordinatedMockProviderGateway(
+            framework = AndroidMockProviderGateway(manager),
+            fused = GooglePlayServicesFusedMockProviderGateway(
+                LocationServices.getFusedLocationProviderClient(this),
+            ),
+        )
         controller = MockProviderSessionController(
-            AndroidMockProviderGateway(manager),
+            gateway,
             MockProviderStatusStore::publish,
+        )
+        sessionRunner = MockProviderSessionRunner(
+            worker = commandExecutor,
+            completion = Executor(handler::post),
         )
         val settings = SpoofSettings.getInstance(this)
         orchestrator = LocationDeliveryOrchestrator(
@@ -68,14 +77,10 @@ class MockProviderService : Service() {
         when (val command = MockProviderServiceContract.decode(intent?.action)) {
             MockProviderCommand.StartFromEffectiveProfile -> startFromEffectiveProfile()
             MockProviderCommand.StopAndUseHook -> {
-                val state = orchestrator.disable()
-                publishState("stop-and-use-hook", state)
-                finishService()
+                runSession("stop-and-use-hook", orchestrator::disable)
             }
             MockProviderCommand.CleanupRuntimeOnly -> {
-                val state = orchestrator.cleanupRuntimeOnly()
-                publishState("runtime-cleanup", state)
-                finishService()
+                runSession("runtime-cleanup", orchestrator::cleanupRuntimeOnly)
             }
             is MockProviderCommand.Rejected -> {
                 publishState("rejected", MockProviderState.Failed(command.message))
@@ -90,8 +95,9 @@ class MockProviderService : Service() {
         if (::orchestrator.isInitialized) {
             // Best effort only. SIGKILL/force-stop can skip onDestroy; startup reconciliation is
             // the durable repair path and acceptance verifies system provider identity directly.
-            orchestrator.cleanupRuntimeOnly()
+            commandExecutor.execute(orchestrator::cleanupRuntimeOnly)
         }
+        commandExecutor.shutdown()
         super.onDestroy()
     }
 
@@ -106,12 +112,22 @@ class MockProviderService : Service() {
             return
         }
 
-        val state = orchestrator.enable()
-        publishState("start", state)
-        if (state is MockProviderState.Running) {
-            handler.postDelayed(tick, TICK_MILLIS)
-        } else {
-            finishService()
+        runSession("start", orchestrator::enable, continueWhileRunning = true)
+    }
+
+    private fun runSession(
+        event: String,
+        operation: () -> MockProviderState,
+        continueWhileRunning: Boolean = false,
+    ) {
+        sessionRunner.submit(operation) { result ->
+            val state = result.getOrElse { MockProviderState.Failed(describe(it)) }
+            publishState(event, state)
+            if (continueWhileRunning && state is MockProviderState.Running) {
+                handler.postDelayed(tick, TICK_MILLIS)
+            } else {
+                finishService()
+            }
         }
     }
 

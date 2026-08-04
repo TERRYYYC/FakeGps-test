@@ -10,6 +10,44 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MockProviderMainIntegrationContractTest(unittest.TestCase):
+    def test_system_mock_coordinates_framework_and_google_fused_sources(self) -> None:
+        gradle = (ROOT / "app/build.gradle").read_text()
+        service = (
+            ROOT
+            / "app/src/main/java/name/caiyao/fakegps/mockprovider/MockProviderService.kt"
+        ).read_text()
+        fused_path = (
+            ROOT
+            / "app/src/main/java/name/caiyao/fakegps/mockprovider/GooglePlayServicesFusedMockProviderGateway.kt"
+        )
+
+        self.assertTrue(fused_path.is_file())
+        fused = fused_path.read_text()
+
+        self.assertIn(
+            "com.google.android.gms:play-services-location:21.4.0",
+            gradle,
+        )
+        self.assertIn("CoordinatedMockProviderGateway", service)
+        self.assertIn("MockProviderSessionRunner", service)
+        self.assertIn("setMockMode(true)", fused)
+        self.assertIn("setMockLocation", fused)
+        self.assertIn("setMockMode(false)", fused)
+        self.assertIn("PlayServicesTaskAwaiter", fused)
+
+    def test_acceptance_uses_a_standalone_fused_time_axis_gate(self) -> None:
+        harness = (ROOT / "scripts/mock_provider_acceptance.sh").read_text()
+        stability_path = ROOT / "scripts/assert_fused_mock_stability.sh"
+
+        self.assertTrue(stability_path.is_file())
+        stability = stability_path.read_text()
+        self.assertIn("assert_fused_mock_stability.sh", harness)
+        self.assertIn("FUSED_MOCK_STABILITY_COMPLETE", stability)
+        self.assertIn("FUSED_REAL_LOCATION_LEAK", stability)
+        self.assertIn("MOCK_STABILITY_SAMPLES", stability)
+        self.assertIn("MOCK_STABILITY_INTERVAL_SECONDS", stability)
+        self.assertNotIn("cmd appops set", stability)
+
     def test_picker_acceptance_wakes_device_before_opening_settings(self) -> None:
         harness = (ROOT / "scripts/mock_provider_acceptance.sh").read_text()
 
@@ -142,6 +180,24 @@ class MockProviderMainIntegrationContractTest(unittest.TestCase):
         self.assertIn("gps provider", harness)
         self.assertIn('appops set "$BENCH_PACKAGE" android:mock_location allow', harness)
         self.assertIn('appops set "$REFERENCE_PACKAGE" android:mock_location allow', harness)
+
+    def test_gateway_replaces_every_framework_source_that_can_feed_fused_location(self) -> None:
+        gateway = (ROOT / "app/src/main/java/name/caiyao/fakegps/mockprovider/AndroidMockProviderGateway.kt").read_text()
+
+        self.assertIn("LocationManager.GPS_PROVIDER", gateway)
+        self.assertIn("LocationManager.NETWORK_PROVIDER", gateway)
+        self.assertIn("ACTIVE_PROVIDER_NAMES", gateway)
+
+    def test_acceptance_observes_fused_stability_over_time_and_restores_network(self) -> None:
+        harness = (ROOT / "scripts/mock_provider_acceptance.sh").read_text()
+        stability = (ROOT / "scripts/assert_fused_mock_stability.sh").read_text()
+
+        self.assertIn("assert_mock_stability_over_time", harness)
+        self.assertIn("MOCK_STABILITY_COMPLETE", harness)
+        self.assertIn("network provider", harness)
+        self.assertIn("FUSED_REAL_LOCATION_LEAK", stability)
+        self.assertIn("assert_fused_mock_cache_cleared", harness)
+        self.assertIn("FUSED_MOCK_CACHE_CLEARED", harness)
 
 
 if __name__ == "__main__":

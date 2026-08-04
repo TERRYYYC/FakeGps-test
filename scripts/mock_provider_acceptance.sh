@@ -12,6 +12,8 @@ BENCH_APK="${BENCH_APK:-app/build/outputs/apk/debug/app-debug.apk}"
 KYIV_LATITUDE="50.4501"
 KYIV_LONGITUDE="30.5234"
 OBSERVE_SECONDS="${OBSERVE_SECONDS:-8}"
+MOCK_STABILITY_SAMPLES="${MOCK_STABILITY_SAMPLES:-120}"
+MOCK_STABILITY_INTERVAL_SECONDS="${MOCK_STABILITY_INTERVAL_SECONDS:-0.5}"
 SCREENSHOT_PATH="${SCREENSHOT_PATH:-}"
 RECOVERY_SCREENSHOT_PATH="${RECOVERY_SCREENSHOT_PATH:-}"
 FIRST_START_SCREENSHOT_PATH="${FIRST_START_SCREENSHOT_PATH:-}"
@@ -90,20 +92,60 @@ open_settings() {
     fi
 }
 
+provider_section() {
+    local provider="$1"
+    "${ADB[@]}" shell dumpsys location | awk -v target="$provider provider" '
+        /^[[:space:]]+[[:alnum:]_-]+ provider( \[mock\])?:/ {
+            if (capture) exit
+            capture = index($0, target) > 0
+        }
+        capture { print }
+    '
+}
+
 gps_section() {
-    "${ADB[@]}" shell dumpsys location \
-        | sed -n '/gps provider/,/passive provider/p'
+    provider_section gps
+}
+
+network_section() {
+    provider_section network
 }
 
 assert_provider_is_mock() {
-    local full section
+    local full section network
     full=$("${ADB[@]}" shell dumpsys location)
-    section=$(printf '%s\n' "$full" | sed -n '/gps provider/,/passive provider/p')
+    section=$(printf '%s\n' "$full" | awk '
+        /^[[:space:]]+[[:alnum:]_-]+ provider( \[mock\])?:/ {
+            if (capture) exit
+            capture = index($0, "gps provider") > 0
+        }
+        capture { print }
+    ')
+    network=$(printf '%s\n' "$full" | awk '
+        /^[[:space:]]+[[:alnum:]_-]+ provider( \[mock\])?:/ {
+            if (capture) exit
+            capture = index($0, "network provider") > 0
+        }
+        capture { print }
+    ')
     printf '%s\n' "$section" | rg -q 'gps provider \[mock\]'
     printf '%s\n' "$section" | rg -q "$BENCH_PACKAGE"
+    printf '%s\n' "$network" | rg -q 'network provider \[mock\]'
+    printf '%s\n' "$network" | rg -q "$BENCH_PACKAGE"
     printf '%s\n' "$full" | rg -q 'Location\[gps 50\.450100,30\.523400.*mock\]'
+    printf '%s\n' "$full" | rg -q 'Location\[network 50\.450100,30\.523400.*mock\]'
     printf '%s\n' "$full" | rg -q 'Location\[fused 50\.450100,30\.523400.*mock\]'
     echo "PROVIDER_MOCK owner=$BENCH_PACKAGE coordinate=$KYIV_LATITUDE,$KYIV_LONGITUDE"
+}
+
+assert_mock_stability_over_time() {
+    SERIAL="$SERIAL" \
+        EXPECTED_LATITUDE="50.450100" \
+        EXPECTED_LONGITUDE="30.523400" \
+        MOCK_STABILITY_SAMPLES="$MOCK_STABILITY_SAMPLES" \
+        MOCK_STABILITY_INTERVAL_SECONDS="$MOCK_STABILITY_INTERVAL_SECONDS" \
+        "$(dirname "$0")/assert_fused_mock_stability.sh"
+    echo "MOCK_STABILITY_COMPLETE samples=$MOCK_STABILITY_SAMPLES interval=${MOCK_STABILITY_INTERVAL_SECONDS}s"
 }
 
 assert_gps_provider_residue_is_mock() {
@@ -114,17 +156,43 @@ assert_gps_provider_residue_is_mock() {
     echo "PROVIDER_MOCK_RESIDUE owner=$BENCH_PACKAGE"
 }
 
+assert_fused_mock_cache_cleared() {
+    local attempt full fused
+    for attempt in $(seq 1 20); do
+        full=$("${ADB[@]}" shell dumpsys location)
+        fused=$(printf '%s\n' "$full" \
+            | grep -m1 -oE 'Location\[fused [^]]+\]' \
+            || true)
+        if [[ "$fused" != "Location[fused 50.450100,30.523400 "*" mock]" ]]; then
+            echo "FUSED_MOCK_CACHE_CLEARED observed=${fused:-missing}"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "Google FLP still exposes the Kyiv mock cache after Stop" >&2
+    echo "$fused" >&2
+    return 1
+}
+
 assert_provider_is_real() {
-    local section
+    local section network
     section=$(gps_section)
+    network=$(network_section)
     printf '%s\n' "$section" | rg -q 'gps provider:'
     printf '%s\n' "$section" | rg -q 'GnssService'
+    printf '%s\n' "$network" | rg -q 'network provider:'
     if printf '%s\n' "$section" | rg -q 'gps provider \[mock\]|name\.caiyao\.fakegps'; then
         echo "gps provider is still owned by FakeGPS" >&2
         printf '%s\n' "$section" >&2
         return 1
     fi
-    echo "PROVIDER_REAL owner=GnssService"
+    if printf '%s\n' "$network" | rg -q 'network provider \[mock\]|name\.caiyao\.fakegps'; then
+        echo "network provider is still owned by FakeGPS" >&2
+        printf '%s\n' "$network" >&2
+        return 1
+    fi
+    assert_fused_mock_cache_cleared
+    echo "PROVIDER_REAL gps=GnssService network=system"
 }
 
 assert_service_is_foreground() {
@@ -400,6 +468,7 @@ if [[ -n "$SCREENSHOT_PATH" ]]; then
     "${ADB[@]}" exec-out screencap -p >"$SCREENSHOT_PATH"
     echo "MAPS_SCREENSHOT path=$SCREENSHOT_PATH"
 fi
+assert_mock_stability_over_time
 echo "ACCEPTANCE_ACTIVE_PHASE_COMPLETE"
 
 # Reproduce the real recovery boundary: Android lets the user select another mock-location app

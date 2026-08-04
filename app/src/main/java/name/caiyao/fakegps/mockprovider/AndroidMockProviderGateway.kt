@@ -16,65 +16,94 @@ class AndroidMockProviderGateway(
 ) : MockProviderGateway {
 
     override fun replaceGpsProvider() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) addModernGpsProvider()
-        else addLegacyGpsProvider()
-        locationManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, true)
+        ACTIVE_PROVIDER_NAMES.forEach { provider ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) addModernProvider(provider)
+            else addLegacyProvider(provider)
+            locationManager.setTestProviderEnabled(provider, true)
+        }
     }
 
     override fun publish(config: MockLocationConfig) {
         val sample = sampleFactory.create(config)
-        val location = Location(sample.provider).apply {
-            latitude = sample.latitude
-            longitude = sample.longitude
-            sample.altitudeMeters?.let { altitude = it }
-            accuracy = sample.accuracyMeters
-            time = sample.timeMillis
-            elapsedRealtimeNanos = sample.elapsedRealtimeNanos
-            speed = 0f
-            bearing = 0f
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                verticalAccuracyMeters = 1f
-                speedAccuracyMetersPerSecond = 0.1f
-                bearingAccuracyDegrees = 0.1f
+        ACTIVE_PROVIDER_NAMES.forEach { provider ->
+            val location = Location(provider).apply {
+                latitude = sample.latitude
+                longitude = sample.longitude
+                sample.altitudeMeters?.let { altitude = it }
+                accuracy = sample.accuracyMeters
+                time = sample.timeMillis
+                elapsedRealtimeNanos = sample.elapsedRealtimeNanos
+                speed = 0f
+                bearing = 0f
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    verticalAccuracyMeters = 1f
+                    speedAccuracyMetersPerSecond = 0.1f
+                    bearingAccuracyDegrees = 0.1f
+                }
             }
+            locationManager.setTestProviderLocation(provider, location)
         }
-        locationManager.setTestProviderLocation(LocationManager.GPS_PROVIDER, location)
     }
 
     override fun removeGpsProvider() {
-        locationManager.removeTestProvider(LocationManager.GPS_PROVIDER)
+        var firstFailure: Throwable? = null
+        ACTIVE_PROVIDER_NAMES.forEach { provider ->
+            try {
+                locationManager.removeTestProvider(provider)
+            } catch (failure: Throwable) {
+                firstFailure?.addSuppressed(failure) ?: run { firstFailure = failure }
+            }
+        }
+        firstFailure?.let { throw it }
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
-    private fun addModernGpsProvider() {
+    private fun addModernProvider(provider: String) {
+        val networkProvider = provider == LocationManager.NETWORK_PROVIDER
         val properties = ProviderProperties.Builder()
-            .setHasNetworkRequirement(false)
+            .setHasNetworkRequirement(networkProvider)
             .setHasSatelliteRequirement(false)
-            .setHasCellRequirement(false)
+            .setHasCellRequirement(networkProvider)
             .setHasMonetaryCost(false)
             .setHasAltitudeSupport(true)
             .setHasSpeedSupport(true)
             .setHasBearingSupport(true)
-            .setPowerUsage(ProviderProperties.POWER_USAGE_HIGH)
-            .setAccuracy(ProviderProperties.ACCURACY_FINE)
+            .setPowerUsage(
+                if (networkProvider) ProviderProperties.POWER_USAGE_LOW
+                else ProviderProperties.POWER_USAGE_HIGH,
+            )
+            .setAccuracy(
+                if (networkProvider) ProviderProperties.ACCURACY_COARSE
+                else ProviderProperties.ACCURACY_FINE,
+            )
             .build()
-        locationManager.addTestProvider(LocationManager.GPS_PROVIDER, properties)
+        locationManager.addTestProvider(provider, properties)
     }
 
     @SuppressLint("InlinedApi")
     @Suppress("DEPRECATION")
-    private fun addLegacyGpsProvider() {
+    private fun addLegacyProvider(provider: String) {
+        val networkProvider = provider == LocationManager.NETWORK_PROVIDER
         locationManager.addTestProvider(
+            provider,
+            networkProvider,
+            false,
+            networkProvider,
+            false,
+            true,
+            true,
+            true,
+            if (networkProvider) ProviderProperties.POWER_USAGE_LOW
+            else ProviderProperties.POWER_USAGE_HIGH,
+            if (networkProvider) ProviderProperties.ACCURACY_COARSE
+            else ProviderProperties.ACCURACY_FINE,
+        )
+    }
+
+    private companion object {
+        val ACTIVE_PROVIDER_NAMES = listOf(
             LocationManager.GPS_PROVIDER,
-            false,
-            false,
-            false,
-            false,
-            true,
-            true,
-            true,
-            ProviderProperties.POWER_USAGE_HIGH,
-            ProviderProperties.ACCURACY_FINE,
+            LocationManager.NETWORK_PROVIDER,
         )
     }
 }
