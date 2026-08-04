@@ -1614,14 +1614,19 @@ class HookUtils {
             try {
                 final Method locationAccessor = FusedDeliveryPlan.resolveLocationAccessor(lrClass);
                 if (FUSED_HOOK_REGISTRY.claim(locationAccessor)) {
-                    XposedBridge.hookMethod(locationAccessor, new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = currentSnapshot();
-                            if (!s.hasLocation()) return;
-                            param.setResult(createFakeLocation(s));
-                        }
-                    });
+                    try {
+                        XposedBridge.hookMethod(locationAccessor, new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                Snapshot s = currentSnapshot();
+                                if (!s.hasLocation()) return;
+                                param.setResult(createFakeLocation(s));
+                            }
+                        });
+                    } catch (Throwable t) {
+                        FUSED_HOOK_REGISTRY.release(locationAccessor);
+                        throw t;
+                    }
                 }
             } catch (NoSuchMethodException missing) {
                 XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing("LocationResult#locationAccessor"));
@@ -1631,41 +1636,50 @@ class HookUtils {
             try {
                 final Method listAccessor = FusedDeliveryPlan.resolveListAccessor(lrClass);
                 if (FUSED_HOOK_REGISTRY.claim(listAccessor)) {
-                    XposedBridge.hookMethod(listAccessor, new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = currentSnapshot();
-                            if (!s.hasLocation()) return;
-                            ArrayList<Location> fakeList = new ArrayList<>();
-                            fakeList.add(createFakeLocation(s));
-                            param.setResult(fakeList);
-                        }
-                    });
+                    try {
+                        XposedBridge.hookMethod(listAccessor, new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                Snapshot s = currentSnapshot();
+                                if (!s.hasLocation()) return;
+                                ArrayList<Location> fakeList = new ArrayList<>();
+                                fakeList.add(createFakeLocation(s));
+                                param.setResult(fakeList);
+                            }
+                        });
+                    } catch (Throwable t) {
+                        FUSED_HOOK_REGISTRY.release(listAccessor);
+                        throw t;
+                    }
                 }
             } catch (NoSuchMethodException missing) {
                 XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing("LocationResult#listAccessor"));
             }
 
             // extractResult capability (documented PendingIntent path): static (Intent)->self,
-            // answered with a fresh object built via the create capability: static (List)->self.
+            // answered via the public construction seam (factory or (List) constructor).
             try {
                 final Method extractResult = FusedDeliveryPlan.resolveStaticResultFactory(lrClass);
-                final Method create = FusedDeliveryPlan.resolveStaticListFactory(lrClass);
                 if (FUSED_HOOK_REGISTRY.claim(extractResult)) {
-                    XposedBridge.hookMethod(extractResult, new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = currentSnapshot();
-                            if (!s.hasLocation()) return;
-                            try {
-                                ArrayList<Location> fakeList = new ArrayList<>();
-                                fakeList.add(createFakeLocation(s));
-                                param.setResult(create.invoke(null, fakeList));
-                            } catch (Throwable t) {
-                                XposedBridge.log(TAG + ": LocationResult extractResult: " + t);
+                    try {
+                        XposedBridge.hookMethod(extractResult, new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                Snapshot s = currentSnapshot();
+                                if (!s.hasLocation()) return;
+                                try {
+                                    ArrayList<Location> fakeList = new ArrayList<>();
+                                    fakeList.add(createFakeLocation(s));
+                                    param.setResult(FusedDeliveryPlan.buildResult(lrClass, fakeList));
+                                } catch (Throwable t) {
+                                    XposedBridge.log(TAG + ": LocationResult extractResult: " + t);
+                                }
                             }
-                        }
-                    });
+                        });
+                    } catch (Throwable t) {
+                        FUSED_HOOK_REGISTRY.release(extractResult);
+                        throw t;
+                    }
                 }
             } catch (NoSuchMethodException missing) {
                 XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing("LocationResult#staticFactory"));
@@ -1731,39 +1745,63 @@ class HookUtils {
             switch (entry.surface) {
                 case LAST_LOCATION_TASK:
                 case CURRENT_LOCATION_TASK:
-                    // Sol R5 #1: constructing a completed Task needs the Tasks utility class,
-                    // which does not exist under any knowable name on current Maps. Keep the
-                    // original Task and intercept its PUBLIC delivery boundary instead —
-                    // wrap every success listener at registration time.
-                    installTaskDeliveryHooks(entry.implementation.getReturnType(), cl);
+                    // Sol R6 #1: the declared return type is the ABSTRACT Task (bkwo on
+                    // exact Maps) — delivery hooks must be planned from the ACTUAL returned
+                    // object's runtime class, and wrapping is gated to the exact instances
+                    // this API handed out (FusedTaskTracker), not every GMS task.
+                    if (!FUSED_HOOK_REGISTRY.claim(entry.implementation)) return;
+                    try {
+                        XposedBridge.hookMethod(entry.implementation, new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                Object task = param.getResult();
+                                if (task == null) return;
+                                FUSED_TASK_TRACKER.mark(task);
+                                installTaskDeliveryHooks(task.getClass(), cl);
+                            }
+                        });
+                    } catch (Throwable t) {
+                        FUSED_HOOK_REGISTRY.release(entry.implementation);
+                        throw t;
+                    }
                     break;
                 case CALLBACK_REGISTRATION:
                     if (!FUSED_HOOK_REGISTRY.claim(entry.implementation)) return;
-                    XposedBridge.hookMethod(entry.implementation, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            for (Object arg : param.args) {
-                                if (arg != null && entry.callbackType.isInstance(arg)) {
-                                    hookFusedLocationCallback(arg, cl);
-                                    return;
+                    try {
+                        XposedBridge.hookMethod(entry.implementation, new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam param) {
+                                for (Object arg : param.args) {
+                                    if (arg != null && entry.callbackType.isInstance(arg)) {
+                                        hookFusedLocationCallback(arg, cl);
+                                        return;
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
+                    } catch (Throwable t) {
+                        FUSED_HOOK_REGISTRY.release(entry.implementation);
+                        throw t;
+                    }
                     break;
                 case LISTENER_REGISTRATION:
                     if (!FUSED_HOOK_REGISTRY.claim(entry.implementation)) return;
-                    XposedBridge.hookMethod(entry.implementation, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            for (Object arg : param.args) {
-                                if (arg != null && entry.callbackType.isInstance(arg)) {
-                                    hookFusedLocationListener(arg, cl);
-                                    return;
+                    try {
+                        XposedBridge.hookMethod(entry.implementation, new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam param) {
+                                for (Object arg : param.args) {
+                                    if (arg != null && entry.callbackType.isInstance(arg)) {
+                                        hookFusedLocationListener(arg, cl);
+                                        return;
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
+                    } catch (Throwable t) {
+                        FUSED_HOOK_REGISTRY.release(entry.implementation);
+                        throw t;
+                    }
                     break;
                 default:
                     return;
@@ -1775,7 +1813,13 @@ class HookUtils {
         }
     }
 
-    /** Wrap every success-listener registration on the runtime Task class. */
+    private static final FusedTaskTracker FUSED_TASK_TRACKER = new FusedTaskTracker();
+
+    /**
+     * Wrap success-listener registrations on a runtime Task class, but only for instances
+     * handed out by hooked fused APIs (identity gate — the runtime Task class is shared by
+     * every GMS call in the process).
+     */
     private static void installTaskDeliveryHooks(Class<?> taskClass, ClassLoader cl) {
         for (FusedDeliveryPlan.TaskDelivery delivery
                 : FusedDeliveryPlan.planTaskDelivery(taskClass)) {
@@ -1786,6 +1830,7 @@ class HookUtils {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
+                        if (!FUSED_TASK_TRACKER.isTracked(param.thisObject)) return;
                         for (int i = 0; i < param.args.length; i++) {
                             Object arg = param.args[i];
                             if (arg != null && delivery.listenerType.isInstance(arg)) {
@@ -1795,6 +1840,7 @@ class HookUtils {
                     }
                 });
             } catch (Throwable t) {
+                FUSED_HOOK_REGISTRY.release(delivery.registrationMethod);
                 XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing(
                         "Task#" + taskClass.getName()));
             }
@@ -1841,11 +1887,12 @@ class HookUtils {
             return;
         }
 
-        // Result delivery: replace the argument wholesale via the (List)->self static
-        // factory capability — private field layouts (mLocations) are prohibited.
+        // Result delivery: replace the argument wholesale via the public construction
+        // seam (static (List)->self factory, or the public (List) constructor current
+        // Maps actually ships — Sol R6 #2). Private field layouts are prohibited.
         final Method resultMethod = delivery.resultMethod;
         if (FUSED_HOOK_REGISTRY.claim(resultMethod)) {
-            tryHook(() -> {
+            try {
                 final Class<?> lrClass = resultMethod.getParameterTypes()[0];
                 XposedBridge.hookMethod(resultMethod, new XC_MethodHook() {
                     @Override
@@ -1853,16 +1900,18 @@ class HookUtils {
                         Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
                         try {
-                            Method create = FusedDeliveryPlan.resolveStaticListFactory(lrClass);
                             ArrayList<Location> fakeList = new ArrayList<>();
                             fakeList.add(createFakeLocation(s));
-                            param.args[0] = create.invoke(null, fakeList);
+                            param.args[0] = FusedDeliveryPlan.buildResult(lrClass, fakeList);
                         } catch (Throwable t) {
                             XposedBridge.log(TAG + ": fused callback result delivery: " + t);
                         }
                     }
                 });
-            });
+            } catch (Throwable t) {
+                FUSED_HOOK_REGISTRY.release(resultMethod);
+                throw t;
+            }
         }
 
         // Availability delivery: force the availability object's boolean accessor true.
@@ -1870,14 +1919,18 @@ class HookUtils {
         try {
             final Method booleanAccessor = FusedDeliveryPlan.resolveBooleanAccessor(availabilityClass);
             if (FUSED_HOOK_REGISTRY.claim(booleanAccessor)) {
-                tryHook(() -> XposedBridge.hookMethod(booleanAccessor, new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        Snapshot s = currentSnapshot();
-                        if (!s.hasLocation()) return;
-                        param.setResult(true);
-                    }
-                }));
+                try {
+                    XposedBridge.hookMethod(booleanAccessor, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            Snapshot s = currentSnapshot();
+                            if (!s.hasLocation()) return;
+                            param.setResult(true);
+                        }
+                    });
+                } catch (Throwable t) {
+                    FUSED_HOOK_REGISTRY.release(booleanAccessor);
+                }
             }
         } catch (NoSuchMethodException ignored) {}
     }

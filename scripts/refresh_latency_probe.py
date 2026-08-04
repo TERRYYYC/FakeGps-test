@@ -55,7 +55,7 @@ import sys
 import time
 
 PKG = "name.caiyao.fakegps"
-HOOK_PREFS_GLOB = "/data/misc/*/prefs/%s/spoof_config.xml" % PKG
+HOOK_PREFS_GLOB_TEMPLATE = "/data/misc/*/prefs/%s/spoof_config.xml"
 TMP_REMOTE = "/data/local/tmp/.fakegps_refresh_probe.b64"
 
 ACCEPT_RE = re.compile(
@@ -95,8 +95,9 @@ def device_ready() -> None:
         raise SystemExit("ABORT root (su) required to read/write the hook prefs file.")
 
 
-def resolve_prefs_path() -> str:
-    paths = [l.strip() for l in su("ls -d %s 2>/dev/null" % HOOK_PREFS_GLOB).splitlines()
+def resolve_prefs_path(pkg: str) -> str:
+    glob = HOOK_PREFS_GLOB_TEMPLATE % pkg
+    paths = [l.strip() for l in su("ls -d %s 2>/dev/null" % glob).splitlines()
              if l.strip()]
     if len(paths) != 1:
         raise SystemExit(
@@ -227,6 +228,9 @@ def main() -> int:
                          "locked: write immediately after the previous acceptance, which "
                          "deterministically samples the WORST case (~interval).")
     ap.add_argument("--seed", type=int, default=None, help="Seed for --phase random.")
+    ap.add_argument("--pkg", default=PKG,
+                    help="Package whose spoof_config to probe (default: official). "
+                         "Use name.caiyao.fakegps.bench for bench-module runs.")
     args = ap.parse_args()
     if args.seed is not None:
         random.seed(args.seed)
@@ -236,7 +240,7 @@ def main() -> int:
     if args.observe_only:
         return observe(args.observe_only, year)
 
-    path = resolve_prefs_path()
+    path = resolve_prefs_path(args.pkg)
     original = read_file_b64(path)
     original_json = extract_json(original.decode("utf-8"))
     original_md5 = md5(path)

@@ -23,4 +23,12 @@ final class FusedHookRegistry {
     boolean claim(Method method) {
         return claimed.add(method);
     }
+
+    /**
+     * Undo a claim after a failed installation so the next discovery retries the method
+     * (Sol R6 #3: claim-then-fail without release permanently skips the surface).
+     */
+    void release(Method method) {
+        claimed.remove(method);
+    }
 }

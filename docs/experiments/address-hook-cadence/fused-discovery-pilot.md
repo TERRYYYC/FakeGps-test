@@ -110,3 +110,67 @@ Profile restored to the Zhytomyr baseline via the real UI path
 5s pending device availability — flagged in the handoff).
 
 [墨墨/kimi-k3🐾]
+
+---
+
+# R6 Follow-up: Delivery-Layer Fixes, Verified on the Bench Identity
+
+Sol's R6 (exact HEAD `2f9665e`) proved against the exact Maps bytecode that the
+first delivery implementation was silently inert on real Maps. All three
+findings were fixed red-first and re-verified on device through the
+`somewhere.bench` applicationId (official package untouched, per device lock).
+
+## Fixes (per finding)
+
+**R6 #1 — Task delivery planned zero hooks.**
+Exact-Maps facts: the declared return type is the ABSTRACT task (`bkwo`), and
+the real success listener is erased to `c(Object)`. Fixes:
+- delivery hooks are planned from the ACTUAL returned object's runtime class
+  (client-method after-hook), never the declared return type;
+- the erasure-correct discriminator: `Object` params are SUCCESS (not Task);
+  only non-Object Task-assignable params are completion/continuation;
+  listener delivery methods must return `void` (excludes continuations);
+- `FusedTaskTracker` (weak identity set) gates wrapping to instances handed
+  out by hooked fused APIs — the runtime Task class is process-shared;
+- success evidence is only emitted when an install actually happened.
+
+**R6 #2 — replacement LocationResult could not be constructed.**
+Exact-Maps facts: renamed static `b(Intent)`, public `(List)` CONSTRUCTOR, no
+static `(List)->self` factory. Fixes: `FusedDeliveryPlan.buildResult` prefers
+the static factory and falls back to the public `(List)` constructor; the
+assignability direction was corrected (`resultClass.isAssignableFrom(return)`).
+
+**R6 #3 — claim-then-fail was unrecoverable.**
+`FusedHookRegistry.release(Method)`; every claim→install site releases on
+failure, so the next factory call retries.
+
+## Device verification (bench identity, Maps 26.31)
+
+- Module load path: `Loading legacy module name.caiyao.fakegps.bench` into
+  Maps; bench config (Lviv, fp=0411dc…) accepted; full chain
+  `factory_armed → client_discovered(bkmc) → 11 surface hooks`.
+- **Blue dot follows the bench config (Lviv)** — the R6-fixed delivery layer
+  drives the exact app that defeated the previous two attempts.
+- Honest absence logged: `fused_surface_missing method=LocationResult#listAccessor`
+  (Maps' LocationResult ships no List-returning accessor; defense-in-depth
+  surface correctly reports instead of faking success). The renamed
+  `b(Intent)` (extractResult capability) resolved and installed — no
+  `staticFactory` missing evidence.
+- **Interval matrix (bench prefs)**: 30s → mean 0.205s, 60s → mean 0.210s
+  (4 samples each, Maps + bench process); combined with earlier 5s/10s runs,
+  propagation is interval-independent across the full 5/10/30/60 matrix.
+- **Resource census** (Maps process): 105 threads total, exactly 1
+  `FileObserver` thread, exactly 1 inotify instance — no growth from the
+  hook layer; timer shares the main looper.
+- Official Maps scope was temporarily unchecked for attribution and restored
+  after; bench Maps scope removed after the matrix; official package never
+  touched.
+
+## Test evidence
+
+476 unit tests, 0 failures — including R6 red-first cases: erased-`Object`
+success listener planned, complete/continuation/non-void excluded, public
+`(List)` constructor builder, subtype/supertype assignability direction,
+claim-release-retry, task-tracker identity gating. R8 release clean.
+
+[墨墨/kimi-k3🐾]

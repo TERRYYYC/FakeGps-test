@@ -61,9 +61,11 @@ final class FusedDeliveryPlan {
 
     /**
      * Plan the success-listener registrations of a runtime Task class: public methods whose
-     * LAST parameter is an interface declaring exactly one single-argument method, where the
-     * delivered value is neither an {@link Exception} (failure path) nor the Task itself
-     * (completion path). Registration-method and listener-member names are never consulted.
+     * LAST parameter is an interface declaring exactly one VOID single-argument method.
+     * Excluded shapes: failure listeners (value is Exception), completion listeners and
+     * continuations (value is the Task itself — after generic erasure the success value is
+     * {@code Object}, which is NOT treated as the Task; exact-Maps fact, Sol R6 #1).
+     * Member names are never consulted.
      */
     static List<TaskDelivery> planTaskDelivery(Class<?> taskClass) {
         List<TaskDelivery> out = new ArrayList<>();
@@ -76,7 +78,9 @@ final class FusedDeliveryPlan {
             if (listenerMethod == null) continue;
             Class<?> valueParam = listenerMethod.getParameterTypes()[0];
             if (Exception.class.isAssignableFrom(valueParam)) continue;
-            if (valueParam.isAssignableFrom(taskClass)) continue;
+            // onComplete/continuation deliver the Task itself (erased param = Task base).
+            // The erased success value is Object — do NOT mistake Object for the Task.
+            if (valueParam != Object.class && valueParam.isAssignableFrom(taskClass)) continue;
             out.add(new TaskDelivery(registration, listenerType, listenerMethod));
         }
         return out;
@@ -118,18 +122,38 @@ final class FusedDeliveryPlan {
 
     /**
      * The extractResult capability: a static (Intent)&rarr;self factory. Resolved by
-     * signature shape because the member name is R8-renamed on current Maps.
+     * signature shape because the member name is R8-renamed on current Maps. The return
+     * type must be the result class OR a subtype (Sol R6 #2: direction matters).
      */
     static Method resolveStaticResultFactory(Class<?> resultClass) throws NoSuchMethodException {
         for (Method m : resultClass.getMethods()) {
             if (Modifier.isStatic(m.getModifiers())
                     && m.getParameterTypes().length == 1
                     && m.getParameterTypes()[0] == android.content.Intent.class
-                    && m.getReturnType().isAssignableFrom(resultClass)) {
+                    && resultClass.isAssignableFrom(m.getReturnType())) {
                 return m;
             }
         }
         throw new NoSuchMethodException("no static (Intent)->self factory on " + resultClass);
+    }
+
+    /**
+     * Build a replacement LocationResult via its public construction seam: prefer a static
+     * (List)&rarr;self factory; fall back to the public (List) constructor — the only
+     * builder current Maps actually ships (exact-Maps fact, Sol R6 #2).
+     */
+    static Object buildResult(Class<?> resultClass, List<?> locations) throws Exception {
+        try {
+            return resolveStaticListFactory(resultClass).invoke(null, locations);
+        } catch (NoSuchMethodException noStaticFactory) {
+            for (java.lang.reflect.Constructor<?> ctor : resultClass.getConstructors()) {
+                if (ctor.getParameterTypes().length == 1
+                        && List.class.isAssignableFrom(ctor.getParameterTypes()[0])) {
+                    return ctor.newInstance(locations);
+                }
+            }
+            throw noStaticFactory;
+        }
     }
 
     /**
@@ -141,7 +165,7 @@ final class FusedDeliveryPlan {
             if (Modifier.isStatic(m.getModifiers())
                     && m.getParameterTypes().length == 1
                     && List.class.isAssignableFrom(m.getParameterTypes()[0])
-                    && m.getReturnType().isAssignableFrom(resultClass)) {
+                    && resultClass.isAssignableFrom(m.getReturnType())) {
                 return m;
             }
         }
@@ -214,12 +238,13 @@ final class FusedDeliveryPlan {
         return false;
     }
 
-    /** The listener interface's single one-argument method, or null when shapeless. */
+    /** The listener interface's single VOID one-argument method, or null when shapeless. */
     private static Method singleValueMethod(Class<?> listenerType) {
         Method found = null;
         for (Method m : listenerType.getMethods()) {
             if (m.getDeclaringClass() == Object.class) continue;
             if (m.getParameterTypes().length != 1) return null;
+            if (m.getReturnType() != void.class) return null; // continuation, not a listener
             if (found != null) return null; // not a single-method listener
             found = m;
         }
