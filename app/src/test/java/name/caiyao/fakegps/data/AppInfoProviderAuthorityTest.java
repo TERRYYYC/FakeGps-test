@@ -1,5 +1,6 @@
 package name.caiyao.fakegps.data;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -13,13 +14,26 @@ import org.junit.Test;
 public class AppInfoProviderAuthorityTest {
 
     @Test
+    public void currentVariantAuthorityExactlyMatchesTheManifestTemplate() {
+        assertEquals(
+                BuildConfig.APPLICATION_ID + ".data.AppInfoProvider",
+                ProviderAuthority.AUTHORITY);
+    }
+
+    @Test
     public void providerWiresTheVariantApplicationIdThroughThePureAuthorityHelper() throws Exception {
         String provider = classBytecode("name.caiyao.fakegps.data.AppInfoProvider");
 
         assertTrue(provider.contains("ProviderAuthority"));
-        assertTrue(provider.contains("forApplicationId"));
-        assertTrue(provider.contains(BuildConfig.APPLICATION_ID));
         assertTrue(provider.contains("AUTHORITY"));
+    }
+
+    @Test
+    public void publisherUsesTheSameAuthorityContractAsTheProvider() throws Exception {
+        String publisher = classBytecode("name.caiyao.fakegps.config.ConfigPrefsSync");
+
+        assertTrue(publisher.contains("ProviderAuthority"));
+        assertTrue(publisher.contains("AUTHORITY"));
     }
 
     private static String classBytecode(String className) throws Exception {

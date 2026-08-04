@@ -10,15 +10,13 @@ import android.net.Uri;
 import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import name.caiyao.fakegps.BuildConfig;
 
 import java.io.File;
 
 public class AppInfoProvider extends ContentProvider {
     private static final String TAG = "AppInfoProvider";
-    public static final String AUTHORITY = ProviderAuthority.forApplicationId(BuildConfig.APPLICATION_ID);
-    public static final Uri APP_CONTENT_URI = Uri.parse("content://" + AUTHORITY + "/app");
-    public static final Uri SETTINGS_CONTENT_URI = Uri.parse("content://" + AUTHORITY + "/settings");
+    public static final Uri APP_CONTENT_URI = Uri.parse("content://" + ProviderAuthority.AUTHORITY + "/app");
+    public static final Uri SETTINGS_CONTENT_URI = Uri.parse("content://" + ProviderAuthority.AUTHORITY + "/settings");
     public static final int APP_URI_CODE = 0;
     public static final int SETTINGS_URI_CODE = 1;
     private static final UriMatcher sUriMatcher = new UriMatcher(UriMatcher.NO_MATCH);
@@ -28,8 +26,8 @@ public class AppInfoProvider extends ContentProvider {
     private static final String TABLE_TEMP = "temp";
 
     static {
-        sUriMatcher.addURI(AUTHORITY, "app", APP_URI_CODE);
-        sUriMatcher.addURI(AUTHORITY, "settings", SETTINGS_URI_CODE);
+        sUriMatcher.addURI(ProviderAuthority.AUTHORITY, "app", APP_URI_CODE);
+        sUriMatcher.addURI(ProviderAuthority.AUTHORITY, "settings", SETTINGS_URI_CODE);
     }
 
     private SQLiteDatabase mSQLiteDatabase;
