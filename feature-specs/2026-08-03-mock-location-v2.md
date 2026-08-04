@@ -7,6 +7,8 @@ created: 2026-08-03
 
 # Mock Location v2 Implementation Plan
 
+> **Historical Lab plan.** PR #8 proved the System Mock mechanism but did not complete the main-product requirement. The shippable integration is defined by `2026-08-03-mock-location-main-integration.md`; the standalone `mockProvider` build type described below has since been removed.
+
 **Feature:** F001 — `insight/docs/features/F001-issue-gms-fused-location-gap.md`
 **Goal:** Ship a rebuildable FakeGPS-derived Mock Provider lab that can coexist with the installed original apps and prove whether Android's system GPS test provider moves Google Maps.
 **Acceptance Criteria:** (1) installed originals are backed up before testing; (2) the lab has a distinct package, label, data directory, provider authority, and mock-app identity; (3) original debug/release variants remain behaviorally and build compatible; (4) the lab replaces `LocationManager.GPS_PROVIDER`, emits complete fresh mock locations at a fixed cadence, and exposes start/stop/error state; (5) stop, failure, and a documented restore procedure return the device to the original mock app; (6) JVM tests, APK identity inspection, coexistence installation, and a moto g54 Maps observation all have exact evidence.

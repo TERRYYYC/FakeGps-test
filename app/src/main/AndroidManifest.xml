@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
+    <!--
+        Android Settings discovers candidates for "Select mock location app" through this legacy
+        declaration even though modern Android grants the real authority through the mock_location
+        app-op. Mock location is an intentional product capability here, so lint's test-only
+        assumption does not apply to the release manifest.
+    -->
+    <uses-permission
+        android:name="android.permission.ACCESS_MOCK_LOCATION"
+        tools:ignore="MockLocation" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
@@ -9,6 +19,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:icon="@drawable/ic_lan"
@@ -63,6 +76,14 @@
             android:exported="false"
             android:theme="@style/AppTheme.NoActionBar" />
 
+        <!--
+            exported=false (review FC-6): this provider was world-readable with no permission, so
+            ANY app on the device could read the full spoof profile — including the app under test,
+            which turns the tool itself into the giveaway. Nothing outside this APK needs it: the
+            hook stopped querying it when the transport moved to XSharedPreferences, and the only
+            remaining callers (VerifyViewModel / ConfigPrefsSync / SpoofSettings) run in this
+            process, where same-uid access does not require export.
+        -->
         <provider
             android:name=".data.AppInfoProvider"
             android:authorities="${applicationId}.data.AppInfoProvider"
@@ -78,14 +99,11 @@
             android:exported="false"
             android:process=":hook_verify"
             android:stopWithTask="true" />
-        <!--
-            exported=false (review FC-6): this provider was world-readable with no permission, so
-            ANY app on the device could read the full spoof profile — including the app under test,
-            which turns the tool itself into the giveaway. Nothing outside this APK needs it: the
-            hook stopped querying it when the transport moved to XSharedPreferences, and the only
-            remaining callers (VerifyViewModel / ConfigPrefsSync / SpoofSettings) run in this
-            process, where same-uid access does not require export.
-        -->
+
+        <service
+            android:name=".mockprovider.MockProviderService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
 
     </application>
 

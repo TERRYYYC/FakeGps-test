@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.navigation.compose.rememberNavController
 import name.caiyao.fakegps.probe.DebugHookProbeController
+import name.caiyao.fakegps.mockprovider.MockProviderRuntime
 import name.caiyao.fakegps.ui.navigation.AppNavGraph
 import name.caiyao.fakegps.ui.theme.FakeGpsTheme
 
@@ -19,6 +20,7 @@ class ComposeActivity : ComponentActivity() {
         // (running inside target apps, e.g. Google Maps) can read it via XSharedPreferences.
         // This is the REAL launcher entry point; the legacy SplashActivity is never opened.
         name.caiyao.fakegps.config.ConfigPrefsSync.sync(applicationContext)
+        MockProviderRuntime.reconcileOnAppLaunch(applicationContext)
 
         // Read-back probe, DEBUG builds only: logs what this (self-hooked) process observes through
         // the public Android APIs, so scripts/test-hook.sh can assert the whole chain with no

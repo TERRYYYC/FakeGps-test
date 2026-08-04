@@ -226,7 +226,7 @@ fun MapScreen(
                     value = searchCoord,
                     onValueChange = { searchCoord = it },
                     label = { Text("纬度,经度") },
-                    placeholder = { Text("39.9042,116.4074") },
+                    placeholder = { Text("50.4501,30.5234") },
                     singleLine = true,
                 )
             },
@@ -290,7 +290,7 @@ private fun OsmMapView(
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
             controller.setZoom(15.0)
-            controller.setCenter(GeoPoint(39.9042, 116.4074)) // Default: Beijing
+            controller.setCenter(GeoPoint(50.4501, 30.5234)) // Default: Kyiv
 
             // Scale bar
             val scaleBar = ScaleBarOverlay(this).apply {

@@ -16,6 +16,26 @@ import org.junit.Test
 class PublishedConfigTest {
 
     @Test
+    fun `v4 parses system mock as an orthogonal location delivery mode`() {
+        val parsed = PublishedConfig.parse(
+            """{"schemaVersion":4,"locationDeliveryMode":"system_mock","fields":{"latitude":50.4501,"longitude":30.5234,"tac":27101}}""",
+        )!!
+
+        assertEquals("system_mock", parsed.locationDeliveryMode)
+        assertEquals("50.4501", parsed.fields["latitude"])
+        assertEquals("27101", parsed.fields["tac"])
+    }
+
+    @Test
+    fun `v2 and v3 payloads default location delivery to hook`() {
+        val v2 = PublishedConfig.parse("""{"schemaVersion":2,"fields":{}}""")!!
+        val v3 = PublishedConfig.parse("""{"schemaVersion":3,"fields":{}}""")!!
+
+        assertEquals("hook", v2.locationDeliveryMode)
+        assertEquals("hook", v3.locationDeliveryMode)
+    }
+
+    @Test
     fun `parses schema version mode and fields`() {
         val p = PublishedConfig.parse(
             """{"schemaVersion":2,"mode":"always_on","fields":{"tac":26999,"operator_name":"CMCC"}}"""

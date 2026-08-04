@@ -15,9 +15,10 @@ internal object PublishedProfileMatcher {
         val published = PublishedConfig.parse(raw) ?: return null
         if (published.schemaVersion !in setOf(
                 ConfigPrefsSync.LEGACY_SCHEMA_VERSION,
+                ConfigPrefsSync.PREVIOUS_SCHEMA_VERSION,
                 ConfigPrefsSync.SCHEMA_VERSION,
             ) || !published.fieldsPresent ||
-            (published.schemaVersion == ConfigPrefsSync.SCHEMA_VERSION &&
+            (published.schemaVersion != ConfigPrefsSync.LEGACY_SCHEMA_VERSION &&
                 !published.unavailablePresent)
         ) {
             return null

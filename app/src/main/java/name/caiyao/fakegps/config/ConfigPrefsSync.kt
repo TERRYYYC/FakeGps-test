@@ -6,7 +6,7 @@ import android.net.Uri
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
-import name.caiyao.fakegps.BuildConfig
+import name.caiyao.fakegps.data.ProviderAuthority
 import name.caiyao.fakegps.data.db.AppDatabase
 import name.caiyao.fakegps.data.SpoofSettings
 
@@ -46,13 +46,15 @@ object ConfigPrefsSync {
      * The hook rejects a payload it cannot interpret rather than silently mis-reading it, and keeps
      * its last-known-good config instead of reverting to real device data mid-test.
      */
-    const val SCHEMA_VERSION = 3
+    const val SCHEMA_VERSION = 4
+    /** Losslessly readable predecessor: same flat fields/unavailable shape, without delivery mode. */
+    const val PREVIOUS_SCHEMA_VERSION = 3
     /** Losslessly readable predecessor: it has the same flat `fields` map and no unavailable set. */
     const val LEGACY_SCHEMA_VERSION = 2
 
 
-    private val APP_URI: Uri = Uri.parse("content://${BuildConfig.APPLICATION_ID}.data.AppInfoProvider/app")
-    private val SETTINGS_URI: Uri = Uri.parse("content://${BuildConfig.APPLICATION_ID}.data.AppInfoProvider/settings")
+    private val APP_URI: Uri = Uri.parse("content://${ProviderAuthority.AUTHORITY}/app")
+    private val SETTINGS_URI: Uri = Uri.parse("content://${ProviderAuthority.AUTHORITY}/settings")
 
     /**
      * Publish the effective profile as a FLAT field map mirroring the profile table.
@@ -188,6 +190,10 @@ object ConfigPrefsSync {
         root.put(
             "refreshIntervalSec",
             SpoofSettings.getInstance(context).readRefreshIntervalSec(),
+        )
+        root.put(
+            "locationDeliveryMode",
+            SpoofSettings.getInstance(context).readLocationDeliveryMode().wireValue,
         )
 
         // settings (mode / active hours) — small, fixed shape

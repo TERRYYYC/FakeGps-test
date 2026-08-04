@@ -1,5 +1,13 @@
 package name.caiyao.fakegps.ui.screen.settings
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -33,11 +42,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import name.caiyao.fakegps.data.SpoofSettings
 import kotlin.math.roundToInt
 
+@SuppressLint("InlinedApi")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -50,6 +62,65 @@ fun SettingsScreen(
 
     val refreshIntervalSec by vm.refreshIntervalSec.collectAsState()
     val publishFailure by vm.publishFailure.collectAsState()
+    val locationDeliveryMode by vm.locationDeliveryMode.collectAsState()
+    val mockProviderState by vm.mockProviderState.collectAsState()
+    val publishedConfig by vm.publishedConfig.collectAsState()
+    val locationModel = LocationDeliveryUiContract.model(
+        locationDeliveryMode,
+        mockProviderState,
+        publishedConfig,
+    )
+    val context = LocalContext.current
+    fun missingSystemMockPermissions(): Set<SystemMockPermission> =
+        SystemMockPermissionPolicy.missing(
+            sdkInt = Build.VERSION.SDK_INT,
+            fineLocationGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED,
+            coarseLocationGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED,
+            notificationsGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED,
+        )
+
+    val systemMockPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) {
+        val missing = missingSystemMockPermissions()
+        if (missing.isEmpty()) {
+            vm.setSystemMockEnabled(true)
+        } else {
+            vm.reportSystemMockPermissionFailure(
+                "System Mock 未启动：请授予定位权限和通知权限，确保运行状态与停止入口可见",
+            )
+        }
+    }
+
+    fun requestSystemMock(enabled: Boolean) {
+        if (!enabled) {
+            vm.setSystemMockEnabled(false)
+            return
+        }
+        val missing = missingSystemMockPermissions()
+        if (missing.isEmpty()) {
+            vm.setSystemMockEnabled(true)
+        } else {
+            systemMockPermissionLauncher.launch(
+                missing.map { permission ->
+                    when (permission) {
+                        SystemMockPermission.FineLocation -> Manifest.permission.ACCESS_FINE_LOCATION
+                        SystemMockPermission.CoarseLocation -> Manifest.permission.ACCESS_COARSE_LOCATION
+                        SystemMockPermission.Notifications -> Manifest.permission.POST_NOTIFICATIONS
+                    }
+                }.toTypedArray(),
+            )
+        }
+    }
 
     var showModeDialog by remember { mutableStateOf(false) }
     var showRefreshDialog by remember { mutableStateOf(false) }
@@ -92,6 +163,71 @@ fun SettingsScreen(
                 )
                 HorizontalDivider()
             }
+
+            // --- 位置注入 ---
+            SectionHeader("位置注入")
+            ListItem(
+                headlineContent = { Text("系统 Mock 位置") },
+                supportingContent = {
+                    Text(
+                        "${locationModel.status}\n" +
+                            "生效中档案：${locationModel.effectiveCoordinate}\n" +
+                            locationModel.detail,
+                    )
+                },
+                trailingContent = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Switch(
+                            checked = locationModel.systemMockEnabled,
+                            enabled = locationModel.switchEnabled,
+                            onCheckedChange = ::requestSystemMock,
+                        )
+                        if (locationModel.retryStopVisible) {
+                            TextButton(onClick = vm::retryStopSystemMock) {
+                                Text("重试停止")
+                            }
+                        }
+                    }
+                },
+            )
+            ListItem(
+                headlineContent = {
+                    Text(
+                        if (locationModel.mockAppSelectionRequired &&
+                            locationModel.retryStopVisible
+                        ) {
+                            "重新选择当前千网游"
+                        } else if (locationModel.mockAppSelectionRequired) {
+                            "选择当前千网游"
+                        }
+                        else "选择模拟位置 App",
+                        color = if (locationModel.mockAppSelectionRequired) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                },
+                supportingContent = {
+                    Text(
+                        if (locationModel.mockAppSelectionRequired) {
+                            if (locationModel.retryStopVisible) {
+                                "1. 打开开发者选项；2. 将模拟位置 App 重新选为当前千网游；" +
+                                    "3. 返回后点“重试停止”"
+                            } else {
+                                "1. 打开开发者选项；2. 将模拟位置 App 选为当前千网游；" +
+                                    "3. 返回后重新打开 System Mock 开关"
+                            }
+                        } else {
+                            "System Mock 需要在开发者选项中选择当前安装的千网游版本"
+                        },
+                    )
+                },
+                modifier = Modifier.clickable {
+                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                },
+            )
+            HorizontalDivider()
 
             // --- Hook 配置 ---
             SectionHeader("Hook 配置")

@@ -23,6 +23,8 @@ data class PublishedConfig(
     val schemaVersion: Int,
     val mode: String,
     val fields: Map<String, String>,
+    /** Orthogonal to global spoof mode: chooses only how location reaches the target app. */
+    val locationDeliveryMode: String = DEFAULT_LOCATION_DELIVERY_MODE,
     /** Optional in schema v3 so already-published payloads keep the 30-second default. */
     val refreshIntervalSec: Int? = null,
     val unavailable: Set<String> = emptySet(),
@@ -45,6 +47,7 @@ data class PublishedConfig(
 
         /** Mirrors the hook's own fallback in MainHook#loadSnapshot (`optString("mode","always_on")`). */
         private const val DEFAULT_MODE = "always_on"
+        private const val DEFAULT_LOCATION_DELIVERY_MODE = "hook"
 
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -86,6 +89,9 @@ data class PublishedConfig(
                 schemaVersion = root["schemaVersion"]?.intOrNull() ?: SCHEMA_UNKNOWN,
                 mode = (root["mode"] as? JsonPrimitive)?.content ?: DEFAULT_MODE,
                 fields = fields,
+                locationDeliveryMode =
+                    (root["locationDeliveryMode"] as? JsonPrimitive)?.content
+                        ?: DEFAULT_LOCATION_DELIVERY_MODE,
                 refreshIntervalSec = root["refreshIntervalSec"]?.intOrNull(),
                 unavailable = unavailable,
                 fieldsPresent = fieldsObject != null,
