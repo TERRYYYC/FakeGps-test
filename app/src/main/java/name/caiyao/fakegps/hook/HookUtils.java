@@ -1537,11 +1537,13 @@ class HookUtils {
             "com.google.android.gms.location.LocationAvailability";
 
     /**
-     * Fused client runtime classes already instrumented. Dedup by {@link Class} identity —
-     * class objects are already unique per classloader, so no name strings are involved
-     * (same textual name in two classloaders stays two independent entries).
+     * Per-Method hook dedup (Sol R5 #3): two runtime subclasses inheriting the same
+     * implementation Method must not double-hook it, and a method whose installation
+     * failed stays unclaimed so a later discovery retries it. The old per-class set
+     * violated both. Discovery logging is deduped separately (evidence only).
      */
-    private static final Set<Class<?>> FUSED_CLIENT_HOOKED =
+    private static final FusedHookRegistry FUSED_HOOK_REGISTRY = new FusedHookRegistry();
+    private static final Set<Class<?>> FUSED_DISCOVERY_LOGGED =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     /**
@@ -1602,34 +1604,55 @@ class HookUtils {
             });
         });
 
-        // 4. Public value-object seams (defense in depth, all public API):
-        //    LocationResult.getLastLocation/getLocations, LocationResult.extractResult(Intent)
-        //    (the documented PendingIntent path), LocationAvailability.isLocationAvailable().
+        // 4. Public value-object seams (defense in depth). Capabilities are resolved by
+        //    signature SHAPE, never by member name — on the exact Maps APK R8 renamed even
+        //    LocationResult.extractResult (Sol R5 #2).
         tryHook(() -> {
             final Class<?> lrClass = XposedHelpers.findClass(GMS_LOCATION_RESULT, cl);
 
-            XposedBridge.hookAllMethods(lrClass, "getLastLocation", new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    Snapshot s = currentSnapshot();
-                    if (!s.hasLocation()) return;
-                    param.setResult(createFakeLocation(s));
+            // getLastLocation capability: instance zero-arg -> android.location.Location
+            try {
+                final Method locationAccessor = FusedDeliveryPlan.resolveLocationAccessor(lrClass);
+                if (FUSED_HOOK_REGISTRY.claim(locationAccessor)) {
+                    XposedBridge.hookMethod(locationAccessor, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            Snapshot s = currentSnapshot();
+                            if (!s.hasLocation()) return;
+                            param.setResult(createFakeLocation(s));
+                        }
+                    });
                 }
-            });
+            } catch (NoSuchMethodException missing) {
+                XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing("LocationResult#locationAccessor"));
+            }
 
-            XposedBridge.hookAllMethods(lrClass, "getLocations", new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    Snapshot s = currentSnapshot();
-                    if (!s.hasLocation()) return;
-                    ArrayList<Location> fakeList = new ArrayList<>();
-                    fakeList.add(createFakeLocation(s));
-                    param.setResult(fakeList);
+            // getLocations capability: instance zero-arg -> List
+            try {
+                final Method listAccessor = FusedDeliveryPlan.resolveListAccessor(lrClass);
+                if (FUSED_HOOK_REGISTRY.claim(listAccessor)) {
+                    XposedBridge.hookMethod(listAccessor, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            Snapshot s = currentSnapshot();
+                            if (!s.hasLocation()) return;
+                            ArrayList<Location> fakeList = new ArrayList<>();
+                            fakeList.add(createFakeLocation(s));
+                            param.setResult(fakeList);
+                        }
+                    });
                 }
-            });
+            } catch (NoSuchMethodException missing) {
+                XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing("LocationResult#listAccessor"));
+            }
 
-            XposedHelpers.findAndHookMethod(lrClass, "extractResult",
-                    android.content.Intent.class, new XC_MethodHook() {
+            // extractResult capability (documented PendingIntent path): static (Intent)->self,
+            // answered with a fresh object built via the create capability: static (List)->self.
+            try {
+                final Method extractResult = FusedDeliveryPlan.resolveStaticResultFactory(lrClass);
+                final Method create = FusedDeliveryPlan.resolveStaticListFactory(lrClass);
+                if (FUSED_HOOK_REGISTRY.claim(extractResult)) {
+                    XposedBridge.hookMethod(extractResult, new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             Snapshot s = currentSnapshot();
@@ -1637,29 +1660,39 @@ class HookUtils {
                             try {
                                 ArrayList<Location> fakeList = new ArrayList<>();
                                 fakeList.add(createFakeLocation(s));
-                                param.setResult(XposedHelpers.callStaticMethod(
-                                        lrClass, "create", fakeList));
+                                param.setResult(create.invoke(null, fakeList));
                             } catch (Throwable t) {
-                                XposedBridge.log(TAG + ": LocationResult.extractResult: " + t);
+                                XposedBridge.log(TAG + ": LocationResult extractResult: " + t);
                             }
                         }
                     });
+                }
+            } catch (NoSuchMethodException missing) {
+                XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing("LocationResult#staticFactory"));
+            }
         });
 
         tryHook(() -> {
             Class<?> laClass = XposedHelpers.findClass(GMS_LOCATION_AVAILABILITY, cl);
-            XposedBridge.hookAllMethods(laClass, "isLocationAvailable", new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    Snapshot s = currentSnapshot();
-                    if (!s.hasLocation()) return;
-                    param.setResult(true);
+            try {
+                final Method booleanAccessor = FusedDeliveryPlan.resolveBooleanAccessor(laClass);
+                if (FUSED_HOOK_REGISTRY.claim(booleanAccessor)) {
+                    XposedBridge.hookMethod(booleanAccessor, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            Snapshot s = currentSnapshot();
+                            if (!s.hasLocation()) return;
+                            param.setResult(true);
+                        }
+                    });
                 }
-            });
+            } catch (NoSuchMethodException missing) {
+                XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing("LocationAvailability#booleanAccessor"));
+            }
         });
     }
 
-    /** Validate a factory-returned client and instrument its runtime class (once per class). */
+    /** Validate a factory-returned client and instrument its runtime class. */
     private static void installFusedClientHooks(Object client, Class<?> contract, ClassLoader cl) {
         if (client == null) return;
         Class<?> runtime = client.getClass();
@@ -1670,12 +1703,17 @@ class HookUtils {
         installFusedClientHooksOnClass(contract, runtime, cl);
     }
 
-    /** Plan and install exact-Method hooks for one runtime class, deduplicated by identity. */
+    /**
+     * Plan and install exact-Method hooks for one runtime class. Re-discovery re-plans
+     * (cheap, bounded) and the per-Method registry skips whatever is already installed —
+     * so a partially failed first attempt self-heals on the next factory call (Sol R5 #3).
+     */
     private static void installFusedClientHooksOnClass(
             Class<?> contract, Class<?> runtime, ClassLoader cl) {
-        if (!FUSED_CLIENT_HOOKED.add(runtime)) return;
-        XposedBridge.log(RuntimeEvidence.fusedClientDiscovered(
-                runtime.getName(), System.identityHashCode(cl)));
+        if (FUSED_DISCOVERY_LOGGED.add(runtime)) {
+            XposedBridge.log(RuntimeEvidence.fusedClientDiscovered(
+                    runtime.getName(), System.identityHashCode(cl)));
+        }
 
         List<FusedClientMethodPlan.Entry> plan = FusedClientMethodPlan.plan(contract, runtime);
         if (plan.isEmpty()) {
@@ -1693,16 +1731,14 @@ class HookUtils {
             switch (entry.surface) {
                 case LAST_LOCATION_TASK:
                 case CURRENT_LOCATION_TASK:
-                    XposedBridge.hookMethod(entry.implementation, new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            Snapshot s = currentSnapshot();
-                            if (!s.hasLocation()) return;
-                            replaceFusedTask(param, s, cl);
-                        }
-                    });
+                    // Sol R5 #1: constructing a completed Task needs the Tasks utility class,
+                    // which does not exist under any knowable name on current Maps. Keep the
+                    // original Task and intercept its PUBLIC delivery boundary instead —
+                    // wrap every success listener at registration time.
+                    installTaskDeliveryHooks(entry.implementation.getReturnType(), cl);
                     break;
                 case CALLBACK_REGISTRATION:
+                    if (!FUSED_HOOK_REGISTRY.claim(entry.implementation)) return;
                     XposedBridge.hookMethod(entry.implementation, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
@@ -1716,6 +1752,7 @@ class HookUtils {
                     });
                     break;
                 case LISTENER_REGISTRATION:
+                    if (!FUSED_HOOK_REGISTRY.claim(entry.implementation)) return;
                     XposedBridge.hookMethod(entry.implementation, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
@@ -1738,66 +1775,111 @@ class HookUtils {
         }
     }
 
-    /** Hook concrete LocationCallback subclass's onLocationResult(). Dedup via HOOKED set. */
-    private static void hookFusedLocationCallback(Object callback, ClassLoader cl) {
-        Class<?> cbClass = callback.getClass();
-        String key = "flc#" + cbClass.getName() + "#onLocationResult";
-        if (!HOOKED.add(key)) return;
-
-        tryHook(() -> {
-            // Derive the runtime LocationResult class from the callback's own method
-            // signature — app-side R8 strips the public class name (Maps 26.31 pilot).
-            final Class<?> lrClass;
-            Method onResult = null;
-            for (Method m : cbClass.getMethods()) {
-                if ("onLocationResult".equals(m.getName())
-                        && m.getParameterTypes().length == 1) {
-                    onResult = m;
-                    break;
-                }
-            }
-            if (onResult == null) return;
-            lrClass = onResult.getParameterTypes()[0];
-            XposedHelpers.findAndHookMethod(cbClass, "onLocationResult", lrClass,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            Snapshot s = currentSnapshot();
-                            if (!s.hasLocation()) return;
-                            // Replace the argument wholesale via the public factory —
-                            // private field layouts (mLocations) change every GMS release.
-                            try {
-                                ArrayList<Location> fakeList = new ArrayList<>();
-                                fakeList.add(createFakeLocation(s));
-                                param.args[0] = XposedHelpers.callStaticMethod(
-                                        lrClass, "create", fakeList);
-                            } catch (Throwable t) {
-                                XposedBridge.log(TAG + ": FusedCallback.onLocationResult: " + t);
+    /** Wrap every success-listener registration on the runtime Task class. */
+    private static void installTaskDeliveryHooks(Class<?> taskClass, ClassLoader cl) {
+        for (FusedDeliveryPlan.TaskDelivery delivery
+                : FusedDeliveryPlan.planTaskDelivery(taskClass)) {
+            if (!FUSED_HOOK_REGISTRY.claim(delivery.registrationMethod)) continue;
+            try {
+                XposedBridge.hookMethod(delivery.registrationMethod, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        Snapshot s = currentSnapshot();
+                        if (!s.hasLocation()) return;
+                        for (int i = 0; i < param.args.length; i++) {
+                            Object arg = param.args[i];
+                            if (arg != null && delivery.listenerType.isInstance(arg)) {
+                                param.args[i] = wrapSuccessListener(delivery, arg, cl);
                             }
                         }
-                    });
-        });
-        // No onLocationAvailability hook needed here: the class-level
-        // LocationAvailability.isLocationAvailable getter hook reports availability
-        // through the public API for every consumer.
+                    }
+                });
+            } catch (Throwable t) {
+                XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing(
+                        "Task#" + taskClass.getName()));
+            }
+        }
     }
 
     /**
-     * Replace Task&lt;Location&gt; result from fused APIs with a completed Task containing
-     * the fake location, via the public {@code Tasks.forResult} factory. No field-injection
-     * fallback: {@code mResult}/{@code mComplete}/{@code mResultSet} are version-specific
-     * private layouts and are prohibited by the 2026-08-04 design.
+     * Proxy a success listener: the real Task's delivery is swallowed and the fake location
+     * is delivered through the listener's own (name-free) delivery method instead. When the
+     * snapshot carries no location, the real value passes through (passthrough semantics).
      */
-    private static void replaceFusedTask(XC_MethodHook.MethodHookParam param, Snapshot s, ClassLoader cl) {
-        Location fake = createFakeLocation(s);
-        try {
-            Class<?> tasksClass = XposedHelpers.findClass(
-                    "com.google.android.gms.tasks.Tasks", cl);
-            param.setResult(XposedHelpers.callStaticMethod(tasksClass, "forResult", fake));
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Tasks.forResult failed (no field fallback by design): "
-                    + t.getMessage());
+    private static Object wrapSuccessListener(
+            FusedDeliveryPlan.TaskDelivery delivery, Object listener, ClassLoader cl) {
+        return java.lang.reflect.Proxy.newProxyInstance(cl, new Class<?>[]{delivery.listenerType},
+                (proxy, method, args) -> {
+                    if (method.equals(delivery.listenerMethod)) {
+                        Snapshot s = currentSnapshot();
+                        Object value = s.hasLocation()
+                                ? createFakeLocation(s)
+                                : (args != null && args.length > 0 ? args[0] : null);
+                        try {
+                            delivery.listenerMethod.invoke(listener, value);
+                        } catch (Throwable t) {
+                            XposedBridge.log(TAG + ": fused listener delivery failed: " + t);
+                        }
+                        return null;
+                    }
+                    try {
+                        return method.invoke(listener, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getTargetException();
+                    }
+                });
+    }
+
+    /** Hook a concrete LocationCallback subclass's delivery methods (shape-resolved). */
+    private static void hookFusedLocationCallback(Object callback, ClassLoader cl) {
+        Class<?> cbClass = callback.getClass();
+        FusedDeliveryPlan.CallbackDelivery delivery =
+                FusedDeliveryPlan.planCallbackDelivery(cbClass);
+        if (delivery == null) {
+            XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing(
+                    "LocationCallback#" + cbClass.getName()));
+            return;
         }
+
+        // Result delivery: replace the argument wholesale via the (List)->self static
+        // factory capability — private field layouts (mLocations) are prohibited.
+        final Method resultMethod = delivery.resultMethod;
+        if (FUSED_HOOK_REGISTRY.claim(resultMethod)) {
+            tryHook(() -> {
+                final Class<?> lrClass = resultMethod.getParameterTypes()[0];
+                XposedBridge.hookMethod(resultMethod, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        Snapshot s = currentSnapshot();
+                        if (!s.hasLocation()) return;
+                        try {
+                            Method create = FusedDeliveryPlan.resolveStaticListFactory(lrClass);
+                            ArrayList<Location> fakeList = new ArrayList<>();
+                            fakeList.add(createFakeLocation(s));
+                            param.args[0] = create.invoke(null, fakeList);
+                        } catch (Throwable t) {
+                            XposedBridge.log(TAG + ": fused callback result delivery: " + t);
+                        }
+                    }
+                });
+            });
+        }
+
+        // Availability delivery: force the availability object's boolean accessor true.
+        Class<?> availabilityClass = delivery.availabilityMethod.getParameterTypes()[0];
+        try {
+            final Method booleanAccessor = FusedDeliveryPlan.resolveBooleanAccessor(availabilityClass);
+            if (FUSED_HOOK_REGISTRY.claim(booleanAccessor)) {
+                tryHook(() -> XposedBridge.hookMethod(booleanAccessor, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Snapshot s = currentSnapshot();
+                        if (!s.hasLocation()) return;
+                        param.setResult(true);
+                    }
+                }));
+            }
+        } catch (NoSuchMethodException ignored) {}
     }
 
     /**
@@ -1839,21 +1921,19 @@ class HookUtils {
                 }));
     }
 
-    /** Hook concrete GMS LocationListener subclass's onLocationChanged(). Dedup via HOOKED set. */
+    /** Hook a concrete GMS LocationListener impl's delivery method (shape-resolved). */
     private static void hookFusedLocationListener(Object listener, ClassLoader cl) {
-        Class<?> listenerClass = listener.getClass();
-        String key = "fll#" + listenerClass.getName() + "#onLocationChanged";
-        if (!HOOKED.add(key)) return;
+        final Method delivery = FusedDeliveryPlan.planListenerDelivery(listener.getClass());
+        if (delivery == null || !FUSED_HOOK_REGISTRY.claim(delivery)) return;
 
-        tryHook(() -> XposedHelpers.findAndHookMethod(listenerClass,
-                "onLocationChanged", Location.class, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        Snapshot s = currentSnapshot();
-                        if (!s.hasLocation()) return;
-                        param.args[0] = createFakeLocation(s);
-                    }
-                }));
+        tryHook(() -> XposedBridge.hookMethod(delivery, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                Snapshot s = currentSnapshot();
+                if (!s.hasLocation()) return;
+                param.args[0] = createFakeLocation(s);
+            }
+        }));
     }
 
     // ==========================================================================

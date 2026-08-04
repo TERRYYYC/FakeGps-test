@@ -210,9 +210,11 @@ public class MainHookRefreshContractTest {
         assertFalse("internal impl name guessing must be removed", hook.contains("zzbp"));
 
         assertTrue("public factory hook expected", hook.contains("getFusedLocationProviderClient"));
-        assertTrue("Tasks.forResult expected", hook.contains("forResult"));
-        assertTrue("LocationResult.create expected", hook.contains("create"));
-        assertTrue("LocationResult.extractResult expected", hook.contains("extractResult"));
+
+        // Sol R5 #1: the exact Maps APK has NO Tasks/Task descriptors under their public
+        // names — looking the utility class up by name silently returns real-location Tasks.
+        assertFalse("Tasks utility name lookup prohibited (R8-renamed away on exact Maps)",
+                hook.contains("com.google.android.gms.tasks.Tasks"));
     }
 
     private static String classBytecode(String className) throws Exception {
