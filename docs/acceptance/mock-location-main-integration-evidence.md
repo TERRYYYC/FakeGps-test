@@ -19,10 +19,13 @@ created: 2026-08-03
 - Final pre-rebase reviewed head: `a062afc8ad4478d9bac42e96c363b982a22a7218`
 - Latest-master integration base: `6fe6915931408dff6e795c5a433c4538a21a118d`
 - Latest-master production integration commit: `50553535ed0a55084c428c6666fdcb380919b614`
+- Authority exact-value remediation implementation: `8c92f65727568f71f02862b5ab52849c3932c536`
 - Device: moto g54 5G `ZY22JHW9M4`, Android 15
 - Debug main APK: `app/build/outputs/apk/debug/app-debug.apk`
 - Latest-master Debug APK SHA-256 (production integration commit + Android Studio JBR 21.0.10): `723c5099ae8ae5820622ba88df78b9a20c14cf9631c86adf6e01a85049783ff0`
 - Latest-master Release APK SHA-256 sample (same source/JBR, informational): `ca83f406181c271a45b51101c125106bd59858156798b8b53212194522b07244`
+- Authority-remediation Debug APK SHA-256 (implementation commit + Android Studio JBR 21.0.10): `e1e1885ddaa847b6660548f16dfc518d3b8ca3d1a09ce4c1960377046519a636`
+- Authority-remediation Release APK SHA-256 sample (same source/JBR, informational): `9ee0a5a39849979d61b2c743d48d8988495886406329f67d0162da82e84c9445`
 - R4 author dogfood Debug APK SHA-256 (exact implementation, Android Studio JBR 21.0.10): `07b9a7c589149175c04913e595af22316addabfd3d167f384dd8d8979f8c23ef`
 - R4 Release APK SHA-256 samples (same implementation + Android Studio JBR 21.0.10, informational): `ba3a4086337791096bf7bcc64a0289dd6bfdbcf3216d1db725087cd77616f523` / `8e98b5ba2bb77eb31fb8ad97b8bbc31a7b16f4a5e9f9e2a28a0cab156dfdd4d5` / final rerun `4db1c3be082c2a7d2fc152b658923b4f99319cc3a5c8cde4886907fe04e86a46`
 - Historical pre-R4 R3 author Debug APK SHA-256 (Android Studio JBR 21.0.10): `0aa312f2e5fe9b6ce6ef67e17e1e90a6dadd540fcb2ac4ef1cf69d14396f9cbc`
@@ -51,7 +54,7 @@ created: 2026-08-03
 
 ## Exact-code 真机结果
 
-验收从真实 GNSS 且参考 App 独占 mock app-op 开始，只安装 `.bench` debug main APK，并仅重置 `.bench` 的隔离数据。R4 reviewer follow-up 从明确的 `mWakefulness=Dozing` 起点运行同一脚本；最新 master integration 又用 `723c5099…ff0` 完整复跑，覆盖 master 新增的“显式选中档案发布”语义，picker、Kyiv 输出、任务移除、Maps、app-op recovery 与最终 restore 均通过：
+验收从真实 GNSS 且参考 App 独占 mock app-op 开始，只安装 `.bench` debug main APK，并仅重置 `.bench` 的隔离数据。R4 reviewer follow-up 从明确的 `mWakefulness=Dozing` 起点运行同一脚本；latest-master integration 用 `723c5099…ff0` 完整复跑，authority remediation 又用 `e1e1885d…a636` 完整复跑，picker、Kyiv 输出、任务移除、Maps、app-op recovery 与最终 restore 均通过：
 
 ```text
 PROVIDER_REAL owner=GnssService
@@ -88,7 +91,7 @@ R3 first-start 图来自作者用 Android Studio JBR 21.0.10 构建的 debug APK
 
 | Gate | Result |
 |---|---|
-| `./gradlew testDebugUnitTest --rerun-tasks` | latest master integration：418 tests；0 failure/error/skipped（从 XML 重算） |
+| `./gradlew testDebugUnitTest --rerun-tasks` | authority remediation：420 tests；0 failure/error/skipped（从 XML 重算） |
 | `./gradlew assembleDebug assembleRelease lintVitalRelease --rerun-tasks` | BUILD SUCCESSFUL；98 tasks executed |
 | `python3 scripts/test_mock_provider_main_integration.py` | 8/8 pass；结构锁定 main manifest 权限、解释性 lint suppression、picker 前置门禁与 picker 自身 wake/unlock 前置条件 |
 | `bash -n scripts/mock_provider_acceptance.sh` | pass |
@@ -128,12 +131,14 @@ Dogfood 当轮发现并修复：
 9. R2 首次未授权被误报为残留且 marker 永久保留 → recovery 拆成 start/cleanup 两条边，失败状态显式携带 cleanup ownership；harness 新增首次指引与进程重启清洁阶段。
 10. co-creator 按首次指引手动进入系统选择器，却找不到千网游 → main manifest 补齐 `ACCESS_MOCK_LOCATION`；harness 在任何 shell app-op 旁路前验证 installed permission 与真实 picker 候选，堵住“开发者路径替代用户路径”的同类假绿。
 11. R4 reviewer 从息屏设备运行 picker 门禁，因 wake/unlock 只存在于稍后的 `open_settings()` 而无法打开系统页 → 抽取单一 `wake_and_unlock_device` seam，由 picker 与设置页共用；结构契约锁定 picker 在启动 Settings 前调用它。
-12. merge 前 master 新增“保存哪条档案就发布哪条”语义，与本分支 schema v4/delivery mode 在同一 writer 相交 → rebase 后保留显式/active profile 路由、last-good 与原子 pointer commit，同时继续发布 schema v4 的 `locationDeliveryMode`；418 JVM 与真机 Kyiv 链共同验证。master 新 authority 测试直接初始化 Android `Uri` 导致 local JVM stub 崩溃，改为读取 class bytecode，既不初始化 Android 类又锁住 `ProviderAuthority` 实际接线。
+12. merge 前 master 新增“保存哪条档案就发布哪条”语义，与本分支 schema v4/delivery mode 在同一 writer 相交 → rebase 后保留显式/active profile 路由、last-good 与原子 pointer commit，同时继续发布 schema v4 的 `locationDeliveryMode`；真机 Kyiv 链共同验证。master 新 authority 测试直接初始化 Android `Uri` 导致 local JVM stub 崩溃，因此把精确 authority 值移到纯 JVM contract，并以普通值断言 + provider/publisher bytecode wiring 两层守护。
+13. rebase continuity review 发现 bytecode 只验“符号存在”，`AUTHORITY = helper(...) + ".x"` 仍让 418 tests 假绿 → 恢复精确值断言并让 provider 与 `ConfigPrefsSync` 共用 `ProviderAuthority.AUTHORITY`；最终 MA3 真实断言失败、420/420 与真机链通过。
 
 ## Fable review findings 处置
 
 | Finding | 处置 |
 |---|---|
+| rebase 后 authority 值契约被弱化，MA3 存活 | `ProviderAuthority.AUTHORITY` 成为 provider/publisher 单一纯 JVM 值；恢复 manifest 模板精确断言并保留两端 production wiring tests。RED 为 `ComparisonFailure`，最终 MA3 KILLED；420/420、两种 APK、release vital lint 与真机链通过。 |
 | merge 前 master 前进并与配置发布/authority 相交 | rebase 到 `6fe6915`；保留 selected-profile publication 与 schema v4/delivery mode 两套契约；authority 统一由 `ProviderAuthority` 构造。targeted tests 先暴露 Android stub 测试坐标错误，再改为 JVM-safe bytecode wiring contract；全门禁与真机复跑通过。 |
 | R4 P2 picker 门禁不唤醒息屏设备 | 共用 `wake_and_unlock_device` seam；RED 因 helper 缺失失败，GREEN 8/8；从 Dozing 起点重跑真实 picker/链路。 |
 | R4 P3 implementation SHA 不存在 | evidence 与 R4 packet 统一更正为真实 commit `fdcc55a7326820f139b3955dc9b56c412ef22656`，并用 `git cat-file -e` 验证对象存在。 |

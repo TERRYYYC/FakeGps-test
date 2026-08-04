@@ -14,6 +14,7 @@ Previously approved head: `a062afc8ad4478d9bac42e96c363b982a22a7218`
 Latest master base: `6fe6915931408dff6e795c5a433c4538a21a118d`
 Production integration commit: `50553535ed0a55084c428c6666fdcb380919b614`
 Code/evidence head before this packet: `8be0855c26934813db224555f0c5b9a6fd53f545`
+Authority exact-value remediation implementation: `8c92f65727568f71f02862b5ab52849c3932c536`
 
 ## Original Requirements
 
@@ -81,12 +82,25 @@ Pattern：并行 PR 在同一 transport seam 落地，机械选 ours/theirs 会�
 
 请从 PR #10 的 exact remote HEAD 建全新 detached sandbox，重点复核上述两个交叉 seam，并返回覆盖 exact SHA 的 `APPROVE` 或 `REQUEST CHANGES`。若放行，下一步由 author 重新递 merge Decision Packet 给 co-creator；reviewer 不 commit、不 push、不 merge。
 
+## Continuity Finding Remediation
+
+Fable5 在 rebase review 构造 `AUTHORITY = ProviderAuthority.forApplicationId(...) + ".x"`，证明第一次 bytecode-only 修复弱化了 master 的精确值契约：418 tests 全绿。作者独立重放确认该变异存活后，做了同类审计并修复：
+
+- 精确当前 variant 值移到纯 JVM `ProviderAuthority.AUTHORITY`；manifest 模板值可用普通 `assertEquals` 验证，不初始化 Android `Uri`。
+- `AppInfoProvider` 的 URI/`UriMatcher` 与 `ConfigPrefsSync` 的两个 publisher URI 共用该值，分别保留 bytecode wiring 守卫。
+- RED：暂时附加 `.x`，定向测试编译成功并以 `ComparisonFailure` 失败。
+- GREEN：420/420；Debug/Release/`lintVitalRelease` 成功；结构 8/8、`bash -n`、`diff --check` 通过。
+- MA3 final-shape replay：重新附加 `.x`，4 tests / 1 failed，真实精确值断言失败。
+- moto g54：用 remediation debug APK 跑完整 picker → Kyiv → task removal → Maps → app-op recovery → GNSS/reference restore，exit 0。
+
+请 reviewer 只复核这一处 exact-value contract 与 MA3；之前已放行的连续性范围无生产 delta，不要求重跑完整 review。
+
 ## Self-check Evidence
 
 ```text
-JBR 21 full gate: BUILD SUCCESSFUL; 418 tests; 0 failure/error/skipped
-Debug APK: 723c5099ae8ae5820622ba88df78b9a20c14cf9631c86adf6e01a85049783ff0
-Release APK sample: ca83f406181c271a45b51101c125106bd59858156798b8b53212194522b07244
+JBR 21 full gate: BUILD SUCCESSFUL; 420 tests; 0 failure/error/skipped
+Debug APK: e1e1885ddaa847b6660548f16dfc518d3b8ca3d1a09ce4c1960377046519a636
+Release APK sample: 9ee0a5a39849979d61b2c743d48d8988495886406329f67d0162da82e84c9445
 Structural contracts: 8/8
 bash -n / git diff --check: pass
 moto g54: picker → first-start → restart-clean → selected Kyiv → task removal → Maps → app-op recovery → GNSS/reference restore; exit 0
