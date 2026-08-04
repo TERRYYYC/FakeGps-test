@@ -184,9 +184,14 @@ class MockProviderMainIntegrationContractTest(unittest.TestCase):
     def test_gateway_replaces_every_framework_source_that_can_feed_fused_location(self) -> None:
         gateway = (ROOT / "app/src/main/java/name/caiyao/fakegps/mockprovider/AndroidMockProviderGateway.kt").read_text()
 
-        self.assertIn("LocationManager.GPS_PROVIDER", gateway)
-        self.assertIn("LocationManager.NETWORK_PROVIDER", gateway)
-        self.assertIn("ACTIVE_PROVIDER_NAMES", gateway)
+        active = re.search(
+            r"ACTIVE_PROVIDER_NAMES\s*=\s*listOf\((?P<body>.*?)\)",
+            gateway,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(active)
+        self.assertIn("LocationManager.GPS_PROVIDER", active.group("body"))
+        self.assertIn("LocationManager.NETWORK_PROVIDER", active.group("body"))
 
     def test_acceptance_observes_fused_stability_over_time_and_restores_network(self) -> None:
         harness = (ROOT / "scripts/mock_provider_acceptance.sh").read_text()
