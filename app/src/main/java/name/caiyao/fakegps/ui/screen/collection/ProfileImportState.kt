@@ -51,6 +51,21 @@ sealed interface ProfileImportUiState {
     ) : ProfileImportUiState
 }
 
+sealed interface ProfileTemplateSaveState {
+    data object Idle : ProfileTemplateSaveState
+    data object Saving : ProfileTemplateSaveState
+    data object Success : ProfileTemplateSaveState
+    data class Failure(val message: String) : ProfileTemplateSaveState
+}
+
+object ProfileTemplateSaveReducer {
+    fun canStart(current: ProfileTemplateSaveState): Boolean =
+        current is ProfileTemplateSaveState.Idle
+
+    fun dismiss(current: ProfileTemplateSaveState): ProfileTemplateSaveState =
+        if (current is ProfileTemplateSaveState.Saving) current else ProfileTemplateSaveState.Idle
+}
+
 object ProfileImportReducer {
     data class BeginImport(
         val state: ProfileImportUiState.Importing,

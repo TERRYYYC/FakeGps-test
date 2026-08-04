@@ -7,12 +7,39 @@ import name.caiyao.fakegps.data.importer.ProfileImportIssue
 import name.caiyao.fakegps.data.repository.ProfileRepository
 import name.caiyao.fakegps.ui.screen.collection.ProfileImportReducer
 import name.caiyao.fakegps.ui.screen.collection.ProfileImportUiState
+import name.caiyao.fakegps.ui.screen.collection.ProfileTemplateSaveReducer
+import name.caiyao.fakegps.ui.screen.collection.ProfileTemplateSaveState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProfileImportStateTest {
+    @Test
+    fun `template save may start only from idle`() {
+        assertTrue(ProfileTemplateSaveReducer.canStart(ProfileTemplateSaveState.Idle))
+        assertFalse(ProfileTemplateSaveReducer.canStart(ProfileTemplateSaveState.Saving))
+        assertFalse(ProfileTemplateSaveReducer.canStart(ProfileTemplateSaveState.Success))
+        assertFalse(ProfileTemplateSaveReducer.canStart(ProfileTemplateSaveState.Failure("disk full")))
+    }
+
+    @Test
+    fun `template result dismiss keeps in-flight save and clears terminal states`() {
+        assertEquals(
+            ProfileTemplateSaveState.Saving,
+            ProfileTemplateSaveReducer.dismiss(ProfileTemplateSaveState.Saving),
+        )
+        assertEquals(
+            ProfileTemplateSaveState.Idle,
+            ProfileTemplateSaveReducer.dismiss(ProfileTemplateSaveState.Success),
+        )
+        assertEquals(
+            ProfileTemplateSaveState.Idle,
+            ProfileTemplateSaveReducer.dismiss(ProfileTemplateSaveState.Failure("disk full")),
+        )
+    }
+
     @Test
     fun `stale parse completion cannot replace a newer file session`() {
         val first = ProfileImportReducer.start(1, "a.csv")

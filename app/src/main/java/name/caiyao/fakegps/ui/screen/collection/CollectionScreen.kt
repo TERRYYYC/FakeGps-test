@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.AlertDialog
@@ -30,10 +31,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import name.caiyao.fakegps.data.db.ProfileSummary
+import name.caiyao.fakegps.data.importer.ProfileImportTemplate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,13 +60,35 @@ fun CollectionScreen(
     val profiles by vm.profiles.collectAsState()
     val effectiveId by vm.effectiveProfileId.collectAsState()
     val importState by vm.importState.collectAsState()
+    val templateSaveState by vm.templateSaveState.collectAsState()
     var showClearDialog by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<ProfileSummary?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(vm::previewImport)
     }
+    val templateLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ProfileImportTemplate.MIME_TYPE),
+    ) { uri ->
+        uri?.let(vm::saveImportTemplate)
+    }
+
+    LaunchedEffect(templateSaveState) {
+        val message = when (val state = templateSaveState) {
+            ProfileTemplateSaveState.Idle,
+            ProfileTemplateSaveState.Saving,
+            -> null
+            ProfileTemplateSaveState.Success -> "导入模板已保存"
+            is ProfileTemplateSaveState.Failure -> "模板保存失败：${state.message}"
+        }
+        if (message != null) {
+            snackbarHostState.showSnackbar(message)
+            vm.dismissTemplateSaveResult()
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("收藏档案 (${profiles.size})") },
@@ -73,6 +100,12 @@ fun CollectionScreen(
                 actions = {
                     val importBusy = importState is ProfileImportUiState.Parsing ||
                         importState is ProfileImportUiState.Importing
+                    IconButton(
+                        enabled = ProfileTemplateSaveReducer.canStart(templateSaveState),
+                        onClick = { templateLauncher.launch(ProfileImportTemplate.DEFAULT_FILE_NAME) },
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = "下载导入模板")
+                    }
                     IconButton(
                         enabled = !importBusy,
                         onClick = {
