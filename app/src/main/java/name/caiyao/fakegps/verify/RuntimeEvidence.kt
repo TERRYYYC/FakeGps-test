@@ -68,4 +68,18 @@ object RuntimeEvidence {
     @JvmStatic
     fun fusedSurfaceMissing(method: String): String =
         "$HOOK_PREFIX event=fused_surface_missing method=$method"
+
+    /**
+     * Task delivery planning outcome for one runtime task class — emitted even when the
+     * count is zero, so "client surface hooked but no delivery" can never masquerade as
+     * success (Sol R7 #2).
+     */
+    @JvmStatic
+    fun fusedDeliveryPlanned(taskClass: String, registrations: Int): String =
+        "$HOOK_PREFIX event=fused_delivery_planned task=$taskClass registrations=$registrations"
+
+    /** First time a fused-returned Task's success listener is actually wrapped. */
+    @JvmStatic
+    fun fusedListenerWrapped(taskClass: String): String =
+        "$HOOK_PREFIX event=fused_listener_wrapped task=$taskClass"
 }

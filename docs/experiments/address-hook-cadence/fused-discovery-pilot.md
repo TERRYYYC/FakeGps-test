@@ -174,3 +174,70 @@ success listener planned, complete/continuation/non-void excluded, public
 claim-release-retry, task-tracker identity gating. R8 release clean.
 
 [墨墨/kimi-k3🐾]
+
+---
+
+# R7 Follow-up: Install Transaction, True Identity, Delivery Evidence
+
+Sol's R7 (exact HEAD `a66db30`) held the line on three structural points, all
+fixed red-first:
+
+**R7 #1 — the claim/try/release template leaked twice → unified primitive.**
+Every Method installation now goes through
+`FusedHookRegistry.claimAndInstall(Method, Installer)`: claim, install, keep
+on success, release on failure. No site may open-code the transaction;
+`fused_surface_hooked` evidence is emitted only when an install actually
+happened (zero-install can no longer masquerade as success).
+
+**R7 #2 — delivery-level evidence.**
+New events close the "client hooked but delivery inert" gap:
+`fused_delivery_planned task=<class> registrations=<n>` (emitted even at 0)
+and `fused_listener_wrapped task=<class>` (first actual wrap).
+
+**R7 #3 — true weak identity.**
+`FusedTaskTracker` now keys on `IdentityWeakRef` (referent identity, hash
+captured at insert, reference-queue expunge). Red tests: two equals-equal
+non-identical objects do not share tracking; mutable-hashCode referents stay
+findable.
+
+## Device verification (bench identity, Maps 26.31, HEAD pre-doc)
+
+```
+fused_factory_armed overloads=2
+fused_client_discovered class=bkmc loader=88047766
+fused_surface_hooked surface=CURRENT_LOCATION_TASK owner=bkmc  (×3)
+fused_surface_hooked surface=LAST_LOCATION_TASK owner=bkmc     (×2)
+fused_surface_hooked surface=LISTENER_REGISTRATION owner=bkmc  (×6)
+fused_delivery_planned task=bkww registrations=3     <-- R6#1 fix proven on the real runtime Task
+```
+
+- The planner found **3 success-listener registrations on the real runtime
+  Task class `bkww`** (concrete — the declared return type `bkwo` is abstract).
+  Erasure-correct planning works in production.
+- Blue dot follows the bench config (Lviv) again on the R7 build.
+- DIAG caller attribution (debug build) shows the fused listener surfaces
+  delivering: `LSPHooker_.requestLocationUpdates <- bkwr.p` and
+  `LSPHooker_.onLocationChanged <- bkgg.a`.
+- **Interval matrix with durable provenance**: raw probe JSON committed at
+  `raw/bench-30s.json` (mean 0.216s, 6 samples) and `raw/bench-60s.json`
+  (mean 0.222s, 6 samples), two processes each.
+
+## Honest coverage boundaries (README narrowed accordingly)
+
+- `fused_listener_wrapped` did NOT fire in this session: Maps' observed
+  location flow consumes listener registrations, not Task success listeners.
+  The Task wrap path is armed, planner-verified against the real runtime
+  class (3 registrations), and unit-tested — but no live consumer has been
+  observed yet.
+- LocationCallback and PendingIntent (`b(Intent)` extractResult capability):
+  implemented and installed where present; no live consumer on Maps. README
+  no longer claims them as covered surfaces.
+
+## Incident note (process lesson)
+
+While restoring scope, a mis-tap flipped the official module's master switch
+OFF for ~40 seconds; it was immediately re-enabled and verified. Root cause:
+blind tap choreography on a fatigued UI path. Mitigation: screenshot-verify
+every mutating tap (adopted for the remainder of the session).
+
+[墨墨/kimi-k3🐾]

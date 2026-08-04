@@ -6,16 +6,18 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Per-Method hook dedup (Sol R5 finding #3).
+ * Per-Method hook dedup (Sol R5 #3) with a unified install transaction (Sol R7 #1).
  *
- * The previous per-class set had two holes: two runtime subclasses inheriting the SAME
- * implementation {@link Method} would each install a hook on it (double delivery), and a
- * class whose installation partially failed was already marked done and never retried.
- * Claiming by {@link Method} identity fixes both: {@link Method#equals} keys on declaring
- * class + signature, so an inherited method resolved through any subclass claims once, and
- * a method that failed to install is simply never claimed, leaving the retry path open.
+ * The repeated claim/try/release template leaked sites twice in review — installation is
+ * therefore a single primitive: {@link #claimAndInstall} claims, runs the installer, keeps
+ * the claim on success, and releases on failure so the next discovery retries.
  */
 final class FusedHookRegistry {
+
+    /** Runs the actual hook installation; any throwable marks the install as failed. */
+    interface Installer {
+        void install(Method method);
+    }
 
     private final Set<Method> claimed = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
@@ -30,5 +32,25 @@ final class FusedHookRegistry {
      */
     void release(Method method) {
         claimed.remove(method);
+    }
+
+    /**
+     * The ONLY way production code installs a hooked Method: claim, install, keep on
+     * success, release on failure (Sol R7 #1 — no site may open-code the template).
+     *
+     * @return true when the method is now hooked (or already was); false when the
+     *         installer failed and the claim was released for a later retry.
+     */
+    boolean claimAndInstall(Method method, Installer installer) {
+        if (!claim(method)) {
+            return true; // already hooked by an earlier discovery
+        }
+        try {
+            installer.install(method);
+            return true;
+        } catch (Throwable t) {
+            release(method);
+            return false;
+        }
     }
 }
