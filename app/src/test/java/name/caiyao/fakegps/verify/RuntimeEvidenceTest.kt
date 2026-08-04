@@ -83,8 +83,12 @@ class RuntimeEvidenceTest {
             RuntimeEvidence.fusedSurfaceMissing("getLastLocation"),
         )
         assertEquals(
-            "FakeGPS-Hook: event=fused_delivery_planned task=bkwo registrations=2",
-            RuntimeEvidence.fusedDeliveryPlanned("bkwo", 2),
+            "FakeGPS-Hook: event=fused_delivery_summary task=bkww planned=3 installed=3 already=0 failed=0",
+            RuntimeEvidence.fusedDeliverySummary("bkww", 3, 3, 0, 0, null),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_delivery_summary task=bkww planned=3 installed=1 already=1 failed=1 reason=IllegalStateException",
+            RuntimeEvidence.fusedDeliverySummary("bkww", 3, 1, 1, 1, "IllegalStateException"),
         )
         assertEquals(
             "FakeGPS-Hook: event=fused_listener_wrapped task=bkwo",

@@ -6,6 +6,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.Test;
 
@@ -142,22 +143,30 @@ public class FusedDeliveryPlanTest {
 
     // --- Method-identity dedup (Sol R5 #3) ----------------------------------
 
-    /** Two subclasses inheriting the SAME implementation Method claim it only once. */
+    /** Two subclasses inheriting the SAME implementation Method install it only once. */
     @Test
     public void sharedInheritedMethodIsClaimedOnce() throws Exception {
         FusedHookRegistry registry = new FusedHookRegistry();
+        AtomicInteger installs = new AtomicInteger();
         Method viaBase = BaseCallback.class.getMethod("d", RenamedLocationResult.class);
         Method viaSubclass = AppCallback.class.getMethod("d", RenamedLocationResult.class);
-        assertTrue(registry.claim(viaBase));
-        assertFalse("inherited Method resolved via a second class must dedup by identity",
-                registry.claim(viaSubclass));
+        assertEquals(FusedHookRegistry.InstallResult.INSTALLED,
+                registry.claimAndInstall(viaBase, m -> installs.incrementAndGet()));
+        assertEquals("inherited Method resolved via a second class must dedup by identity",
+                FusedHookRegistry.InstallResult.ALREADY_INSTALLED,
+                registry.claimAndInstall(viaSubclass, m -> installs.incrementAndGet()));
+        assertEquals(1, installs.get());
     }
 
-    /** Distinct methods on the same class are independent claims. */
+    /** Distinct methods on the same class are independent installs. */
     @Test
     public void distinctMethodsOnSameClassClaimIndependently() throws Exception {
         FusedHookRegistry registry = new FusedHookRegistry();
-        assertTrue(registry.claim(BaseCallback.class.getMethod("d", RenamedLocationResult.class)));
-        assertTrue(registry.claim(BaseCallback.class.getMethod("e", RenamedAvailability.class)));
+        assertEquals(FusedHookRegistry.InstallResult.INSTALLED,
+                registry.claimAndInstall(
+                        BaseCallback.class.getMethod("d", RenamedLocationResult.class), m -> {}));
+        assertEquals(FusedHookRegistry.InstallResult.INSTALLED,
+                registry.claimAndInstall(
+                        BaseCallback.class.getMethod("e", RenamedAvailability.class), m -> {}));
     }
 }

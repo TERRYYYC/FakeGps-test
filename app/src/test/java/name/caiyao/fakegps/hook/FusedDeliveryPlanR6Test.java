@@ -141,17 +141,20 @@ public class FusedDeliveryPlanR6Test {
 
     // --- Registry release on failure (R6 #3) ---------------------------------
 
-    /** claim -> install failure -> release -> the next discovery may claim again. */
+    /** claim -> install failure -> the next discovery may claim again (R8: covered in
+     *  depth by FusedInstallTransactionTest's terminal-state semantics). */
     @Test
     public void failedInstallReleasesClaimForRetry() throws Exception {
         FusedHookRegistry registry = new FusedHookRegistry();
         Method m = FusedDeliveryPlanTest.BaseCallback.class.getMethod(
                 "d", FusedDeliveryPlanTest.RenamedLocationResult.class);
-        assertTrue(registry.claim(m));
-        // simulated hookMethod failure:
-        registry.release(m);
-        assertTrue("failed install must leave the method claimable for retry",
-                registry.claim(m));
+        assertEquals(FusedHookRegistry.InstallResult.FAILED,
+                registry.claimAndInstall(m, method -> {
+                    throw new IllegalStateException("simulated hookMethod failure");
+                }));
+        assertEquals("failed install must leave the method claimable for retry",
+                FusedHookRegistry.InstallResult.INSTALLED,
+                registry.claimAndInstall(m, method -> {}));
     }
 
     // --- Fused Task identity gate (R6 #1) -------------------------------------

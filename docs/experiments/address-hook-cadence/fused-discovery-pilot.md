@@ -241,3 +241,43 @@ blind tap choreography on a fatigued UI path. Mitigation: screenshot-verify
 every mutating tap (adopted for the remainder of the session).
 
 [墨墨/kimi-k3🐾]
+
+---
+
+# R8 Follow-up: Terminal-State Install Transactions
+
+Sol's R8 (exact HEAD `b64bed9`) found the transaction model itself was still
+optimistic. All three findings fixed red-first:
+
+**R8 #1 — "installing" must never read as "installed".**
+`FusedHookRegistry` is now backed by a per-Method `CompletableFuture`: the
+first caller installs and completes the future; concurrent callers BLOCK on
+it (no fake success, no real-location window), report `ALREADY_INSTALLED` on
+peer success, and retry as the new installer after a peer failure. Red tests
+pin both interleavings with latches.
+
+**R8 #2 — delivery evidence reports terminal counts, not plan counts.**
+`fused_delivery_summary task=<class> planned=N installed=I already=A failed=F
+[reason=…]` replaces the plan-count event; while any install is failing, the
+task class stays eligible for re-planning and re-reporting. Failure reasons
+are retained (bounded simple names).
+
+**R8 #3 — tri-state everywhere; completed classes stop re-planning.**
+`INSTALLED / ALREADY_INSTALLED / FAILED` — only `INSTALLED` emits
+`surface_hooked`. Runtime classes whose plan fully installed are recorded in
+`FUSED_COMPLETED_CLASSES` and never re-planned.
+
+## Device verification (bench identity, Maps 26.31)
+
+```
+fused_delivery_summary task=bkww planned=3 installed=3 already=0 failed=0
+```
+
+Planner count and terminal install count agree on the real runtime Task
+class; the 11 surface hooks fired exactly once each (no re-discovery spam).
+Official/bench scopes restored after; runtime load lines confirm only the
+official module in Maps at the end.
+
+483 unit tests, 0 failures; R8 release clean.
+
+[墨墨/kimi-k3🐾]

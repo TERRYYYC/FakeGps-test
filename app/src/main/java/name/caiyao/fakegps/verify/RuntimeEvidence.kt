@@ -70,13 +70,22 @@ object RuntimeEvidence {
         "$HOOK_PREFIX event=fused_surface_missing method=$method"
 
     /**
-     * Task delivery planning outcome for one runtime task class — emitted even when the
-     * count is zero, so "client surface hooked but no delivery" can never masquerade as
-     * success (Sol R7 #2).
+     * Task delivery install outcome for one runtime task class — planned vs actually
+     * installed vs already-present vs failed, with a bounded failure reason when any
+     * install failed (Sol R8 #2: "planner found N" must never masquerade as "N installed").
      */
     @JvmStatic
-    fun fusedDeliveryPlanned(taskClass: String, registrations: Int): String =
-        "$HOOK_PREFIX event=fused_delivery_planned task=$taskClass registrations=$registrations"
+    fun fusedDeliverySummary(
+        taskClass: String,
+        planned: Int,
+        installed: Int,
+        already: Int,
+        failed: Int,
+        reason: String?,
+    ): String =
+        "$HOOK_PREFIX event=fused_delivery_summary task=$taskClass planned=$planned" +
+            " installed=$installed already=$already failed=$failed" +
+            (if (reason != null) " reason=$reason" else "")
 
     /** First time a fused-returned Task's success listener is actually wrapped. */
     @JvmStatic

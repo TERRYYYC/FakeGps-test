@@ -1699,12 +1699,13 @@ class HookUtils {
     }
 
     /**
-     * Plan and install exact-Method hooks for one runtime class. Re-discovery re-plans
-     * (cheap, bounded) and the per-Method registry skips whatever is already installed —
-     * so a partially failed first attempt self-heals on the next factory call (Sol R5 #3).
+     * Plan and install exact-Method hooks for one runtime class. A class whose plan fully
+     * installed is marked complete and never re-planned (Sol R8 #3); a class with any
+     * failed install stays eligible so the next factory call retries it.
      */
     private static void installFusedClientHooksOnClass(
             Class<?> contract, Class<?> runtime, ClassLoader cl) {
+        if (FUSED_COMPLETED_CLASSES.contains(runtime)) return;
         if (FUSED_DISCOVERY_LOGGED.add(runtime)) {
             XposedBridge.log(RuntimeEvidence.fusedClientDiscovered(
                     runtime.getName(), System.identityHashCode(cl)));
@@ -1715,14 +1716,29 @@ class HookUtils {
             XposedBridge.log(RuntimeEvidence.fusedClientRejected("NO_RESOLVABLE_SURFACES"));
             return;
         }
+        boolean allInstalled = true;
         for (FusedClientMethodPlan.Entry entry : plan) {
-            installFusedSurfaceHook(entry, cl);
+            allInstalled &= installFusedSurfaceHook(entry, cl);
+        }
+        if (allInstalled) {
+            FUSED_COMPLETED_CLASSES.add(runtime);
         }
     }
 
-    private static void installFusedSurfaceHook(
+    /** Runtime classes whose surface plan fully installed — never re-planned. */
+    private static final Set<Class<?>> FUSED_COMPLETED_CLASSES =
+            Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+    /**
+     * Install one surface hook via the terminal-state transaction.
+     *
+     * @return true when the surface is hooked (fresh or already); false on failure.
+     *         Success evidence fires ONLY on a fresh install (Sol R8 #3 — a re-discovery
+     *         must never be logged as a new install).
+     */
+    private static boolean installFusedSurfaceHook(
             FusedClientMethodPlan.Entry entry, ClassLoader cl) {
-        final boolean installed;
+        final FusedHookRegistry.InstallResult result;
         switch (entry.surface) {
             case LAST_LOCATION_TASK:
             case CURRENT_LOCATION_TASK:
@@ -1730,7 +1746,7 @@ class HookUtils {
                 // exact Maps) — delivery hooks must be planned from the ACTUAL returned
                 // object's runtime class, and wrapping is gated to the exact instances
                 // this API handed out (FusedTaskTracker), not every GMS task.
-                installed = FUSED_HOOK_REGISTRY.claimAndInstall(entry.implementation,
+                result = FUSED_HOOK_REGISTRY.claimAndInstall(entry.implementation,
                         method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
@@ -1742,7 +1758,7 @@ class HookUtils {
                         }));
                 break;
             case CALLBACK_REGISTRATION:
-                installed = FUSED_HOOK_REGISTRY.claimAndInstall(entry.implementation,
+                result = FUSED_HOOK_REGISTRY.claimAndInstall(entry.implementation,
                         method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam param) {
@@ -1756,7 +1772,7 @@ class HookUtils {
                         }));
                 break;
             case LISTENER_REGISTRATION:
-                installed = FUSED_HOOK_REGISTRY.claimAndInstall(entry.implementation,
+                result = FUSED_HOOK_REGISTRY.claimAndInstall(entry.implementation,
                         method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam param) {
@@ -1770,19 +1786,24 @@ class HookUtils {
                         }));
                 break;
             default:
-                return;
+                return true;
         }
-        // Sol R7 #2: success evidence only when an install actually happened.
-        if (installed) {
-            XposedBridge.log(RuntimeEvidence.fusedSurfaceHooked(
-                    entry.surface.name(), entry.implementation.getDeclaringClass().getName()));
-        } else {
-            XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing(entry.contract.getName()));
+        switch (result) {
+            case INSTALLED:
+                XposedBridge.log(RuntimeEvidence.fusedSurfaceHooked(
+                        entry.surface.name(),
+                        entry.implementation.getDeclaringClass().getName()));
+                return true;
+            case ALREADY_INSTALLED:
+                return true;
+            default:
+                XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing(entry.contract.getName()));
+                return false;
         }
     }
 
     private static final FusedTaskTracker FUSED_TASK_TRACKER = new FusedTaskTracker();
-    /** Runtime task classes whose delivery-planning outcome was already reported. */
+    /** Runtime task classes whose delivery outcome was already fully reported. */
     private static final Set<Class<?>> FUSED_DELIVERY_EVIDENCED =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
     /** Runtime task classes with at least one actually-wrapped success listener. */
@@ -1792,36 +1813,56 @@ class HookUtils {
     /**
      * Wrap success-listener registrations on a runtime Task class, but only for instances
      * handed out by hooked fused APIs (identity gate — the runtime Task class is shared by
-     * every GMS call in the process). The planning outcome is reported even at zero, so a
-     * hooked-but-undelivered surface can never masquerade as success (Sol R7 #2).
+     * every GMS call in the process). Reports the terminal install summary per entry —
+     * "planner found N" can never masquerade as "N installed" (Sol R8 #2); while any
+     * install is failing, the class stays eligible for re-planning and re-reporting.
      */
     private static void installTaskDeliveryHooks(Class<?> taskClass, ClassLoader cl) {
+        if (FUSED_DELIVERY_EVIDENCED.contains(taskClass)) return;
         java.util.List<FusedDeliveryPlan.TaskDelivery> plan =
                 FusedDeliveryPlan.planTaskDelivery(taskClass);
-        if (FUSED_DELIVERY_EVIDENCED.add(taskClass)) {
-            XposedBridge.log(RuntimeEvidence.fusedDeliveryPlanned(
-                    taskClass.getName(), plan.size()));
-        }
+        int installed = 0;
+        int already = 0;
+        int failed = 0;
+        String reason = null;
         for (FusedDeliveryPlan.TaskDelivery delivery : plan) {
-            FUSED_HOOK_REGISTRY.claimAndInstall(delivery.registrationMethod,
-                    method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            Snapshot s = currentSnapshot();
-                            if (!s.hasLocation()) return;
-                            if (!FUSED_TASK_TRACKER.isTracked(param.thisObject)) return;
-                            for (int i = 0; i < param.args.length; i++) {
-                                Object arg = param.args[i];
-                                if (arg != null && delivery.listenerType.isInstance(arg)) {
-                                    param.args[i] = wrapSuccessListener(delivery, arg, cl);
-                                    if (FUSED_WRAP_EVIDENCED.add(taskClass)) {
-                                        XposedBridge.log(RuntimeEvidence.fusedListenerWrapped(
-                                                taskClass.getName()));
+            FusedHookRegistry.InstallResult result =
+                    FUSED_HOOK_REGISTRY.claimAndInstall(delivery.registrationMethod,
+                            method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
+                                @Override
+                                protected void beforeHookedMethod(MethodHookParam param) {
+                                    Snapshot s = currentSnapshot();
+                                    if (!s.hasLocation()) return;
+                                    if (!FUSED_TASK_TRACKER.isTracked(param.thisObject)) return;
+                                    for (int i = 0; i < param.args.length; i++) {
+                                        Object arg = param.args[i];
+                                        if (arg != null && delivery.listenerType.isInstance(arg)) {
+                                            param.args[i] = wrapSuccessListener(delivery, arg, cl);
+                                            if (FUSED_WRAP_EVIDENCED.add(taskClass)) {
+                                                XposedBridge.log(
+                                                        RuntimeEvidence.fusedListenerWrapped(
+                                                                taskClass.getName()));
+                                            }
+                                        }
                                     }
                                 }
-                            }
-                        }
-                    }));
+                            }));
+            switch (result) {
+                case INSTALLED:
+                    installed++;
+                    break;
+                case ALREADY_INSTALLED:
+                    already++;
+                    break;
+                default:
+                    failed++;
+                    reason = FUSED_HOOK_REGISTRY.lastFailure(delivery.registrationMethod);
+            }
+        }
+        XposedBridge.log(RuntimeEvidence.fusedDeliverySummary(
+                taskClass.getName(), plan.size(), installed, already, failed, reason));
+        if (failed == 0) {
+            FUSED_DELIVERY_EVIDENCED.add(taskClass);
         }
     }
 

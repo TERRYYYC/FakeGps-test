@@ -1,56 +1,90 @@
 package name.caiyao.fakegps.hook;
 
 import java.lang.reflect.Method;
-import java.util.Collections;
-import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 
 /**
- * Per-Method hook dedup (Sol R5 #3) with a unified install transaction (Sol R7 #1).
+ * Per-Method hook install transaction (Sol R5 #3, R6 #3, R7 #1, R8 #1).
  *
- * The repeated claim/try/release template leaked sites twice in review — installation is
- * therefore a single primitive: {@link #claimAndInstall} claims, runs the installer, keeps
- * the claim on success, and releases on failure so the next discovery retries.
+ * Every Method installation goes through {@link #claimAndInstall} — a terminal-state
+ * transaction backed by a per-Method {@link CompletableFuture}:
+ *
+ * <ul>
+ *   <li>The FIRST caller becomes the installer: install, complete the future, report
+ *       {@link InstallResult#INSTALLED}; on failure remove the entry, complete the future
+ *       exceptionally, and report {@link InstallResult#FAILED}.</li>
+ *   <li>CONCURRENT callers block on the future — they never mistake an in-flight install
+ *       for an installed method (R8 #1: that window leaked both fake-success evidence and
+ *       one real-location call). When the peer succeeded they report
+ *       {@link InstallResult#ALREADY_INSTALLED}; when it failed they loop and retry as the
+ *       new installer.</li>
+ *   <li>Failure reasons are retained (bounded) for delivery evidence (R8 #2).</li>
+ * </ul>
+ *
+ * Deadlock note: an installer must never synchronously re-enter {@code claimAndInstall}
+ * for the SAME method on the same thread. Production paths only ever install other
+ * methods from inside a hook callback.
  */
 final class FusedHookRegistry {
+
+    /** Terminal outcome of an install transaction. */
+    enum InstallResult {
+        /** This call installed the hook. */
+        INSTALLED,
+        /** The hook was already installed (by this or a concurrent caller). */
+        ALREADY_INSTALLED,
+        /** The install failed; the method is free for a later retry. */
+        FAILED,
+    }
 
     /** Runs the actual hook installation; any throwable marks the install as failed. */
     interface Installer {
         void install(Method method);
     }
 
-    private final Set<Method> claimed = Collections.newSetFromMap(new ConcurrentHashMap<>());
-
-    /** @return true if this caller won the claim and should install the hook. */
-    boolean claim(Method method) {
-        return claimed.add(method);
-    }
+    private final ConcurrentHashMap<Method, CompletableFuture<Boolean>> states =
+            new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Method, String> lastFailures =
+            new ConcurrentHashMap<>();
 
     /**
-     * Undo a claim after a failed installation so the next discovery retries the method
-     * (Sol R6 #3: claim-then-fail without release permanently skips the surface).
+     * The ONLY way production code installs a hooked Method: terminal-state transaction
+     * with wait-for-outcome semantics for concurrent callers (Sol R8 #1).
      */
-    void release(Method method) {
-        claimed.remove(method);
+    InstallResult claimAndInstall(Method method, Installer installer) {
+        for (;;) {
+            CompletableFuture<Boolean> fresh = new CompletableFuture<>();
+            CompletableFuture<Boolean> race = states.putIfAbsent(method, fresh);
+            if (race == null) {
+                try {
+                    installer.install(method);
+                    fresh.complete(true);
+                    return InstallResult.INSTALLED;
+                } catch (Throwable t) {
+                    states.remove(method, fresh);
+                    fresh.completeExceptionally(t);
+                    lastFailures.put(method, t.getClass().getSimpleName());
+                    return InstallResult.FAILED;
+                }
+            }
+            try {
+                return Boolean.TRUE.equals(race.get())
+                        ? InstallResult.ALREADY_INSTALLED
+                        : InstallResult.FAILED;
+            } catch (ExecutionException peerFailure) {
+                // The peer's install failed and removed its entry — loop and try to
+                // become the installer ourselves.
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return InstallResult.FAILED;
+            }
+        }
     }
 
-    /**
-     * The ONLY way production code installs a hooked Method: claim, install, keep on
-     * success, release on failure (Sol R7 #1 — no site may open-code the template).
-     *
-     * @return true when the method is now hooked (or already was); false when the
-     *         installer failed and the claim was released for a later retry.
-     */
-    boolean claimAndInstall(Method method, Installer installer) {
-        if (!claim(method)) {
-            return true; // already hooked by an earlier discovery
-        }
-        try {
-            installer.install(method);
-            return true;
-        } catch (Throwable t) {
-            release(method);
-            return false;
-        }
+    /** Bounded diagnostic for the last failed install of a method, or null. */
+    String lastFailure(Method method) {
+        return lastFailures.get(method);
     }
 }
