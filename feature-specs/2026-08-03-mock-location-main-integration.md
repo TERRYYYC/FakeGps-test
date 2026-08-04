@@ -13,6 +13,7 @@ created: 2026-08-03
 **Architecture cell:** Android application / location delivery
 **Map delta:** none
 **Map delta why:** 仓库没有 ownership-cell registry；改动将 framework gateway、官方 GMS location client 与 service 收入现有 `:app` 位置交付边界，没有新增跨进程存储、第二个状态源或自建外部服务。
+**Delivery status (2026-08-04):** PR #10 已以 squash commit `008923ecca96ab6e2234901e2a7dfbc595ff5737` 合入 `master`，Issue #12 已自动关闭；clean merged-main Debug APK 与 reviewed artifact 同为 `7e18cdcc…f80c`，合入后 433/433 JVM、12/12 结构契约、Debug/Release/`lintVitalRelease` 及 moto g54 全链验收均通过。
 
 ## 完成定义
 

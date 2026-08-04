@@ -10,7 +10,11 @@ created: 2026-08-03
 ## Provenance
 
 - Repository: `https://github.com/TERRYYYC/FakeGps-test.git`
-- Branch: `feat/mock-provider-main-integration`
+- Delivery PR: [#10](https://github.com/TERRYYYC/FakeGps-test/pull/10), squash-merged into `master` on 2026-08-04
+- Final reviewed head: `04848846599d65549aca7f86f1c6ef1f948eef24`
+- Merge commit: `008923ecca96ab6e2234901e2a7dfbc595ff5737`
+- Merge tree identity: reviewed head and merge commit both resolve to tree `2a7f8eb464e62715c5a01016d0b4f369d03c1743`
+- Operator acceptance / merge authorization: thread message `0001785846783689-001813-254e8895`
 - Review-finding base: `e9274cd26997a76f4fad7840926d9384d636f119`
 - Remediation implementation commit: `d79cd735feaa6bd7ad26854dc84e08562277ec24`
 - R2 finding base: `65834f713443a92dde14560a84b9d3d6b988e786`
@@ -47,6 +51,23 @@ created: 2026-08-03
 - 15-second switch recording: `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/evidence/settings-main-toggle.mp4` (`bb359df2d29db50e67a5b00aea12965448aa47f97544bc891071653b307f9df1`)
 
 截图留在设备备份目录而不进入 Git。画面显示 Google Maps 蓝点位于 Kyiv 的 Independence Square / Maidan Nezalezhnosti 附近，与主 App 生效中档案 `50.4501,30.5234` 一致。
+
+## Post-merge acceptance（2026-08-04）
+
+PR #10 已 squash merge 到 `master`（`008923ecca96ab6e2234901e2a7dfbc595ff5737`），`Fixes #12` 已使 Issue #12 自动关闭。合入后的主干重新执行 JVM、结构、Debug/Release 与 release vital lint 门禁：433/433 JVM、12/12 结构契约、Debug/Release/`lintVitalRelease` 均通过。
+
+主干第一次增量构建得到 Debug APK `98113d88…23e0`，与 exact-head artifact 不同；比较 Git tree 后确认 merge commit 与 reviewed head 的 source tree 完全相同，再执行 `:app:clean :app:assembleDebug --rerun-tasks`，Debug APK 恢复为 `7e18cdcc9e950cf69d2da8f23d728064405e483e1d21a1f2fe982814f4a5f80c`。差异来自主干 worktree 复用的增量 DEX shard/cache，不是 squash merge 代码漂移；因此 `98113d88…23e0` 作废，不纳入 artifact provenance。
+
+随后用该 clean merged-main APK 在 moto g54 5G `ZY22JHW9M4` 从真实 provider 基线完整复跑产品链，exit 0：真实系统 picker 可见 → 首次未授权指引 → 重启干净 → Kyiv gps/network/fused → 划掉任务卡仍保活 → Google Maps 前台 120×0.5 秒连续采样零泄漏 → app-op 残留恢复 → fused mock cache 清除 → gps/network 恢复系统来源。最终设备状态为 `.bench` mock app-op denied、参考 App allowed、gps identity=`1000/android[GnssService]`、network/fused 为 GMS 真实 provider，参考 App 回到前台。
+
+```text
+FUSED_MOCK_STABILITY_COMPLETE samples=120 interval=0.5s coordinate=50.450100,30.523400
+MOCK_STABILITY_COMPLETE samples=120 interval=0.5s
+FUSED_MOCK_CACHE_CLEARED observed=Location[fused 50.450968,30.410239 ...]
+PROVIDER_REAL gps=GnssService network=system
+RESTORE bench=deny reference=allow provider=real status=0
+ACCEPTANCE_RESTORE_PHASE_COMPLETE
+```
 
 ## 对 co-creator 纠正与手动发现的闭环
 
