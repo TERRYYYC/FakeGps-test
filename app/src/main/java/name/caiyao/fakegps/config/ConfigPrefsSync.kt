@@ -39,6 +39,7 @@ object ConfigPrefsSync {
     /** Wall-clock time of the last publish. Read by the UI only; the hook ignores it. */
     const val KEY_PUBLISHED_AT = "published_at"
     const val KEY_PUBLISH_FAILED = "publish_failed"
+    private const val KEY_ACTIVE_PROFILE_ID = "active_profile_id"
 
     /**
      * Transport payload version. Bumped from SpoofConfig's v1 typed schema to the flat field map.
@@ -66,10 +67,30 @@ object ConfigPrefsSync {
      * fingerprint is emitted so config provenance stays verifiable across UI / log / probe.
     */
     @JvmStatic
-    fun sync(context: Context): Boolean {
+    @JvmOverloads
+    fun sync(
+        context: Context,
+        profileId: Long? = null,
+        clearIfMissing: Boolean = false,
+    ): Boolean {
         Log.w(TAG, "sync() ENTER")
         return try {
-            val jsonStr = buildFieldMapJson(context)
+            val requestedProfileId = profileId ?: readActiveProfileId(context)
+            val built = buildFieldMapJson(context, requestedProfileId)
+            if (ConfigPublicationContract.shouldKeepLastGoodPayload(
+                    requestedProfileId = requestedProfileId,
+                    resolvedProfileId = built.profileId,
+                    clearIfMissing = clearIfMissing,
+                )
+            ) {
+                Log.w(
+                    TAG,
+                    "profileId=$requestedProfileId temporarily unavailable; keeping last-good payload",
+                )
+                markPublicationFailure(context)
+                return false
+            }
+            val jsonStr = built.json
 
             // MODE_WORLD_READABLE throws SecurityException on Android N+ unless the Xposed
             // framework suppresses it (Vector hooks checkMode for this). Fall back to a private
@@ -116,6 +137,16 @@ object ConfigPrefsSync {
             } else {
                 editor.remove(KEY_PUBLISHED_AT).putBoolean(KEY_PUBLISH_FAILED, true)
             }
+            // The active row is routing state for this exact payload. Commit both together so a
+            // process death can never leave a new Hook payload beside an old active-row pointer.
+            // A MODE_PRIVATE fallback is not a publication and must not advance that pointer.
+            if (worldReadable) {
+                if (built.profileId != null) {
+                    editor.putLong(KEY_ACTIVE_PROFILE_ID, built.profileId)
+                } else {
+                    editor.remove(KEY_ACTIVE_PROFILE_ID)
+                }
+            }
             val committed = editor.commit()
             val published = ConfigPublicationContract.isCrossProcessPublishSuccessful(
                 worldReadable,
@@ -124,9 +155,11 @@ object ConfigPrefsSync {
             Log.w(
                 TAG,
                 "published crossProcess=$published worldReadable=$worldReadable commit=$committed " +
-                    "fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}",
+                    "profileId=${built.profileId} fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}",
             )
-            if (!published) markPublicationFailure(context)
+            if (!published) {
+                markPublicationFailure(context)
+            }
             published
         } catch (e: Throwable) {
             Log.e(TAG, "sync failed", e)
@@ -136,13 +169,15 @@ object ConfigPrefsSync {
     }
 
     /**
-     * Serialize the effective profile (first row) as `{schemaVersion, mode, activeHours, fields:{…}}`.
+     * Serialize the explicitly selected profile as `{schemaVersion, mode, activeHours, fields:{…}}`.
      *
      * `fields` is produced by walking EVERY cursor column — no per-field code — so the payload
      * always mirrors the profile table and new columns need no change here. Column values keep
      * their SQLite type so the hook side reads them back with matching types.
      */
-    private fun buildFieldMapJson(context: Context): String {
+    private data class BuiltPayload(val json: String, val profileId: Long?)
+
+    private fun buildFieldMapJson(context: Context, profileId: Long?): BuiltPayload {
         // Force Room to open and run pending migrations before the provider creates its second,
         // read-only connection. Without this, the first publish after an upgrade can observe the
         // previous schema and silently omit newly migrated metadata.
@@ -172,10 +207,16 @@ object ConfigPrefsSync {
         // profile row -> flat field map plus an orthogonal explicit-unavailable set.
         val fields = JSONObject()
         var storedUnavailable: String? = null
-        val profileCursor = cr.query(APP_URI, null, null, null, "id ASC")
+        var resolvedProfileId: Long? = null
+        val profileCursor = if (profileId == null) {
+            cr.query(APP_URI, null, null, null, "id ASC")
+        } else {
+            cr.query(APP_URI, null, "id = ?", arrayOf(profileId.toString()), null)
+        }
             ?: throw IllegalStateException("profile query failed")
         profileCursor.use { c ->
             if (c.moveToFirst()) {
+                resolvedProfileId = c.longOrNull("id")
                 for (i in 0 until c.columnCount) {
                     val name = c.getColumnName(i)
                     if (name == "unavailable_fields") {
@@ -206,7 +247,7 @@ object ConfigPrefsSync {
             "field map built: ${fields.length()} spoof fields, " +
                 "${unavailable.asList().size} unavailable fields",
         )
-        return root.toString()
+        return BuiltPayload(root.toString(), resolvedProfileId)
     }
 
     /**
@@ -269,4 +310,14 @@ object ConfigPrefsSync {
     private fun Cursor.intOrNull(col: String): Int? {
         val i = getColumnIndex(col); return if (i >= 0 && !isNull(i)) getInt(i) else null
     }
+
+    private fun Cursor.longOrNull(col: String): Long? {
+        val i = getColumnIndex(col); return if (i >= 0 && !isNull(i)) getLong(i) else null
+    }
+
+    private fun readActiveProfileId(context: Context): Long? = runCatching {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(KEY_ACTIVE_PROFILE_ID, 0L)
+            .takeIf { it > 0L }
+    }.getOrNull()
 }

@@ -12,11 +12,12 @@ import kotlinx.coroutines.flow.Flow
 class ProfileRepository(
     private val db: AppDatabase,
     private val context: Context? = null,
-    private val publishOverride: (() -> Boolean)? = null,
+    private val publishOverride: ((PublishRequest) -> Boolean)? = null,
 ) {
 
     data class SaveResult(val id: Long, val published: Boolean)
     data class ImportResult(val imported: Int, val duplicates: Int)
+    data class PublishRequest(val profileId: Long?, val clearIfMissing: Boolean)
 
     private val dao get() = db.profileDao()
 
@@ -35,17 +36,17 @@ class ProfileRepository(
             dao.update(profile)
             profile.id
         }
-        return SaveResult(id, republish())
+        return SaveResult(id, republish(profileId = id))
     }
 
     suspend fun deleteById(id: Long) {
         dao.deleteById(id)
-        republish()
+        republish(clearIfMissing = true)
     }
 
     suspend fun deleteAll() {
         dao.deleteAll()
-        republish()
+        republish(clearIfMissing = true)
     }
 
     /**
@@ -66,13 +67,21 @@ class ProfileRepository(
      * This lives in the REPOSITORY, not in a screen: the app has two parallel UIs (legacy
      * Fragments + Compose) and wiring the sync per-screen already caused a real bug — saving a
      * new location from the Compose UI left the hook running on a profile the user had deleted
-     * (DB said 50.615936,26.278774 while the hook still read 50.257091,28.688807). Every
-     * create/update/delete funnels through here, so the transport can no longer go stale.
+     * (DB said 50.615936,26.278774 while the hook still read 50.257091,28.688807). Every Compose
+     * create/update/delete funnels through here; the legacy editor passes its saved id directly.
      */
-    private fun republish(): Boolean {
-        val publisher = publishOverride ?: context?.let { ctx -> { ConfigPrefsSync.sync(ctx) } }
+    private fun republish(
+        profileId: Long? = null,
+        clearIfMissing: Boolean = false,
+    ): Boolean {
+        val request = PublishRequest(profileId, clearIfMissing)
+        val publisher = publishOverride ?: context?.let { ctx ->
+            { value: PublishRequest ->
+                ConfigPrefsSync.sync(ctx, value.profileId, value.clearIfMissing)
+            }
+        }
             ?: return true
-        val published = runCatching(publisher)
+        val published = runCatching { publisher(request) }
             .onFailure { Log.e("ProfileRepository", "config republish failed", it) }
             .getOrDefault(false)
         if (!published) {

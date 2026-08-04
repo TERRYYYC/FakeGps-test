@@ -339,14 +339,17 @@ public class ProfileEditorFragment extends Fragment {
             cv.put("addname", String.format("%.6f, %.6f", lat, lon));
         }
 
+        long savedProfileId;
         if (profileId > 0) {
             profileDao.updateProfile(profileId, cv);
+            savedProfileId = profileId;
         } else {
-            profileDao.insertProfile(cv);
+            savedProfileId = profileDao.insertProfile(cv);
         }
 
         // Re-publish the effective config to world-readable prefs so the hook picks up the change.
-        name.caiyao.fakegps.config.ConfigPrefsSync.sync(requireContext().getApplicationContext());
+        name.caiyao.fakegps.config.ConfigPrefsSync.sync(
+                requireContext().getApplicationContext(), savedProfileId);
 
         Toast.makeText(requireContext(), "Saved", Toast.LENGTH_SHORT).show();
 
