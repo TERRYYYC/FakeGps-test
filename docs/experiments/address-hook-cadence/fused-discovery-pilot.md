@@ -1,0 +1,112 @@
+---
+feature_ids: [F-HOOK-CADENCE]
+topics: [hook, fused-location, gms, xposed, runtime-discovery, measurement]
+doc_kind: experiment-result
+created: 2026-08-05
+---
+
+# Fused Runtime Discovery Pilot: Maps Blue Dot Follows the Spoof
+
+## Summary
+
+The GMS fused path was the mission's silent hole: `resolveFusedImpl()` knew only
+two historical internal class names, the current GMS build renamed the
+implementation again, and every fused hook died with "Cannot hook abstract
+methods" — Google Maps showed the **real** location no matter what was
+configured (proven in phase-b-results.md §R3-P1#1).
+
+Per Sol's frozen design (project-research/2026-08-04-gms-fused-runtime-discovery),
+the implementation now arms the public `LocationServices` factory, validates the
+returned object against the public contract, resolves exact implementation
+`Method`s via the pure `FusedClientMethodPlan`, and replaces results only
+through public APIs. All internal candidate names and private-field fallbacks
+(`mLocations`/`mResult`/`mComplete`/`mResultSet`/`mIsLocationAvailable`) are
+deleted.
+
+**Result: on current Maps 26.31 (impl class `bkmc`), the blue dot follows the
+spoofed coordinate, and a real UI coordinate edit moved it Zhytomyr → Lviv
+with 4 ms transport latency.**
+
+## Device Evidence (moto g54 5G, Android 15, Maps 26.31, Play services 26.28.33)
+
+### Discovery chain (logcat, Maps main process)
+
+```
+FakeGPS-Hook: event=fused_factory_armed overloads=2
+FakeGPS-Hook: event=fused_client_discovered class=bkmc loader=54512416
+FakeGPS-Hook: event=fused_surface_hooked surface=CURRENT_LOCATION_TASK owner=bkmc  (×3)
+FakeGPS-Hook: event=fused_surface_hooked surface=LAST_LOCATION_TASK owner=bkmc     (×2)
+FakeGPS-Hook: event=fused_surface_hooked surface=LISTENER_REGISTRATION owner=bkmc  (×6)
+```
+
+`bkmc` is exactly the application-obfuscated class Sol's dex analysis predicted —
+discovered at runtime with zero name guessing. Resource bound: 2 factory hooks +
+11 exact-Method hooks + reflection only on first discovery of the class; zero
+polling, zero classpath scanning.
+
+### Pilot-driven design correction (shape over names, even for markers)
+
+First pilot run crashed discovery: `ClassNotFoundException:
+com.google.android.gms.location.LocationCallback` — app-side R8 strips even the
+public marker-class names. The planner was changed to identify
+callback/listener parameter types by **shape** (declared `onLocationResult` /
+`onLocationChanged` methods) extracted from the contract signatures, and
+`LocationResult` is derived from the callback method's own parameter type. Two
+new unit tests pin this (`registrationEntriesCarryShapeMatchedCallbackType`,
+`shapelessRegistrationParametersAreNotPlanned`).
+
+### Blue dot follows (screenshots)
+
+| State | Maps blue dot | Evidence |
+|---|---|---|
+| Spoof = Zhytomyr, real = Kyiv | **Zhytomyr** (Seletska St / Ivana Honty St area) | screenshot |
+| Real UI edit → Lviv (49.8397, 24.0297) | **Lviv** (Opera / Forum Lviv area) | screenshot |
+| Publish → Maps accept | **4 ms** (observer path, background process) | `published fp=1928d4f0…` 00:13:52.867 → `transport accepted` .871 |
+
+Before this change, the identical setup showed the blue dot pinned to the real
+Kyiv location (phase-b-results.md §R3-P1#1 screenshots).
+
+### Schema-4 coexistence
+
+Mid-testing, master advanced to schema 4 (PR #10 System Mock integration) and
+the device app was upgraded under us — the branch rejected the payload
+(`transport rejected schema=4`). The branch was rebased onto current master
+(clean, no conflicts); post-rebase: `transport accepted schema=4`, the full
+fused chain re-established, and the blue dot re-verified on Zhytomyr.
+
+## Test Evidence
+
+- 457 unit tests, 0 failures (single variant after master's flavor removal;
+  pre-rebase 765 = ~2× flavor duplication — comparable base), clean build
+- 10 behavioral tests for `FusedClientMethodPlan` (name-independence, inherited
+  impl ownership, abstract/unassignable rejection, dedup, overload exactness,
+  pre-21 eager eligibility, surface mapping, shape matching ×2, shapeless
+  rejection)
+- Bytecode contract: no `mLocations`/`mIsLocationAvailable`/`mResult`/
+  `mComplete`/`mResultSet`/`zzbp`/`FusedLocationProviderClientImpl` strings;
+  `getFusedLocationProviderClient`/`forResult`/`create`/`extractResult` present
+- R8 release build clean; `FusedClientMethodPlan` added to proguard keeps
+
+## Not verified (with reasons)
+
+- **30s/60s interval matrix + resource census** — blocked by live device
+  contention: a parallel session is driving the same device via adb (bench app
+  launches observed 00:31:07) and the Xposed module was de-scoped/disabled on
+  the device mid-matrix (fresh Maps processes show no module injection).
+  5s and 10s intervals were validated (4 ms real publish; probe rounds at 10s
+  before the module was disabled).
+- **PendingIntent probe** — `LocationResult.extractResult(Intent)` does not
+  exist in Maps' bundled GMS (`findAndHookMethod` skip logged); the hook is
+  installed wherever the method exists, but no on-device app exercised it.
+- **CALLBACK_REGISTRATION surface on Maps** — Maps' contract exposed only
+  LISTENER-shaped registration overloads to the planner (11 hooks installed,
+  zero CALLBACK). The blue dot nonetheless follows, so its update path is
+  covered by the hooked surfaces; the callback path remains unit-tested only.
+
+## Environment restored
+
+Profile restored to the Zhytomyr baseline via the real UI path
+(`fp=sha256:a46f31b771af1555`); interval 10s at time of contention (restore to
+5s pending device availability — flagged in the handoff).
+
+[墨墨/kimi-k3🐾]
