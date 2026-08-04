@@ -190,6 +190,31 @@ public class MainHookRefreshContractTest {
         assertTrue("watch-loss evidence log missing", observer.contains("watch lost"));
     }
 
+    /**
+     * Sol's frozen fused design (2026-08-04): the fused path must resolve clients via the
+     * public LocationServices factory + runtime capability, and replace results only through
+     * public APIs. Internal impl class names and private GMS field mutation are prohibited
+     * in bytecode.
+     */
+    @Test
+    public void fusedPathUsesPublicApisNoPrivateFieldFallbacks() throws Exception {
+        String hook = classBytecode("name.caiyao.fakegps.hook.HookUtils");
+
+        for (String field : new String[]{"mLocations", "mIsLocationAvailable",
+                "mResult", "mComplete", "mResultSet"}) {
+            assertFalse("private GMS field fallback must be removed: " + field,
+                    hook.contains(field));
+        }
+        assertFalse("internal impl name guessing must be removed",
+                hook.contains("FusedLocationProviderClientImpl"));
+        assertFalse("internal impl name guessing must be removed", hook.contains("zzbp"));
+
+        assertTrue("public factory hook expected", hook.contains("getFusedLocationProviderClient"));
+        assertTrue("Tasks.forResult expected", hook.contains("forResult"));
+        assertTrue("LocationResult.create expected", hook.contains("create"));
+        assertTrue("LocationResult.extractResult expected", hook.contains("extractResult"));
+    }
+
     private static String classBytecode(String className) throws Exception {
         String resource = className.replace('.', '/') + ".class";
         try (InputStream input = MainHookRefreshContractTest.class

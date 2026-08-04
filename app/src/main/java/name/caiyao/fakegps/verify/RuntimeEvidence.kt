@@ -46,4 +46,26 @@ object RuntimeEvidence {
     @JvmStatic
     fun timerFallback(process: String, intervalMs: Long): String =
         "$HOOK_PREFIX event=timer_fallback process=$process intervalMs=$intervalMs"
+
+    // ---- Fused client runtime discovery evidence (2026-08-04 design) ----
+
+    @JvmStatic
+    fun fusedFactoryArmed(overloads: Int): String =
+        "$HOOK_PREFIX event=fused_factory_armed overloads=$overloads"
+
+    @JvmStatic
+    fun fusedClientDiscovered(runtimeClass: String, loaderId: Int): String =
+        "$HOOK_PREFIX event=fused_client_discovered class=$runtimeClass loader=$loaderId"
+
+    @JvmStatic
+    fun fusedSurfaceHooked(surface: String, owner: String): String =
+        "$HOOK_PREFIX event=fused_surface_hooked surface=$surface owner=$owner"
+
+    @JvmStatic
+    fun fusedClientRejected(reason: String): String =
+        "$HOOK_PREFIX event=fused_client_rejected reason=$reason"
+
+    @JvmStatic
+    fun fusedSurfaceMissing(method: String): String =
+        "$HOOK_PREFIX event=fused_surface_missing method=$method"
 }

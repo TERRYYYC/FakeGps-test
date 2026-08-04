@@ -5,6 +5,7 @@
 -keep class name.caiyao.fakegps.hook.HookUtils
 -keep class name.caiyao.fakegps.hook.Snapshot
 -keep class name.caiyao.fakegps.hook.PrefsDirectoryObserver
+-keep class name.caiyao.fakegps.hook.FusedClientMethodPlan
 
 # Xposed replaces this exact target-classloader method at runtime. Keeping the class and method is
 # required not just for its name: R8 must not inline the default `false` into the probe service.

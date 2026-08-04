@@ -59,4 +59,28 @@ class RuntimeEvidenceTest {
             RuntimeEvidence.intervalChanged("com.example", 30_000L, 5_000L),
         )
     }
+
+    @Test
+    fun `fused discovery evidence records lifecycle without payload values`() {
+        assertEquals(
+            "FakeGPS-Hook: event=fused_factory_armed overloads=2",
+            RuntimeEvidence.fusedFactoryArmed(2),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_client_discovered class=bkmc loader=12345",
+            RuntimeEvidence.fusedClientDiscovered("bkmc", 12345),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_surface_hooked surface=LAST_LOCATION_TASK owner=bkmc",
+            RuntimeEvidence.fusedSurfaceHooked("LAST_LOCATION_TASK", "bkmc"),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_client_rejected reason=NOT_ASSIGNABLE",
+            RuntimeEvidence.fusedClientRejected("NOT_ASSIGNABLE"),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_surface_missing method=getLastLocation",
+            RuntimeEvidence.fusedSurfaceMissing("getLastLocation"),
+        )
+    }
 }
