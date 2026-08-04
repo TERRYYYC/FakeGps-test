@@ -30,9 +30,9 @@ class MockProviderMainIntegrationContractTest(unittest.TestCase):
         )
         self.assertIn("CoordinatedMockProviderGateway", service)
         self.assertIn("MockProviderSessionRunner", service)
-        self.assertIn("setMockMode(true)", fused)
-        self.assertIn("setMockLocation", fused)
-        self.assertIn("setMockMode(false)", fused)
+        self.assertIn("taskAwaiter.await(client.setMockMode(true))", fused)
+        self.assertIn("taskAwaiter.await(client.setMockLocation(location))", fused)
+        self.assertIn("taskAwaiter.await(client.setMockMode(false))", fused)
         self.assertIn("PlayServicesTaskAwaiter", fused)
 
     def test_acceptance_uses_a_standalone_fused_time_axis_gate(self) -> None:
