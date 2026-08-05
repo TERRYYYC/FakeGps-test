@@ -47,13 +47,59 @@ public class MapRecenterUiContractTest {
                 currentFix,
                 "vm.onMapTap(location.latitude, location.longitude)\n            " + currentFix);
 
-        boolean rejected = false;
+        assertSelectionMutationRejected(mutated);
+    }
+
+    @Test
+    public void selectionGuardIgnoresDefaultLambdaBracesInTheSignature() throws Exception {
+        String screen = screenSource();
+        String parameterEnd =
+                "    permLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>? = null,\n"
+                        + ") {";
+        assertTrue("recenter signature mutation anchor must exist", screen.contains(parameterEnd));
+        String targetBody = "    when (val target = vm.resolveRecenterTarget()) {";
+        assertTrue("recenter body mutation anchor must exist", screen.contains(targetBody));
+        String mutated = screen
+                .replace(
+                        parameterEnd,
+                        "    permLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>? = null,\n"
+                                + "    onDone: () -> Unit = {},\n"
+                                + ") {")
+                .replace(targetBody, "    vm.onMapTap(0.0, 0.0)\n" + targetBody);
+
+        assertSelectionMutationRejected(mutated);
+    }
+
+    @Test
+    public void selectionMutationMetaTestDoesNotAcceptExtractorFailures() throws Exception {
+        String screen = screenSource();
+        String broken = screen.replace(
+                "private fun requestCurrentDeviceLocation(",
+                "private fun renamedCurrentDeviceLocation(");
+
+        boolean extractorFailurePropagated = false;
+        try {
+            assertSelectionMutationRejected(broken);
+        } catch (AssertionError expected) {
+            extractorFailurePropagated = expected.getMessage() != null
+                    && expected.getMessage().contains("signature must remain available");
+        }
+        assertTrue(
+                "extractor failure must not count as a selection-mutation rejection",
+                extractorFailurePropagated);
+    }
+
+    private static void assertSelectionMutationRejected(String mutated) {
         try {
             assertSelectionIndependent(mutated);
         } catch (AssertionError expected) {
-            rejected = true;
+            String message = expected.getMessage();
+            if (message != null && message.contains("must not mutate map selection")) {
+                return;
+            }
+            throw expected;
         }
-        assertTrue("selection guard must cover the current-device handler", rejected);
+        throw new AssertionError("selection guard must reject the forbidden mutation");
     }
 
     private static void assertSelectionIndependent(String screen) {
@@ -74,8 +120,11 @@ public class MapRecenterUiContractTest {
         String signature = "private fun " + functionName + "(";
         int start = screen.indexOf(signature);
         assertTrue(functionName + " signature must remain available to the contract", start >= 0);
-        int bodyStart = screen.indexOf('{', start);
-        assertTrue(functionName + " body must remain available to the contract", bodyStart >= 0);
+        int bodyOpening = screen.indexOf(") {", start);
+        assertTrue(
+                functionName + " body opening must remain available to the contract",
+                bodyOpening >= 0);
+        int bodyStart = bodyOpening + ") ".length();
 
         int depth = 0;
         for (int index = bodyStart; index < screen.length(); index++) {
