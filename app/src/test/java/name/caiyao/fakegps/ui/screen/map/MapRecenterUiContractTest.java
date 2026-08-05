@@ -1,0 +1,69 @@
+package name.caiyao.fakegps.ui.screen.map;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import org.junit.Test;
+
+/** Compiled contract for the map button's single "current effective location" meaning. */
+public class MapRecenterUiContractTest {
+
+    @Test
+    public void recenterRequestsCurrentLocationInsteadOfReadingAnUnboundedCache() throws Exception {
+        String screen = classBytecode("name.caiyao.fakegps.ui.screen.map.MapScreenKt");
+
+        assertTrue("recenter must request a current fix", screen.contains("getCurrentLocation"));
+        assertFalse(
+                "getLastKnownLocation can return the same minutes-old point forever",
+                screen.contains("getLastKnownLocation"));
+    }
+
+    @Test
+    public void buttonLabelsTheOneMeaningTruthfully() throws Exception {
+        String screen = screenSource();
+
+        assertTrue(screen.contains("归位到当前有效位置"));
+    }
+
+    @Test
+    public void recenterMovesTheCameraWithoutSelectingANewProfilePoint() throws Exception {
+        String screen = screenSource();
+        String recenter = screen.substring(
+                screen.indexOf("private fun recenterMap("),
+                screen.indexOf("private fun requestCurrentDeviceLocation("));
+
+        assertFalse("camera recenter must not mutate map selection", recenter.contains("onMapTap"));
+    }
+
+    private static String screenSource() throws Exception {
+        Path fromRoot = Paths.get(
+                "app/src/main/java/name/caiyao/fakegps/ui/screen/map/MapScreen.kt");
+        Path fromModule = Paths.get(
+                "src/main/java/name/caiyao/fakegps/ui/screen/map/MapScreen.kt");
+        Path source = Files.exists(fromRoot) ? fromRoot : fromModule;
+        assertTrue("MapScreen.kt source must be available to the contract", Files.exists(source));
+        return new String(Files.readAllBytes(source), StandardCharsets.UTF_8);
+    }
+
+    private static String classBytecode(String className) throws Exception {
+        String resource = className.replace('.', '/') + ".class";
+        try (InputStream input = MapRecenterUiContractTest.class
+                .getClassLoader().getResourceAsStream(resource)) {
+            assertNotNull(resource, input);
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+            return new String(output.toByteArray(), StandardCharsets.ISO_8859_1);
+        }
+    }
+}
