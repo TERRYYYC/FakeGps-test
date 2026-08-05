@@ -130,4 +130,88 @@ public class FusedInstallTransactionTest {
         assertEquals(FusedHookRegistry.InstallResult.INSTALLED,
                 registry.claimAndInstall(m, method -> {}));
     }
+
+    // --- R9 #2: interrupted waiters must not escape before the terminal state ---------
+
+    /**
+     * A waiter interrupted MID-WAIT must keep waiting for the installer's terminal state —
+     * returning early would let the application call a not-yet-hooked fused method and leak
+     * the real location. The interrupt flag must be restored on exit.
+     */
+    @Test
+    public void interruptedWaiterStillWaitsForTerminalState() throws Exception {
+        FusedHookRegistry registry = new FusedHookRegistry();
+        Method m = sampleMethod();
+        CountDownLatch aStarted = new CountDownLatch(1);
+        CountDownLatch aFinish = new CountDownLatch(1);
+
+        Thread a = new Thread(() -> registry.claimAndInstall(m, method -> {
+            aStarted.countDown();
+            try {
+                aFinish.await(3, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        a.start();
+        assertTrue(aStarted.await(2, TimeUnit.SECONDS));
+
+        final FusedHookRegistry.InstallResult[] bResult = new FusedHookRegistry.InstallResult[1];
+        final boolean[] bInterruptFlag = new boolean[1];
+        Thread b = new Thread(() -> {
+            bResult[0] = registry.claimAndInstall(m, method -> {
+                throw new AssertionError("waiter must never install when peer succeeds");
+            });
+            bInterruptFlag[0] = Thread.currentThread().isInterrupted();
+        });
+        b.start();
+        Thread.sleep(200); // let B settle into the wait
+        b.interrupt();      // R9: interrupt while A is still installing
+        Thread.sleep(200);
+        assertTrue("interrupted waiter must NOT escape before the terminal state",
+                b.isAlive());
+
+        aFinish.countDown();
+        b.join(3000);
+        a.join(3000);
+        assertEquals(FusedHookRegistry.InstallResult.ALREADY_INSTALLED, bResult[0]);
+        assertTrue("interrupt flag must be restored on exit", bInterruptFlag[0]);
+    }
+
+    /** A waiter interrupted BEFORE entering the wait behaves the same. */
+    @Test
+    public void preInterruptedWaiterStillWaitsForTerminalState() throws Exception {
+        FusedHookRegistry registry = new FusedHookRegistry();
+        Method m = sampleMethod();
+        CountDownLatch aStarted = new CountDownLatch(1);
+        CountDownLatch aFinish = new CountDownLatch(1);
+
+        Thread a = new Thread(() -> registry.claimAndInstall(m, method -> {
+            aStarted.countDown();
+            try {
+                aFinish.await(3, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        a.start();
+        assertTrue(aStarted.await(2, TimeUnit.SECONDS));
+
+        final FusedHookRegistry.InstallResult[] bResult = new FusedHookRegistry.InstallResult[1];
+        Thread b = new Thread(() -> {
+            Thread.currentThread().interrupt(); // pre-interrupted
+            bResult[0] = registry.claimAndInstall(m, method -> {
+                throw new AssertionError("waiter must never install when peer succeeds");
+            });
+        });
+        b.start();
+        Thread.sleep(300);
+        assertTrue("pre-interrupted waiter must NOT escape before the terminal state",
+                b.isAlive());
+
+        aFinish.countDown();
+        b.join(3000);
+        a.join(3000);
+        assertEquals(FusedHookRegistry.InstallResult.ALREADY_INSTALLED, bResult[0]);
+    }
 }

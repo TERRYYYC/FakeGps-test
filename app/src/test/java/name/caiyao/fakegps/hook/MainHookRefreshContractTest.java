@@ -217,6 +217,47 @@ public class MainHookRefreshContractTest {
                 hook.contains("com.google.android.gms.tasks.Tasks"));
     }
 
+    /**
+     * Sol R9 #1: no production site may discard the install transaction's terminal result.
+     * Structurally, HookUtils may call the registry directly only inside the single
+     * observed-install wrapper and the Task delivery aggregator; every eager/callback/
+     * listener install must go through installObserved, which consumes the result and
+     * emits bounded failure evidence.
+     */
+    @Test
+    public void everyRegistryResultIsConsumedThroughObservedInstall() throws Exception {
+        String source = readSource("name/caiyao/fakegps/hook/HookUtils.java");
+
+        int directRegistryCalls = countOccurrences(source, "FUSED_HOOK_REGISTRY.claimAndInstall(");
+        assertEquals("only installObserved + the delivery aggregator may call the registry",
+                2, directRegistryCalls);
+
+        int observedCalls = countOccurrences(source, "installObserved(");
+        assertTrue("eager value-object, callback and listener installs must be observed"
+                + " (1 definition + 7 sites), found " + observedCalls,
+                observedCalls >= 8);
+    }
+
+    private static String readSource(String relative) throws Exception {
+        String[] roots = {"app/src/main/java/", "src/main/java/"};
+        for (String root : roots) {
+            java.io.File f = new java.io.File(root + relative);
+            if (f.isFile()) {
+                return new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                        java.nio.charset.StandardCharsets.UTF_8);
+            }
+        }
+        throw new java.io.FileNotFoundException(relative);
+    }
+
+    private static int countOccurrences(String haystack, String needle) {
+        int count = 0;
+        for (int i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) {
+            count++;
+        }
+        return count;
+    }
+
     private static String classBytecode(String className) throws Exception {
         String resource = className.replace('.', '/') + ".class";
         try (InputStream input = MainHookRefreshContractTest.class

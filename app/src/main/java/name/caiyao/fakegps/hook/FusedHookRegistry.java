@@ -70,15 +70,28 @@ final class FusedHookRegistry {
                 }
             }
             try {
-                return Boolean.TRUE.equals(race.get())
+                Boolean ok = null;
+                boolean interrupted = false;
+                // R9 #2: an interrupted waiter must NOT escape before the terminal state —
+                // returning early lets the application call a not-yet-hooked fused method
+                // (real-location window). Keep waiting; restore the flag on exit.
+                for (;;) {
+                    try {
+                        ok = race.get();
+                        break;
+                    } catch (InterruptedException ie) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                return Boolean.TRUE.equals(ok)
                         ? InstallResult.ALREADY_INSTALLED
                         : InstallResult.FAILED;
             } catch (ExecutionException peerFailure) {
                 // The peer's install failed and removed its entry — loop and try to
                 // become the installer ourselves.
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                return InstallResult.FAILED;
             }
         }
     }

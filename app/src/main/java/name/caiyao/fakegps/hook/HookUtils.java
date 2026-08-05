@@ -1613,7 +1613,7 @@ class HookUtils {
             // getLastLocation capability: instance zero-arg -> android.location.Location
             try {
                 final Method locationAccessor = FusedDeliveryPlan.resolveLocationAccessor(lrClass);
-                FUSED_HOOK_REGISTRY.claimAndInstall(locationAccessor,
+                installObserved("LocationResult#locationAccessor", locationAccessor,
                         method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
@@ -1629,7 +1629,7 @@ class HookUtils {
             // getLocations capability: instance zero-arg -> List
             try {
                 final Method listAccessor = FusedDeliveryPlan.resolveListAccessor(lrClass);
-                FUSED_HOOK_REGISTRY.claimAndInstall(listAccessor,
+                installObserved("LocationResult#listAccessor", listAccessor,
                         method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
@@ -1648,7 +1648,7 @@ class HookUtils {
             // answered via the public construction seam (factory or (List) constructor).
             try {
                 final Method extractResult = FusedDeliveryPlan.resolveStaticResultFactory(lrClass);
-                FUSED_HOOK_REGISTRY.claimAndInstall(extractResult,
+                installObserved("LocationResult#staticFactory", extractResult,
                         method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
@@ -1672,7 +1672,7 @@ class HookUtils {
             Class<?> laClass = XposedHelpers.findClass(GMS_LOCATION_AVAILABILITY, cl);
             try {
                 final Method booleanAccessor = FusedDeliveryPlan.resolveBooleanAccessor(laClass);
-                FUSED_HOOK_REGISTRY.claimAndInstall(booleanAccessor,
+                installObserved("LocationAvailability#booleanAccessor", booleanAccessor,
                         method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
@@ -1685,6 +1685,23 @@ class HookUtils {
                 XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing("LocationAvailability#booleanAccessor"));
             }
         });
+    }
+
+    /**
+     * The single observed-install path for every fused hook outside the Task delivery
+     * aggregator (Sol R9 #1): the terminal result is ALWAYS consumed — a failed install
+     * immediately emits bounded surface-missing evidence, so a hooked-looking
+     * registration can never mask an uninstalled delivery. The result is returned for
+     * callers that additionally distinguish fresh vs repeat installs.
+     */
+    private static FusedHookRegistry.InstallResult installObserved(
+            String evidenceLabel, Method method, FusedHookRegistry.Installer installer) {
+        FusedHookRegistry.InstallResult result =
+                FUSED_HOOK_REGISTRY.claimAndInstall(method, installer);
+        if (result == FusedHookRegistry.InstallResult.FAILED) {
+            XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing(evidenceLabel));
+        }
+        return result;
     }
 
     /** Validate a factory-returned client and instrument its runtime class. */
@@ -1746,7 +1763,7 @@ class HookUtils {
                 // exact Maps) — delivery hooks must be planned from the ACTUAL returned
                 // object's runtime class, and wrapping is gated to the exact instances
                 // this API handed out (FusedTaskTracker), not every GMS task.
-                result = FUSED_HOOK_REGISTRY.claimAndInstall(entry.implementation,
+                result = installObserved(entry.contract.getName(), entry.implementation,
                         method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
@@ -1758,7 +1775,7 @@ class HookUtils {
                         }));
                 break;
             case CALLBACK_REGISTRATION:
-                result = FUSED_HOOK_REGISTRY.claimAndInstall(entry.implementation,
+                result = installObserved(entry.contract.getName(), entry.implementation,
                         method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam param) {
@@ -1772,7 +1789,7 @@ class HookUtils {
                         }));
                 break;
             case LISTENER_REGISTRATION:
-                result = FUSED_HOOK_REGISTRY.claimAndInstall(entry.implementation,
+                result = installObserved(entry.contract.getName(), entry.implementation,
                         method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam param) {
@@ -1797,7 +1814,7 @@ class HookUtils {
             case ALREADY_INSTALLED:
                 return true;
             default:
-                XposedBridge.log(RuntimeEvidence.fusedSurfaceMissing(entry.contract.getName()));
+                // failure evidence already emitted by installObserved
                 return false;
         }
     }
@@ -1911,7 +1928,7 @@ class HookUtils {
         // Maps actually ships — Sol R6 #2). Private field layouts are prohibited.
         final Method resultMethod = delivery.resultMethod;
         final Class<?> lrClass = resultMethod.getParameterTypes()[0];
-        FUSED_HOOK_REGISTRY.claimAndInstall(resultMethod,
+        installObserved("LocationCallback#resultDelivery", resultMethod,
                 method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
@@ -1931,7 +1948,7 @@ class HookUtils {
         Class<?> availabilityClass = delivery.availabilityMethod.getParameterTypes()[0];
         try {
             final Method booleanAccessor = FusedDeliveryPlan.resolveBooleanAccessor(availabilityClass);
-            FUSED_HOOK_REGISTRY.claimAndInstall(booleanAccessor,
+            installObserved("LocationCallback#availabilityDelivery", booleanAccessor,
                     method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
@@ -1987,7 +2004,7 @@ class HookUtils {
         final Method delivery = FusedDeliveryPlan.planListenerDelivery(listener.getClass());
         if (delivery == null) return;
 
-        FUSED_HOOK_REGISTRY.claimAndInstall(delivery,
+        installObserved("GmsLocationListener#delivery", delivery,
                 method -> XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {

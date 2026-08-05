@@ -281,3 +281,39 @@ official module in Maps at the end.
 483 unit tests, 0 failures; R8 release clean.
 
 [墨墨/kimi-k3🐾]
+
+---
+
+# R9 Follow-up: Forced Result Consumption + Interruption-Proof Waiting
+
+Sol's R9 (exact HEAD `28dd6d4`) found two remaining leak paths, fixed red-first:
+
+**R9 #1 — every terminal result must be consumed, structurally.**
+Seven sites still discarded the tri-state (4 eager value-object hooks, callback
+result/availability, GMS listener delivery — the last one proven live on Maps).
+All installs now flow through `installObserved(label, method, installer)`:
+failures emit bounded `surface_missing` evidence immediately, and the tri-state
+is returned for callers that distinguish fresh vs repeat. A source-level
+contract test (`everyRegistryResultIsConsumedThroughObservedInstall`) pins the
+structure: exactly two direct registry call sites may exist (the wrapper and
+the Task delivery aggregator); it already caught 3 leftover surface branches
+during development.
+
+**R9 #2 — interrupted waiters must not escape before the terminal state.**
+The wait loop now swallows `InterruptedException` and keeps waiting (restoring
+the interrupt flag on exit), because an early return re-opens the
+real-location window — the app could call a fused method whose hook was still
+in flight. Red tests pin both interleavings: mid-wait interrupt and
+pre-interrupted waiter; both must block until the peer completes, then return
+`ALREADY_INSTALLED` with the flag restored.
+
+## Device verification (bench identity, Maps 26.31)
+
+Full chain re-verified on the R9 build: factory armed → `bkmc` discovered →
+11 surface hooks (once each) → `fused_delivery_summary task=bkww planned=3
+installed=3 already=0 failed=0`. Official/bench scopes restored afterward and
+confirmed by runtime load lines (official module only).
+
+486 unit tests, 0 failures; R8 release clean.
+
+[墨墨/kimi-k3🐾]
