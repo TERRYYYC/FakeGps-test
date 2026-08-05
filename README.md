@@ -9,7 +9,7 @@
 ### 定位伪装
 - GPS 坐标（经度、纬度、海拔、速度、方向、精度）
 - `LocationManager.getLastKnownLocation()`、`getCurrentLocation()`（API 30+）
-- Google Play Services `FusedLocationProviderClient`（LocationCallback、LocationListener、PendingIntent）
+- Google Play Services `FusedLocationProviderClient`（经 `LocationServices` 工厂运行时发现的 Task（success-listener 包装）与 LocationListener 注入；LocationCallback 与 PendingIntent（`LocationResult` Intent 提取）已实现但尚无真实消费者验证，见 `docs/experiments/address-hook-cadence/fused-discovery-pilot.md`）
 - GPS 卫星状态屏蔽
 
 ### 蜂窝网络伪装

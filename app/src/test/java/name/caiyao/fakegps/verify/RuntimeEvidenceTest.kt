@@ -33,6 +33,22 @@ class RuntimeEvidenceTest {
     }
 
     @Test
+    fun `observer evidence records arm success, failure, and fallback`() {
+        assertEquals(
+            "FakeGPS-Hook: event=observer_armed process=com.example dir=/data/misc/uuid/prefs/pkg",
+            RuntimeEvidence.observerArmed("com.example", "/data/misc/uuid/prefs/pkg"),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=observer_arm_failed process=com.example error=SecurityException",
+            RuntimeEvidence.observerArmFailed("com.example", "SecurityException"),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=timer_fallback process=com.example intervalMs=30000",
+            RuntimeEvidence.timerFallback("com.example", 30_000L),
+        )
+    }
+
+    @Test
     fun `scheduler grammar records owner and real transitions only`() {
         assertEquals(
             "FakeGPS-Hook: event=scheduler_owned process=com.example intervalMs=30000",
@@ -41,6 +57,42 @@ class RuntimeEvidenceTest {
         assertEquals(
             "FakeGPS-Hook: event=interval_changed process=com.example fromMs=30000 toMs=5000",
             RuntimeEvidence.intervalChanged("com.example", 30_000L, 5_000L),
+        )
+    }
+
+    @Test
+    fun `fused discovery evidence records lifecycle without payload values`() {
+        assertEquals(
+            "FakeGPS-Hook: event=fused_factory_armed overloads=2",
+            RuntimeEvidence.fusedFactoryArmed(2),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_client_discovered class=bkmc loader=12345",
+            RuntimeEvidence.fusedClientDiscovered("bkmc", 12345),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_surface_hooked surface=LAST_LOCATION_TASK owner=bkmc",
+            RuntimeEvidence.fusedSurfaceHooked("LAST_LOCATION_TASK", "bkmc"),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_client_rejected reason=NOT_ASSIGNABLE",
+            RuntimeEvidence.fusedClientRejected("NOT_ASSIGNABLE"),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_surface_missing method=getLastLocation",
+            RuntimeEvidence.fusedSurfaceMissing("getLastLocation"),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_delivery_summary task=bkww planned=3 installed=3 already=0 failed=0",
+            RuntimeEvidence.fusedDeliverySummary("bkww", 3, 3, 0, 0, null),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_delivery_summary task=bkww planned=3 installed=1 already=1 failed=1 reason=IllegalStateException",
+            RuntimeEvidence.fusedDeliverySummary("bkww", 3, 1, 1, 1, "IllegalStateException"),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_listener_wrapped task=bkwo",
+            RuntimeEvidence.fusedListenerWrapped("bkwo"),
         )
     }
 }
