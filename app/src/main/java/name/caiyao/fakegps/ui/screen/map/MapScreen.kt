@@ -10,6 +10,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.location.LocationManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -62,6 +63,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
@@ -103,7 +106,9 @@ fun MapScreen(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
         if (grants.values.any { it }) {
-            locateMe(context, mapViewRef, vm, scope, snackbarHostState)
+            recenterMap(context, mapViewRef, vm, scope, snackbarHostState)
+        } else {
+            scope.launch { snackbarHostState.showSnackbar("未授予定位权限，无法获取当前设备位置") }
         }
     }
 
@@ -180,10 +185,19 @@ fun MapScreen(
                 ) {
                     // My location button
                     SmallFloatingActionButton(
-                        onClick = { locateMe(context, mapViewRef, vm, scope, snackbarHostState, permLauncher) },
+                        onClick = {
+                            recenterMap(
+                                context,
+                                mapViewRef,
+                                vm,
+                                scope,
+                                snackbarHostState,
+                                permLauncher,
+                            )
+                        },
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
                     ) {
-                        Icon(Icons.Default.MyLocation, contentDescription = "当前位置")
+                        Icon(Icons.Default.MyLocation, contentDescription = "归位到当前有效位置")
                     }
                     // Add profile button
                     FloatingActionButton(
@@ -384,7 +398,7 @@ private fun OsmMapView(
 }
 
 @SuppressLint("MissingPermission")
-private fun locateMe(
+private fun recenterMap(
     context: Context,
     mapView: MapView?,
     vm: MapViewModel,
@@ -392,16 +406,46 @@ private fun locateMe(
     snackbar: SnackbarHostState,
     permLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>? = null,
 ) {
+    when (val target = vm.resolveRecenterTarget()) {
+        is MapRecenterTarget.EffectiveCoordinate -> {
+            centerMap(mapView, target.latitude, target.longitude)
+            val source = when (target.source) {
+                MapRecenterCoordinateSource.HOOK -> "Hook 生效位置"
+                MapRecenterCoordinateSource.SYSTEM_MOCK -> "System Mock 运行位置"
+            }
+            scope.launch { snackbar.showSnackbar("已归位到$source") }
+        }
+        MapRecenterTarget.CurrentDevice -> requestCurrentDeviceLocation(
+            context = context,
+            mapView = mapView,
+            scope = scope,
+            snackbar = snackbar,
+            permLauncher = permLauncher,
+        )
+        is MapRecenterTarget.Unavailable -> {
+            scope.launch { snackbar.showSnackbar(target.message) }
+        }
+    }
+}
+
+@SuppressLint("MissingPermission")
+private fun requestCurrentDeviceLocation(
+    context: Context,
+    mapView: MapView?,
+    scope: kotlinx.coroutines.CoroutineScope,
+    snackbar: SnackbarHostState,
+    permLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>?,
+) {
     val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
     if (lm == null) {
         scope.launch { snackbar.showSnackbar("无法获取定位服务") }
         return
     }
 
-    val hasFine = androidx.core.content.ContextCompat.checkSelfPermission(
+    val hasFine = ContextCompat.checkSelfPermission(
         context, Manifest.permission.ACCESS_FINE_LOCATION
     ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    val hasCoarse = androidx.core.content.ContextCompat.checkSelfPermission(
+    val hasCoarse = ContextCompat.checkSelfPermission(
         context, Manifest.permission.ACCESS_COARSE_LOCATION
     ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
@@ -417,19 +461,48 @@ private fun locateMe(
         return
     }
 
-    val loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-        ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+    val providers = buildList {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) add(LocationManager.FUSED_PROVIDER)
+        if (hasFine) add(LocationManager.GPS_PROVIDER)
+        add(LocationManager.NETWORK_PROVIDER)
+    }
+    val provider = providers.firstOrNull { candidate ->
+        LocationManagerCompat.hasProvider(lm, candidate) &&
+            runCatching { lm.isProviderEnabled(candidate) }.getOrDefault(false)
+    }
+    if (provider == null) {
+        scope.launch { snackbar.showSnackbar("定位服务未开启，无法获取当前设备位置") }
+        return
+    }
 
-    if (loc != null) {
-        val point = GeoPoint(loc.latitude, loc.longitude)
-        mapView?.controller?.run {
-            animateTo(point)
-            setZoom(16.0)
+    runCatching {
+        LocationManagerCompat.getCurrentLocation(
+            lm,
+            provider,
+            null as android.os.CancellationSignal?,
+            ContextCompat.getMainExecutor(context),
+        ) { location ->
+            if (location == null) {
+                scope.launch { snackbar.showSnackbar("暂时无法获取当前设备位置") }
+                return@getCurrentLocation
+            }
+            centerMap(mapView, location.latitude, location.longitude)
+            scope.launch { snackbar.showSnackbar("已归位到当前设备位置") }
         }
-        vm.onMapTap(loc.latitude, loc.longitude)
-        scope.launch { snackbar.showSnackbar("%.6f, %.6f".format(loc.latitude, loc.longitude)) }
-    } else {
-        scope.launch { snackbar.showSnackbar("无法获取当前位置") }
+    }.onFailure { failure ->
+        scope.launch {
+            snackbar.showSnackbar(
+                "无法获取当前设备位置：${failure.message ?: failure.javaClass.simpleName}",
+            )
+        }
+    }
+}
+
+private fun centerMap(mapView: MapView?, latitude: Double, longitude: Double) {
+    val point = GeoPoint(latitude, longitude)
+    mapView?.controller?.run {
+        animateTo(point)
+        setZoom(16.0)
     }
 }
 

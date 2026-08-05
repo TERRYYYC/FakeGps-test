@@ -8,9 +8,12 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.Calendar
+import name.caiyao.fakegps.config.ConfigPrefsSync
 import name.caiyao.fakegps.data.db.AppDatabase
 import name.caiyao.fakegps.data.db.ProfileSummary
 import name.caiyao.fakegps.data.repository.ProfileRepository
+import name.caiyao.fakegps.mockprovider.MockProviderStatusStore
 
 data class TapPoint(val lat: Double, val lon: Double)
 
@@ -34,6 +37,15 @@ class MapViewModel(app: Application) : AndroidViewModel(app) {
     fun clearTap() {
         _tappedPoint.value = null
     }
+
+    /** Resolve from the runtime owners at click time; map composition must not cache this answer. */
+    fun resolveRecenterTarget(
+        currentHour: Int = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
+    ): MapRecenterTarget = MapRecenterTargetResolver.resolve(
+        read = ConfigPrefsSync.readPublished(getApplication()),
+        providerState = MockProviderStatusStore.state.value,
+        currentHour = currentHour,
+    )
 
     fun deleteAll() {
         viewModelScope.launch { repo.deleteAll() }
