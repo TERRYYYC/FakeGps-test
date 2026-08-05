@@ -54,44 +54,48 @@ final class FusedHookRegistry {
      * with wait-for-outcome semantics for concurrent callers (Sol R8 #1).
      */
     InstallResult claimAndInstall(Method method, Installer installer) {
-        for (;;) {
-            CompletableFuture<Boolean> fresh = new CompletableFuture<>();
-            CompletableFuture<Boolean> race = states.putIfAbsent(method, fresh);
-            if (race == null) {
-                try {
-                    installer.install(method);
-                    fresh.complete(true);
-                    return InstallResult.INSTALLED;
-                } catch (Throwable t) {
-                    states.remove(method, fresh);
-                    fresh.completeExceptionally(t);
-                    lastFailures.put(method, t.getClass().getSimpleName());
-                    return InstallResult.FAILED;
-                }
-            }
-            try {
-                Boolean ok = null;
-                boolean interrupted = false;
-                // R9 #2: an interrupted waiter must NOT escape before the terminal state —
-                // returning early lets the application call a not-yet-hooked fused method
-                // (real-location window). Keep waiting; restore the flag on exit.
-                for (;;) {
+        boolean interrupted = false;
+        try {
+            for (;;) {
+                CompletableFuture<Boolean> fresh = new CompletableFuture<>();
+                CompletableFuture<Boolean> race = states.putIfAbsent(method, fresh);
+                if (race == null) {
                     try {
-                        ok = race.get();
-                        break;
-                    } catch (InterruptedException ie) {
-                        interrupted = true;
+                        installer.install(method);
+                        fresh.complete(true);
+                        return InstallResult.INSTALLED;
+                    } catch (Throwable t) {
+                        states.remove(method, fresh);
+                        fresh.completeExceptionally(t);
+                        lastFailures.put(method, t.getClass().getSimpleName());
+                        return InstallResult.FAILED;
                     }
                 }
-                if (interrupted) {
-                    Thread.currentThread().interrupt();
+                try {
+                    Boolean ok = null;
+                    // R9 #2: an interrupted waiter must NOT escape before the terminal state —
+                    // returning early lets the application call a not-yet-hooked fused method
+                    // (real-location window). Keep waiting; restore the flag on every exit,
+                    // including peer-failure takeover.
+                    for (;;) {
+                        try {
+                            ok = race.get();
+                            break;
+                        } catch (InterruptedException ie) {
+                            interrupted = true;
+                        }
+                    }
+                    return Boolean.TRUE.equals(ok)
+                            ? InstallResult.ALREADY_INSTALLED
+                            : InstallResult.FAILED;
+                } catch (ExecutionException peerFailure) {
+                    // The peer's install failed and removed its entry — loop and try to
+                    // become the installer ourselves.
                 }
-                return Boolean.TRUE.equals(ok)
-                        ? InstallResult.ALREADY_INSTALLED
-                        : InstallResult.FAILED;
-            } catch (ExecutionException peerFailure) {
-                // The peer's install failed and removed its entry — loop and try to
-                // become the installer ourselves.
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
             }
         }
     }

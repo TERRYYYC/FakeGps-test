@@ -214,4 +214,49 @@ public class FusedInstallTransactionTest {
         a.join(3000);
         assertEquals(FusedHookRegistry.InstallResult.ALREADY_INSTALLED, bResult[0]);
     }
+
+    /**
+     * R10 P2: waiter interrupted mid-wait, peer install FAILS, waiter takes over and
+     * installs — the interrupt flag must survive the whole transaction, including the
+     * peer-failure -> takeover branch (host thread cancellation semantics must not be
+     * tampered with).
+     */
+    @Test
+    public void interruptedTakeoverPreservesInterruptFlag() throws Exception {
+        FusedHookRegistry registry = new FusedHookRegistry();
+        Method m = sampleMethod();
+        CountDownLatch aStarted = new CountDownLatch(1);
+        CountDownLatch aFinish = new CountDownLatch(1);
+
+        Thread a = new Thread(() -> registry.claimAndInstall(m, method -> {
+            aStarted.countDown();
+            try {
+                aFinish.await(3, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            throw new IllegalStateException("A's install fails");
+        }));
+        a.start();
+        assertTrue(aStarted.await(2, TimeUnit.SECONDS));
+
+        final FusedHookRegistry.InstallResult[] bResult = new FusedHookRegistry.InstallResult[1];
+        final boolean[] bInterruptFlag = new boolean[1];
+        Thread b = new Thread(() -> {
+            bResult[0] = registry.claimAndInstall(m, method -> { /* takeover install */ });
+            bInterruptFlag[0] = Thread.currentThread().isInterrupted();
+        });
+        b.start();
+        Thread.sleep(200); // B settles into the wait
+        b.interrupt();      // interrupt while A is still installing
+        Thread.sleep(200);
+        aFinish.countDown(); // A fails; B must take over
+        b.join(3000);
+        a.join(3000);
+
+        assertEquals("waiter must take over after peer failure",
+                FusedHookRegistry.InstallResult.INSTALLED, bResult[0]);
+        assertTrue("interrupt flag must be preserved across peer-failure takeover",
+                bInterruptFlag[0]);
+    }
 }
