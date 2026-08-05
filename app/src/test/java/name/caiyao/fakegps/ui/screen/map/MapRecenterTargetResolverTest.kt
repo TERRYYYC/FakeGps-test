@@ -90,6 +90,24 @@ class MapRecenterTargetResolverTest {
     }
 
     @Test
+    fun `cleanup-free System Mock failure falls through to the applying Hook owner`() {
+        assertEquals(
+            MapRecenterTarget.EffectiveCoordinate(
+                latitude = 50.4501,
+                longitude = 30.5234,
+                source = MapRecenterCoordinateSource.HOOK,
+            ),
+            resolve(
+                payload(),
+                MockProviderState.Failed(
+                    "provider already cleaned up",
+                    providerCleanupRequired = false,
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `persisted System Mock intent without a running provider is not treated as effective`() {
         assertTrue(
             resolve(payload(deliveryMode = "system_mock")) is MapRecenterTarget.Unavailable,

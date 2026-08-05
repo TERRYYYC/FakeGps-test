@@ -35,11 +35,61 @@ public class MapRecenterUiContractTest {
     @Test
     public void recenterMovesTheCameraWithoutSelectingANewProfilePoint() throws Exception {
         String screen = screenSource();
-        String recenter = screen.substring(
-                screen.indexOf("private fun recenterMap("),
-                screen.indexOf("private fun requestCurrentDeviceLocation("));
+        assertSelectionIndependent(screen);
+    }
 
-        assertFalse("camera recenter must not mutate map selection", recenter.contains("onMapTap"));
+    @Test
+    public void selectionGuardRejectsTheLegacyCurrentFixMutation() throws Exception {
+        String screen = screenSource();
+        String currentFix = "centerMap(mapView, location.latitude, location.longitude)";
+        assertTrue("current-location mutation anchor must exist", screen.contains(currentFix));
+        String mutated = screen.replace(
+                currentFix,
+                "vm.onMapTap(location.latitude, location.longitude)\n            " + currentFix);
+
+        boolean rejected = false;
+        try {
+            assertSelectionIndependent(mutated);
+        } catch (AssertionError expected) {
+            rejected = true;
+        }
+        assertTrue("selection guard must cover the current-device handler", rejected);
+    }
+
+    private static void assertSelectionIndependent(String screen) {
+        String[] recenterFunctions = {
+            "recenterMap",
+            "requestCurrentDeviceLocation",
+            "centerMap",
+        };
+        for (String functionName : recenterFunctions) {
+            String function = functionSource(screen, functionName);
+            assertFalse(
+                    functionName + " must not mutate map selection",
+                    function.contains("onMapTap"));
+        }
+    }
+
+    private static String functionSource(String screen, String functionName) {
+        String signature = "private fun " + functionName + "(";
+        int start = screen.indexOf(signature);
+        assertTrue(functionName + " signature must remain available to the contract", start >= 0);
+        int bodyStart = screen.indexOf('{', start);
+        assertTrue(functionName + " body must remain available to the contract", bodyStart >= 0);
+
+        int depth = 0;
+        for (int index = bodyStart; index < screen.length(); index++) {
+            char current = screen.charAt(index);
+            if (current == '{') {
+                depth++;
+            } else if (current == '}') {
+                depth--;
+                if (depth == 0) {
+                    return screen.substring(start, index + 1);
+                }
+            }
+        }
+        throw new AssertionError(functionName + " body must have balanced braces");
     }
 
     private static String screenSource() throws Exception {
