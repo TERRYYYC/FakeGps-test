@@ -106,7 +106,7 @@ fun MapScreen(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
         if (grants.values.any { it }) {
-            recenterMap(context, mapViewRef, vm, scope, snackbarHostState)
+            recenterMap(context, mapViewRef, vm::resolveRecenterTarget, scope, snackbarHostState)
         } else {
             scope.launch { snackbarHostState.showSnackbar("未授予定位权限，无法获取当前设备位置") }
         }
@@ -189,7 +189,7 @@ fun MapScreen(
                             recenterMap(
                                 context,
                                 mapViewRef,
-                                vm,
+                                vm::resolveRecenterTarget,
                                 scope,
                                 snackbarHostState,
                                 permLauncher,
@@ -397,16 +397,23 @@ private fun OsmMapView(
     AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 }
 
+/**
+ * INV-5: recentering must never mutate the map selection.
+ *
+ * This is enforced by the signature, not by a test: the recenter path receives only a
+ * [MapRecenterTarget] producer, never the ViewModel, so `onMapTap` is not reachable from
+ * this scope. Widening this parameter back to `MapViewModel` re-opens the invariant.
+ */
 @SuppressLint("MissingPermission")
 private fun recenterMap(
     context: Context,
     mapView: MapView?,
-    vm: MapViewModel,
+    resolveTarget: () -> MapRecenterTarget,
     scope: kotlinx.coroutines.CoroutineScope,
     snackbar: SnackbarHostState,
     permLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>? = null,
 ) {
-    when (val target = vm.resolveRecenterTarget()) {
+    when (val target = resolveTarget()) {
         is MapRecenterTarget.EffectiveCoordinate -> {
             centerMap(mapView, target.latitude, target.longitude)
             val source = when (target.source) {
