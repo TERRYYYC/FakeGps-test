@@ -400,9 +400,14 @@ private fun OsmMapView(
 /**
  * INV-5: recentering must never mutate the map selection.
  *
- * This is enforced by the signature, not by a test: the recenter path receives only a
- * [MapRecenterTarget] producer, never the ViewModel, so `onMapTap` is not reachable from
- * this scope. Widening this parameter back to `MapViewModel` re-opens the invariant.
+ * The signature carries part of this. This function receives a [MapRecenterTarget] producer
+ * instead of the ViewModel, so `onMapTap` is not in scope here and a selection write *inside
+ * this function* fails to compile.
+ *
+ * It does not carry all of it: `() -> MapRecenterTarget` constrains the shape, not the purity.
+ * A call site could still pass a lambda that writes the selection before resolving. Call sites
+ * must therefore keep passing a side-effect-free producer — today both pass the bound reference
+ * `vm::resolveRecenterTarget`. That half is a review obligation, not a compiler guarantee.
  */
 @SuppressLint("MissingPermission")
 private fun recenterMap(

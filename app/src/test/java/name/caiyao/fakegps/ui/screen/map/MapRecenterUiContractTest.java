@@ -15,11 +15,16 @@ import org.junit.Test;
 /**
  * Compiled contract for the map button's single "current effective location" meaning.
  *
- * <p>INV-5 (recentering must not mutate the map selection) is NOT asserted here. It is enforced
- * by {@code recenterMap}'s signature: that function receives a {@code () -> MapRecenterTarget}
- * producer instead of the ViewModel, so {@code onMapTap} is unreachable from the recenter scope
- * and a violation fails to compile. Re-adding a source-parsing guard here would re-introduce the
- * silent false-green this file used to carry (see issue #19).
+ * <p>INV-5 (recentering must not mutate the map selection) is deliberately NOT asserted here.
+ * Inside {@code recenterMap} it is a compile error: that function receives a
+ * {@code () -> MapRecenterTarget} producer instead of the ViewModel, so {@code onMapTap} is out
+ * of scope. At the call sites it is a review obligation — the function type constrains shape,
+ * not purity — so a lambda with a selection side effect would still compile there.
+ *
+ * <p>Re-adding a source-parsing guard for the remaining half would re-introduce the silent
+ * false-green this file used to carry: the old parser located function bodies via
+ * {@code indexOf(") {")} and truncated without failing whenever a parameter list contained a
+ * default lambda with braces. See issue #19.
  */
 public class MapRecenterUiContractTest {
 
