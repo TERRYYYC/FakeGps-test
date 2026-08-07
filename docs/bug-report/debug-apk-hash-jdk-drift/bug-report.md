@@ -134,6 +134,13 @@ JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
    ignored 条目再经 `is_generated()` 排除构建产物与缓存——它们由构建**产生**，若算作脏，任何
    构建完的树都将永远无法签发。
 
+   `is_generated()` 只认**显式注册的精确根**（`build`、`app/build`、`.gradle`、`.idea`、
+   `.kotlin`、`app/.cxx`），命中条件是"等于该根或位于其下"。**不得**使用 `"/build/" in path`
+   或 `endswith("/build")` 之类的子串 / 后缀判定：源码树里完全可以有名为 `build` 的目录，
+   review 第二轮正是用 `app/src/main/assets/build/hidden.apk` 击穿了这一点——探针看见了它，
+   分类器却把它当产物豁免，source 读回 clean，而文件确实进了已签名 APK。新增模块产物根必须
+   显式登记；默认落在"不是产物"一侧，使误判方向为多报脏而非漏报干净。
+
    对应回归测试跑的是**真实 git 仓库与真实 ignore 语义**，不是手写的 porcelain 字符串——因为
    这个缺陷的本质就是 git 从不报告该文件，mock 一行 `??` 永远发现不了它。
 
@@ -144,7 +151,7 @@ JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
   "在采集时刻，仓库处于 `source=` 所述状态"，与该 APK 的来源**无因果关联**。对已安装 /
   第三方 / 无法观测构建过程的 artifact，这是**正确**的声明，不是降级；但发布证据必须用 `built`。
 
-契约测试见 `scripts/test_apk_provenance.py`（40 项）。其中 `BuiltBindingTest` 是 `built` 因果性
+契约测试见 `scripts/test_apk_provenance.py`（42 项）。其中 `BuiltBindingTest` 是 `built` 因果性
 击穿用例的回归套件，`RealGitIgnoreSemanticsTest` 驱动真实 git 仓库验证 ignore 语义。
 
 **仍未关闭的部分**：本轮**没有**固定 Gradle runtime JDK。`gradle.properties` 无

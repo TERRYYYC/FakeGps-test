@@ -144,7 +144,23 @@ _BUILD_INPUT_SUFFIXES = (".gradle", ".gradle.kts", ".pro")
 
 # Gradle's own outputs and caches. These live under build-input paths but are produced BY
 # the build, so counting them as dirt would make every post-build tree unsignable.
-_GENERATED_PREFIXES = ("build/", ".gradle/", ".cxx/", ".kotlin/", ".idea/")
+#
+# Registered EXPLICITLY as exact roots. Substring or suffix matching on "build" is NOT
+# safe: a source tree may legitimately contain a directory named `build` -- this repo
+# really does ship app/src/main/assets/ -- and exempting any path with a /build/ segment
+# turns the ignored-input probe straight back into a clean-source bypass. An ignored
+# app/src/main/assets/build/x.apk still lands in the signed APK.
+#
+# New module output roots must be added here deliberately; the default is "not generated",
+# which fails toward a false +dirty rather than a false clean.
+_GENERATED_ROOTS = (
+    ".gradle",
+    ".idea",
+    ".kotlin",
+    "build",
+    "app/build",
+    "app/.cxx",
+)
 
 
 def is_build_input(path):
@@ -160,13 +176,12 @@ def is_build_input(path):
 
 
 def is_generated(path):
-    """Is this a build output or cache rather than a build input?"""
-    path = path.strip().lstrip("./")
-    return (
-        path.startswith(_GENERATED_PREFIXES)
-        or "/build/" in path
-        or path.endswith("/build")
-    )
+    """Is this AT or INSIDE a registered build-output/cache root?
+
+    Exact-root containment only -- never a substring or suffix test. See _GENERATED_ROOTS.
+    """
+    path = path.strip().rstrip("/")
+    return any(path == root or path.startswith(root + "/") for root in _GENERATED_ROOTS)
 
 
 def format_line(apk_name, apk_sha256, source, jdk, gradle, source_binding):

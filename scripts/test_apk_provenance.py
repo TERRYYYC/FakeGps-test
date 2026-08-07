@@ -468,6 +468,45 @@ class RealGitIgnoreSemanticsTest(unittest.TestCase):
             "build outputs are produced BY the build and must not count, got {}".format(state),
         )
 
+    def test_a_source_directory_merely_NAMED_build_is_not_a_generated_root(self):
+        # Second-order regression. Once the ignored probe was sound, an over-broad
+        # generated-output classifier re-opened the same bypass: is_generated() matched
+        # any path containing a /build/ segment, so an ignored
+        # app/src/main/assets/build/hidden.apk was exempted and the source read back clean
+        # -- while the file still shipped inside the signed APK.
+        #
+        # app/src/main/assets/ is a real packaged directory in this repo (it carries
+        # xposed_init), so this is a live path, not a contrived one.
+        root = self.make_repo()
+        nested = root / "app" / "src" / "main" / "assets" / "build"
+        nested.mkdir(parents=True)
+        (nested / "hidden.apk").write_text("payload under a directory merely named build")
+
+        import subprocess
+
+        visible = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=str(root), stdout=subprocess.PIPE
+        ).stdout.decode()
+        self.assertEqual("", visible.strip(), "precondition: git must not see the file")
+
+        state = prov._source_state(prov._run, root)
+        self.assertTrue(
+            state.endswith("+dirty"),
+            "a source dir named 'build' is not a generated root; got {}".format(state),
+        )
+
+    def test_generated_roots_are_matched_exactly_not_by_substring(self):
+        self.assertTrue(prov.is_generated("app/build"))
+        self.assertTrue(prov.is_generated("app/build/"))
+        self.assertTrue(prov.is_generated("app/build/outputs/apk/release/app-release.apk"))
+        self.assertTrue(prov.is_generated("build/reports/x.html"))
+        self.assertTrue(prov.is_generated(".gradle/file-system.probe"))
+        # ...and the paths that must NOT be exempted:
+        self.assertFalse(prov.is_generated("app/src/main/assets/build/hidden.apk"))
+        self.assertFalse(prov.is_generated("app/src/main/java/build/Foo.java"))
+        self.assertFalse(prov.is_generated("app/buildsrc/Thing.kt"))
+        self.assertFalse(prov.is_generated("app/src/build"))
+
     def test_an_ignored_class_file_outside_build_still_counts(self):
         root = self.make_repo()
         assets = root / "app" / "src" / "main" / "assets"
