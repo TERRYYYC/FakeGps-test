@@ -2123,12 +2123,20 @@ class HookUtils {
                     s.latitude, s.longitude, latOf(outgoing), lonOf(outgoing));
             String intercepted = DeliveryEvidencePolicy.classifyInput(
                     s.latitude, s.longitude, latOf(incoming), lonOf(incoming));
+            // Both axes enter the gate. Keying on `delivered` alone made the edge trigger
+            // dead where it mattered: the outgoing value is built from the same snapshot it
+            // is compared against, so that axis is near-constant, while `input` -- the one
+            // that actually varies -- never fired an edge.
+            //
             // elapsedRealtime, not wall clock: a time sync must not be able to move the
             // heartbeat window backwards and silence healthy deliveries.
-            int covered = gate.record(delivered, SystemClock.elapsedRealtime());
-            if (covered >= 0) {
+            DeliveryEvidencePolicy.Emission e =
+                    gate.record(delivered, intercepted, SystemClock.elapsedRealtime());
+            if (e != null) {
+                // The emission's own tokens, never this delivery's: a line must name the
+                // run it closes, or its count silently spans states it did not cover.
                 XposedBridge.log(RuntimeEvidence.fusedDelivered(
-                        surface, delivered, intercepted, covered));
+                        surface, e.delivered, e.input, e.deliveries));
             }
         } catch (Throwable ignored) {
             // Evidence must never break delivery.

@@ -17,6 +17,11 @@ import org.junit.Test;
  */
 public class DeliveryEvidencePolicyTest {
 
+    /** -1 marks "intentionally silent" so the existing gate assertions stay readable. */
+    private static int covered(DeliveryEvidencePolicy.Emission e) {
+        return e == null ? -1 : e.deliveries;
+    }
+
     // ---- classification ----
 
     @Test
@@ -66,51 +71,51 @@ public class DeliveryEvidencePolicyTest {
     @Test
     public void firstDeliveryAlwaysEmits() {
         DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
-        assertEquals(1, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 1_000L));
+        assertEquals(1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 1_000L)));
     }
 
     @Test
     public void steadyStateDeliveriesStaySilentUntilHeartbeat() {
         DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
-        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 0L);
-        assertEquals(-1, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 1_000L));
-        assertEquals(-1, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 29_999L));
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L);
+        assertEquals(-1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 1_000L)));
+        assertEquals(-1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 29_999L)));
     }
 
     @Test
     public void heartbeatEmitsAndReportsSuppressedDeliveryCount() {
         DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
-        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 0L);
-        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 10_000L);
-        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 20_000L);
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L);
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 10_000L);
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 20_000L);
         // 3 deliveries covered by this heartbeat: the two silent ones plus this one.
-        assertEquals(3, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 30_000L));
+        assertEquals(3, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 30_000L)));
     }
 
     @Test
     public void classificationChangeEmitsImmediatelyEvenInsideHeartbeatWindow() {
         DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
-        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 0L);
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L);
         // A revert must never wait for the heartbeat: this is the snap-back detector.
-        assertEquals(1, p.record(DeliveryEvidencePolicy.NOT_EQUAL, 500L));
+        assertEquals(1, covered(p.record(DeliveryEvidencePolicy.NOT_EQUAL, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 500L)));
     }
 
     @Test
     public void countResetsAfterEachEmission() {
         DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
-        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 0L);
-        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 10_000L);
-        assertEquals(2, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 30_000L));
-        assertEquals(-1, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 31_000L));
-        assertEquals(2, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 60_000L));
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L);
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 10_000L);
+        assertEquals(2, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 30_000L)));
+        assertEquals(-1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 31_000L)));
+        assertEquals(2, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 60_000L)));
     }
 
     @Test
     public void separateSurfacesDoNotShareGateState() {
         DeliveryEvidencePolicy a = new DeliveryEvidencePolicy();
         DeliveryEvidencePolicy b = new DeliveryEvidencePolicy();
-        assertEquals(1, a.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 0L));
-        assertEquals(1, b.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 0L));
+        assertEquals(1, covered(a.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L)));
+        assertEquals(1, covered(b.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L)));
     }
 
     // ---- P2-1: the input classification is a SEPARATE, honestly named axis ----
@@ -153,6 +158,77 @@ public class DeliveryEvidencePolicyTest {
                 DeliveryEvidencePolicy.classifyInput(50.45, 30.52, 50.45, 30.52));
     }
 
+    // ---- P2: a two-axis event needs a two-axis gate ----
+    //
+    // Review finding: the gate keyed on the delivered axis alone. That axis is near-constant
+    // by construction -- the outgoing Location is built from the same snapshot it is
+    // compared against -- so the edge trigger was effectively dead on `input`, the axis that
+    // actually varies. Worse, the emitted line pairs the CURRENT input with an ACCUMULATED
+    // delivery count, so one line could claim N deliveries shared an input state they did
+    // not. That is a mis-attribution in the very evidence #15's 4b/4c/4d depend on.
+
+    @Test
+    public void reviewerReproductionInputEdgesAreNoLongerSwallowed() {
+        // Exactly the sequence reproduced against the previous exact-HEAD artifact:
+        //   t=0     EQUALS/DIFFERS -> 1
+        //   t=1000  EQUALS/ABSENT  -> was -1 (swallowed)
+        //   t=30000 EQUALS/EQUALS  -> was 2  (claimed 2 deliveries shared input=EQUALS,
+        //                                     though one of them was ABSENT)
+        DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
+        assertEquals(1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L)));
+        assertEquals(1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_ABSENT, 1_000L)));
+        assertEquals(1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_EQUALS_PROFILE, 30_000L)));
+    }
+
+    @Test
+    public void anEmittedLineOnlyEverNamesTheRunItCloses() {
+        // The count is only meaningful if every delivery it covers shared BOTH axes, so the
+        // tokens must travel WITH the count. Printing the caller's current input against an
+        // accumulated count is precisely how one line came to claim N deliveries shared a
+        // state they did not.
+        DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L);
+        assertEquals(-1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 1_000L)));
+        assertEquals(-1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 2_000L)));
+
+        // Input flips. The two suppressed deliveries were DIFFERS, so the line that fires
+        // must be labelled DIFFERS and count exactly those two -- never ABSENT.
+        DeliveryEvidencePolicy.Emission closingDiffers = p.record(
+                DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_ABSENT, 3_000L);
+        assertEquals(2, closingDiffers.deliveries);
+        assertEquals(DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, closingDiffers.input);
+        assertEquals(DeliveryEvidencePolicy.EQUALS_PROFILE, closingDiffers.delivered);
+
+        // Flips back. Now the ABSENT run is the one being closed, and it held one delivery.
+        DeliveryEvidencePolicy.Emission closingAbsent = p.record(
+                DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 4_000L);
+        assertEquals(1, closingAbsent.deliveries);
+        assertEquals(DeliveryEvidencePolicy.INPUT_ABSENT, closingAbsent.input);
+    }
+
+    @Test
+    public void onlyBothAxesUnchangedStaysSilent() {
+        DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L);
+        // delivered changes -> emit
+        assertEquals(1, covered(p.record(DeliveryEvidencePolicy.NOT_EQUAL,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 100L)));
+        // input changes -> emit
+        assertEquals(1, covered(p.record(DeliveryEvidencePolicy.NOT_EQUAL,
+                DeliveryEvidencePolicy.INPUT_ABSENT, 200L)));
+        // neither changes -> silent
+        assertEquals(-1, covered(p.record(DeliveryEvidencePolicy.NOT_EQUAL,
+                DeliveryEvidencePolicy.INPUT_ABSENT, 300L)));
+    }
+
     // ---- P3: heartbeat must not depend on a settable wall clock ----
 
     @Test
@@ -162,17 +238,17 @@ public class DeliveryEvidencePolicyTest {
         // healthy deliveries would go silent and re-create the exact "silence == stopped"
         // ambiguity this policy exists to remove.
         DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
-        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 1_000_000L);
-        assertEquals(1, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 5_000L));
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 1_000_000L);
+        assertEquals(1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 5_000L)));
     }
 
     @Test
     public void backwardsJumpRebasesTheWindowInsteadOfLatchingOpen() {
         DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
-        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 1_000_000L);
-        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 5_000L);
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 1_000_000L);
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 5_000L);
         // After rebasing, normal suppression resumes; it must not emit on every delivery.
-        assertEquals(-1, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 6_000L));
-        assertEquals(2, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 35_000L));
+        assertEquals(-1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 6_000L)));
+        assertEquals(2, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 35_000L)));
     }
 }

@@ -58,7 +58,31 @@ final class DeliveryEvidencePolicy {
 
     static final long HEARTBEAT_MS = 30_000L;
 
-    private String lastEmitted;
+    /**
+     * One evidence line: the tokens it describes and how many deliveries it covers.
+     *
+     * <p>The tokens travel WITH the count on purpose. Gating on the delivered axis alone
+     * and then printing the caller's current input against an accumulated count let one
+     * line claim that N deliveries shared an input state they did not — a mis-attribution
+     * in exactly the evidence #15's continuous-update / recenter / foreground-background
+     * scenarios rely on. A line may only ever name the run it closes.
+     */
+    static final class Emission {
+        final String delivered;
+        final String input;
+        final int deliveries;
+
+        Emission(String delivered, String input, int deliveries) {
+            this.delivered = delivered;
+            this.input = input;
+            this.deliveries = deliveries;
+        }
+    }
+
+    // Two fields rather than a composite key: unambiguous by construction, with no
+    // separator that a future token could collide with.
+    private String runDelivered;
+    private String runInput;
     private long lastEmitMs;
     private int pending;
 
@@ -94,24 +118,45 @@ final class DeliveryEvidencePolicy {
      * @return the number of deliveries the resulting evidence line covers, or {@code -1}
      *         when this delivery is intentionally silent.
      */
-    synchronized int record(String classification, long nowMs) {
+    synchronized Emission record(String delivered, String input, long nowMs) {
+        if (runDelivered == null) {
+            runDelivered = delivered;
+            runInput = input;
+            lastEmitMs = nowMs;
+            pending = 0;
+            return new Emission(delivered, input, 1);
+        }
+
+        boolean changed = !runDelivered.equals(delivered) || !runInput.equals(input);
+        if (changed) {
+            // The suppressed deliveries belong to the run that just ENDED, so they are
+            // reported under that run's tokens. Gating on one axis made this invisible:
+            // `delivered` is near-constant by construction (the outgoing value is built
+            // from the very snapshot it is compared against), so `input` -- the axis that
+            // actually varies -- never triggered an edge at all.
+            Emission closing = pending > 0
+                    ? new Emission(runDelivered, runInput, pending)
+                    : new Emission(delivered, input, 1);
+            runDelivered = delivered;
+            runInput = input;
+            lastEmitMs = nowMs;
+            pending = (pending > 0) ? 1 : 0;
+            return closing;
+        }
+
         pending++;
-        boolean first = lastEmitted == null;
-        boolean changed = !first && !lastEmitted.equals(classification);
         // A clock that moved backwards would leave (now - last) negative for as long as the
         // jump, muting healthy deliveries and re-creating the "silence == stopped" ambiguity
         // this policy exists to remove. Callers pass a monotonic clock; treating a backwards
         // step as heartbeat-due keeps the guarantee even if one does not, and rebases the
         // window so suppression resumes immediately afterwards rather than latching open.
         long elapsed = nowMs - lastEmitMs;
-        boolean heartbeat = !first && (elapsed < 0 || elapsed >= HEARTBEAT_MS);
-        if (first || changed || heartbeat) {
-            int covered = pending;
+        if (elapsed < 0 || elapsed >= HEARTBEAT_MS) {
+            Emission beat = new Emission(runDelivered, runInput, pending);
             pending = 0;
-            lastEmitted = classification;
             lastEmitMs = nowMs;
-            return covered;
+            return beat;
         }
-        return -1;
+        return null;
     }
 }

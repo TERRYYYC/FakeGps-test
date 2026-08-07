@@ -76,6 +76,22 @@ public class DeliveryEvidenceWiringContractTest {
     }
 
     @Test
+    public void bothAxesEnterTheGateAndTheLineNamesTheRunItCloses() throws Exception {
+        String body = methodBody(readSource(HOOK_UTILS), "void recordDelivery(");
+        // Gating on `delivered` alone left the edge trigger dead: that axis is near-constant
+        // by construction, so `input` -- the axis that varies -- never fired one.
+        assertTrue("both axes are gated",
+                body.contains("gate.record(delivered, intercepted,"));
+        // And the emitted line must carry the emission's own tokens. Printing the caller's
+        // current values against an accumulated count is how one line came to claim N
+        // deliveries shared a state they did not.
+        assertTrue("logs the emission's tokens", body.contains("e.delivered")
+                && body.contains("e.input") && body.contains("e.deliveries"));
+        assertEquals("must not log the current delivery's tokens", 0,
+                countOccurrences(body, "fusedDelivered(\n                        surface, delivered, intercepted"));
+    }
+
+    @Test
     public void heartbeatUsesAMonotonicClock() throws Exception {
         String body = methodBody(readSource(HOOK_UTILS), "void recordDelivery(");
         assertTrue("elapsedRealtime cannot be moved backwards by a time sync",
