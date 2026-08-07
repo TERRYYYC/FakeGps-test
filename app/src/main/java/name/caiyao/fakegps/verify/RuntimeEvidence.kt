@@ -101,11 +101,23 @@ object RuntimeEvidence {
      * plus on a heartbeat (see DeliveryEvidencePolicy), and [deliveries] reports how many
      * deliveries the line covers.
      *
-     * Stays value-free by construction: [classification] is one of EQUALS_PROFILE /
-     * NOT_EQUAL / NO_OBSERVED, never a coordinate.
+     * Two disjoint axes, because they answer different questions and one vocabulary serving
+     * both inverted the verdict once already:
+     *  - [classification] describes what the target app RECEIVED (EQUALS_PROFILE /
+     *    NOT_EQUAL / NO_OBSERVED). This is what "delivered" means; a snap-back shows here.
+     *  - [input] describes what it would have received WITHOUT the hook
+     *    (INPUT_EQUALS_PROFILE / INPUT_DIFFERS_PROFILE / INPUT_ABSENT). INPUT_DIFFERS is a
+     *    positive fact — proof a real update was displaced — never a failure.
+     *
+     * Stays value-free by construction: both axes are fixed tokens, never a coordinate.
      */
     @JvmStatic
-    fun fusedDelivered(surface: String, classification: String, deliveries: Int): String =
+    fun fusedDelivered(
+        surface: String,
+        classification: String,
+        input: String,
+        deliveries: Int,
+    ): String =
         "$HOOK_PREFIX event=fused_delivered surface=$surface" +
-            " class=$classification deliveries=$deliveries"
+            " class=$classification input=$input deliveries=$deliveries"
 }

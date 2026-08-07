@@ -27,9 +27,27 @@ package name.caiyao.fakegps.hook;
  */
 final class DeliveryEvidencePolicy {
 
+    /**
+     * Delivery axis: what the target app actually received. These tokens describe the
+     * OUTGOING value only.
+     */
     static final String EQUALS_PROFILE = "EQUALS_PROFILE";
     static final String NOT_EQUAL = "NOT_EQUAL";
     static final String NO_OBSERVED = "NO_OBSERVED";
+
+    /**
+     * Interception axis: what the app would have received without the hook. Deliberately a
+     * DISJOINT vocabulary.
+     *
+     * <p>The first cut reused the delivery tokens for this question, which inverted the
+     * verdict: a healthy interception (real update displaced by the profile) emitted
+     * NOT_EQUAL, and the acceptance harness reads NOT_EQUAL as a snap-back. Differing input
+     * is a positive fact — it is the proof the hook is doing work — so it gets a name that
+     * cannot be mistaken for a delivery failure.
+     */
+    static final String INPUT_EQUALS_PROFILE = "INPUT_EQUALS_PROFILE";
+    static final String INPUT_DIFFERS_PROFILE = "INPUT_DIFFERS_PROFILE";
+    static final String INPUT_ABSENT = "INPUT_ABSENT";
 
     /**
      * Sub-millimetre at any latitude: comfortably above the drift of round-tripping a
@@ -58,6 +76,19 @@ final class DeliveryEvidencePolicy {
     }
 
     /**
+     * Classify what the delivery would have carried WITHOUT the hook. Separate vocabulary
+     * from {@link #classify} on purpose — see the INPUT_* constants.
+     */
+    static String classifyInput(Double expectedLat, Double expectedLon,
+                                Double incomingLat, Double incomingLon) {
+        if (expectedLat == null || expectedLon == null) return INPUT_ABSENT;
+        if (incomingLat == null || incomingLon == null) return INPUT_ABSENT;
+        boolean same = Math.abs(expectedLat - incomingLat) <= EPSILON_DEG
+                && Math.abs(expectedLon - incomingLon) <= EPSILON_DEG;
+        return same ? INPUT_EQUALS_PROFILE : INPUT_DIFFERS_PROFILE;
+    }
+
+    /**
      * Record one delivery on this surface.
      *
      * @return the number of deliveries the resulting evidence line covers, or {@code -1}
@@ -67,7 +98,13 @@ final class DeliveryEvidencePolicy {
         pending++;
         boolean first = lastEmitted == null;
         boolean changed = !first && !lastEmitted.equals(classification);
-        boolean heartbeat = !first && (nowMs - lastEmitMs) >= HEARTBEAT_MS;
+        // A clock that moved backwards would leave (now - last) negative for as long as the
+        // jump, muting healthy deliveries and re-creating the "silence == stopped" ambiguity
+        // this policy exists to remove. Callers pass a monotonic clock; treating a backwards
+        // step as heartbeat-due keeps the guarantee even if one does not, and rebases the
+        // window so suppression resumes immediately afterwards rather than latching open.
+        long elapsed = nowMs - lastEmitMs;
+        boolean heartbeat = !first && (elapsed < 0 || elapsed >= HEARTBEAT_MS);
         if (first || changed || heartbeat) {
             int covered = pending;
             pending = 0;

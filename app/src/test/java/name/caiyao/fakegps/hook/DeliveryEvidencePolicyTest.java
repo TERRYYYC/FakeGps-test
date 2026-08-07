@@ -112,4 +112,67 @@ public class DeliveryEvidencePolicyTest {
         assertEquals(1, a.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 0L));
         assertEquals(1, b.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 0L));
     }
+
+    // ---- P2-1: the input classification is a SEPARATE, honestly named axis ----
+    //
+    // Review finding: classifying the pre-replacement input and labelling it
+    // EQUALS_PROFILE/NOT_EQUAL inverts the verdict — a healthy interception (real input
+    // replaced by the profile) reported NOT_EQUAL, which the A/B harness reads as a
+    // snap-back. The delivered value is what the surface promises to describe; the input
+    // is separately useful but must never borrow the delivery tokens.
+
+    @Test
+    public void interceptedRealInputIsAPositiveFactNotADeliveryFailure() {
+        assertEquals(
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE,
+                DeliveryEvidencePolicy.classifyInput(50.45, 30.52, 37.77, -122.41));
+    }
+
+    @Test
+    public void inputAlreadyMatchingProfileIsReportedSeparately() {
+        assertEquals(
+                DeliveryEvidencePolicy.INPUT_EQUALS_PROFILE,
+                DeliveryEvidencePolicy.classifyInput(50.45, 30.52, 50.45, 30.52));
+    }
+
+    @Test
+    public void absentInputIsItsOwnTokenNotADeliveryToken() {
+        assertEquals(
+                DeliveryEvidencePolicy.INPUT_ABSENT,
+                DeliveryEvidencePolicy.classifyInput(50.45, 30.52, null, null));
+    }
+
+    @Test
+    public void inputTokensNeverCollideWithDeliveryTokens() {
+        // The whole defect was one vocabulary serving two questions.
+        assertNotEquals(
+                DeliveryEvidencePolicy.NOT_EQUAL,
+                DeliveryEvidencePolicy.classifyInput(50.45, 30.52, 37.77, -122.41));
+        assertNotEquals(
+                DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.classifyInput(50.45, 30.52, 50.45, 30.52));
+    }
+
+    // ---- P3: heartbeat must not depend on a settable wall clock ----
+
+    @Test
+    public void clockGoingBackwardsStillHeartbeats() {
+        // System time sync / manual change can move wall clock backwards. With a plain
+        // (now - last >= HEARTBEAT) test that stays negative for as long as the jump,
+        // healthy deliveries would go silent and re-create the exact "silence == stopped"
+        // ambiguity this policy exists to remove.
+        DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 1_000_000L);
+        assertEquals(1, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 5_000L));
+    }
+
+    @Test
+    public void backwardsJumpRebasesTheWindowInsteadOfLatchingOpen() {
+        DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 1_000_000L);
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 5_000L);
+        // After rebasing, normal suppression resumes; it must not emit on every delivery.
+        assertEquals(-1, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 6_000L));
+        assertEquals(2, p.record(DeliveryEvidencePolicy.EQUALS_PROFILE, 35_000L));
+    }
 }
