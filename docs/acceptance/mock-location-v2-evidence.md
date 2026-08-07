@@ -23,8 +23,14 @@ created: 2026-08-03
 - Latest-master implementation and acceptance-script HEAD: `2145122`
 - Device: moto g54 5G, serial `ZY22JHW9M4`, Android 15
 - Lab APK: `app/build/outputs/apk/mockProvider/app-mockProvider.apk`
-- Lab APK SHA-256:
+- Lab APK SHA-256（**构建 JDK 未记录**）:
   `a98341b9b87420851eba9b32d27ed1f746b0d0cde031a37acd590c83936a2542`
+
+> 本条 hash 早于 `docs/bug-report/debug-apk-hash-jdk-drift/bug-report.md` 记录的教训，
+> 采集时未绑定 Gradle runtime JDK，且已无法事后确定当时的 JDK——所以这里只标注"未记录"，
+> 不倒推、不补填一个看似合理的版本号。它只在原构建环境内有意义，**不可**作为跨环境
+> artifact identity 使用；任何比对若得到不同 hash，都不构成"源码不一致"的证据。
+> 新证据一律由 `scripts/apk_provenance.py` 产出，该工具在结构上无法输出不带 JDK 的 hash。
 - Installed-app backup:
   `/Users/terry/Desktop/coding/backup/mock-location-v2-2026-08-03/README.md`
 - Private device screenshot:

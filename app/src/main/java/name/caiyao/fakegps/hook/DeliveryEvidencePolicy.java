@@ -65,7 +65,10 @@ final class DeliveryEvidencePolicy {
      * and then printing the caller's current input against an accumulated count let one
      * line claim that N deliveries shared an input state they did not — a mis-attribution
      * in exactly the evidence #15's continuous-update / recenter / foreground-background
-     * scenarios rely on. A line may only ever name the run it closes.
+     * scenarios rely on. The invariant that removes it: a line's tokens describe EVERY
+     * delivery that line counts. That holds whether the line closes a finished run
+     * (count = its suppressed deliveries), opens a new state (count = 1), or beats an
+     * ongoing one — never a count drawn from one state and tokens drawn from another.
      */
     static final class Emission {
         final String delivered;
@@ -73,10 +76,15 @@ final class DeliveryEvidencePolicy {
         final int deliveries;
 
         /**
-         * A state change owes TWO lines: the run that just ended, and the state that just
-         * began. Chaining them keeps the common (single-line) path allocation-free while
-         * making the edge visible in the same callback -- a sparse or one-shot surface may
-         * never deliver again, and a deferred edge is an edge that never existed.
+         * Non-null only when one callback owes TWO facts: a run that just ended still
+         * holding suppressed deliveries, chained to the state that just began. A change
+         * whose previous run owed nothing (no suppressed deliveries) reports the opening
+         * line alone, with {@code next} null.
+         *
+         * <p>Chaining rather than returning a collection keeps every emission free of a
+         * container allocation, while still making the edge visible in the same callback
+         * -- a sparse or one-shot surface may never deliver again, and a deferred edge is
+         * an edge that never existed.
          */
         final Emission next;
 
@@ -124,9 +132,11 @@ final class DeliveryEvidencePolicy {
     /**
      * Record one delivery on this surface.
      *
-     * @return the evidence line(s) this delivery produces -- a state change yields the
-     *         closing run chained to the newly opened one -- or {@code null} when the
-     *         delivery is intentionally silent.
+     * @return the evidence line(s) this delivery produces, or {@code null} when the
+     *         delivery is intentionally silent. A state change whose previous run still
+     *         held suppressed deliveries returns that closing line chained to the newly
+     *         opened one; a change with nothing left to close returns the opening line
+     *         alone. See {@link Emission#next}.
      */
     synchronized Emission record(String delivered, String input, long nowMs) {
         if (runDelivered == null) {
