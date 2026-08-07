@@ -142,6 +142,10 @@ _BUILD_INPUT_PREFIXES = ("app/", "gradle/")
 _BUILD_INPUT_EXACT = ("gradle.properties", "settings.gradle", "settings.gradle.kts")
 _BUILD_INPUT_SUFFIXES = (".gradle", ".gradle.kts", ".pro")
 
+# Gradle's own outputs and caches. These live under build-input paths but are produced BY
+# the build, so counting them as dirt would make every post-build tree unsignable.
+_GENERATED_PREFIXES = ("build/", ".gradle/", ".cxx/", ".kotlin/", ".idea/")
+
 
 def is_build_input(path):
     """Can this repo-relative path change the APK's bytes?"""
@@ -152,6 +156,16 @@ def is_build_input(path):
         path.startswith(_BUILD_INPUT_PREFIXES)
         or path in _BUILD_INPUT_EXACT
         or path.endswith(_BUILD_INPUT_SUFFIXES)
+    )
+
+
+def is_generated(path):
+    """Is this a build output or cache rather than a build input?"""
+    path = path.strip().lstrip("./")
+    return (
+        path.startswith(_GENERATED_PREFIXES)
+        or "/build/" in path
+        or path.endswith("/build")
     )
 
 
@@ -224,10 +238,20 @@ def _run(args, cwd):
 
 def _source_state(run, repo_root):
     head = run(["git", "rev-parse", "HEAD"], repo_root).strip()
-    # --untracked-files=all, not =no. An untracked app/src/**.java still compiles into the
-    # APK, so hiding it behind "git calls it untracked" would let the line claim a clean
-    # source=<HEAD> for bytes HEAD does not describe.
-    porcelain = run(["git", "status", "--porcelain", "--untracked-files=all"], repo_root)
+    # --untracked-files=all is still not enough: it omits IGNORED files, and this repo
+    # globally ignores *.apk, *.dex and *.class -- all of which are legitimate packaged
+    # assets under app/src/main/assets/. A file planted there is invisible to plain
+    # `git status`, ships inside the signed APK, and would leave the line claiming a clean
+    # source=<HEAD> for bytes HEAD does not describe. So ask for ignored entries too.
+    #
+    # --ignored=matching (not =traditional) because it collapses wholly-ignored roots to
+    # `.gradle/`, `app/build/`, `build/` while still surfacing an individually-ignored
+    # file like app/src/main/assets/hidden.apk. traditional expands those roots into
+    # thousands of lines instead.
+    porcelain = run(
+        ["git", "status", "--porcelain", "--untracked-files=all", "--ignored=matching"],
+        repo_root,
+    )
     dirty = False
     for line in porcelain.splitlines():
         if len(line) < 4:
@@ -236,8 +260,9 @@ def _source_state(run, repo_root):
         if " -> " in path:  # rename: the destination is what exists now
             path = path.split(" -> ", 1)[1]
         path = path.strip().strip('"')
-        if code == "??":
-            if is_build_input(path):
+        if code in ("??", "!!"):
+            # Ignored build outputs are produced BY the build; only inputs count.
+            if is_build_input(path) and not is_generated(path):
                 dirty = True
         else:
             # Any tracked modification means HEAD no longer describes the tree.
@@ -269,9 +294,12 @@ def collect(repo_root, apk_path, run=_run, read_text=None, build_task=None):
                 "signable tasks: {}".format(build_task, ", ".join(sorted(BUILD_TARGETS)))
             )
         expected = repo_root / BUILD_TARGETS[build_task]
-        if apk_path is not None and Path(apk_path).resolve() != expected.resolve():
+        if apk_path is not None:
+            # Refused even when it happens to match. Accepting an equal path would make
+            # the contract "checked but not used", and a reader cannot tell from the
+            # emitted line which of the two sources of truth was honoured.
             raise ProvenanceError(
-                "--build derives the artifact from the task ({}); a caller-supplied path "
+                "--build derives the artifact from the task ({}); passing a path as well "
                 "is a second source of truth and is refused".format(expected)
             )
 
@@ -328,9 +356,16 @@ def collect(repo_root, apk_path, run=_run, read_text=None, build_task=None):
         raise ProvenanceError("cannot identify build JDK at {}: {}".format(release_path, exc))
 
     implementor, version = parse_release_file(release_text)
+    try:
+        apk_sha256 = sha256_file(apk)
+    except OSError as exc:
+        # is_file() passing does not mean the bytes are readable: permissions, a race with
+        # a concurrent build, or plain I/O error. Letting OSError escape would exit 1 with
+        # a traceback, breaking the exit-2 harness contract this module promises.
+        raise ProvenanceError("cannot read {}: {}".format(apk, exc))
     return format_line(
         apk_name=apk.name,
-        apk_sha256=sha256_file(apk),
+        apk_sha256=apk_sha256,
         source=source,
         jdk=jdk_token(implementor, version),
         gradle=gradle_version,

@@ -252,6 +252,35 @@ class CollectTest(unittest.TestCase):
         with self.assertRaises(prov.ProvenanceError):
             prov.collect(".", "/nonexistent/app.apk", run=self.fake_run())
 
+    def test_an_unreadable_apk_becomes_a_provenance_error_not_a_raw_oserror(self):
+        # is_file() passing does not mean the bytes are readable: permissions, a race with
+        # a concurrent build, plain I/O error. A raw OSError escapes main()'s handler and
+        # exits 1 with a traceback, breaking the exit-2 contract this module advertises.
+        #
+        # NOTE this must reach sha256_file to mean anything. An earlier cut of this test
+        # ran through main() in an env with no JAVA_HOME, died at `gradlew --version`, and
+        # passed for entirely the wrong reason.
+        import tempfile
+
+        original = prov.sha256_file
+        reached = []
+
+        def boom(path, **kwargs):
+            reached.append(path)
+            raise OSError("read denied")
+
+        prov.sha256_file = boom
+        self.addCleanup(setattr, prov, "sha256_file", original)
+
+        with tempfile.NamedTemporaryFile(suffix=".apk") as apk:
+            apk.write(b"payload")
+            apk.flush()
+            with self.assertRaises(prov.ProvenanceError):
+                prov.collect(
+                    ".", apk.name, run=self.fake_run(), read_text=lambda p: JBR_RELEASE
+                )
+        self.assertEqual(1, len(reached), "the test never reached the hashing step")
+
     def test_without_a_build_the_source_claim_self_labels_as_assumed(self):
         # Reading the tree now does not prove the APK came from it: build at A, check out
         # B, run this, and A's bytes would be labelled B. The line must say so.
@@ -270,35 +299,6 @@ class CollectTest(unittest.TestCase):
             line = fx.collect(build_task=":app:assembleRelease")
         self.assertIn("source_binding=built", line)
         self.assertIn("apk=app-release.apk", line)
-
-    def test_a_tree_that_moves_mid_build_yields_no_line_at_all(self):
-        # Neither the before-sha nor the after-sha honestly describes those bytes, so
-        # there is no correct line to emit -- and a wrong one would be worse than none.
-        import tempfile
-
-        # One rev-parse per source read: once before the build, once after.
-        heads = iter([HEAD, "b" * 40])
-
-        def run(args, cwd):
-            if args[0] == "git" and args[1] == "rev-parse":
-                return next(heads) + "\n"
-            if args[0] == "git" and args[1] == "status":
-                return ""
-            if args[0] == "./gradlew":
-                return GRADLE_OUT
-            raise AssertionError("unexpected command {}".format(args))
-
-        with tempfile.NamedTemporaryFile(suffix=".apk") as apk:
-            apk.write(b"payload")
-            apk.flush()
-            with self.assertRaises(prov.ProvenanceError):
-                prov.collect(
-                    ".",
-                    apk.name,
-                    run=run,
-                    read_text=lambda p: JBR_RELEASE,
-                    build_task=":app:assembleRelease",
-                )
 
 
 class BuiltBindingTest(unittest.TestCase):
@@ -322,6 +322,14 @@ class BuiltBindingTest(unittest.TestCase):
             (fx.root / "gradlew").write_bytes(b"#!/bin/sh\n")
             with self.assertRaises(prov.ProvenanceError):
                 fx.collect(build_task=":app:assembleRelease", apk_path=str(fx.root / "gradlew"))
+
+    def test_even_a_matching_caller_path_is_refused(self):
+        # Accepting it "because it agrees" leaves the contract as "checked but not used",
+        # and a reader of the emitted line cannot tell which source of truth was honoured.
+        with BuildFixture() as fx:
+            matching = fx.root / prov.BUILD_TARGETS[":app:assembleRelease"]
+            with self.assertRaises(prov.ProvenanceError):
+                fx.collect(build_task=":app:assembleRelease", apk_path=str(matching))
 
     def test_a_task_that_produces_nothing_yields_no_line(self):
         with BuildFixture(produces=False) as fx:
@@ -385,7 +393,99 @@ class BuiltBindingTest(unittest.TestCase):
             )
 
 
+class RealGitIgnoreSemanticsTest(unittest.TestCase):
+    """Drives real `git status` against a real repo, not a hand-written porcelain string.
+
+    A mocked '??' line cannot catch this class of bug, because the bug IS that git never
+    reports the file. This repo globally ignores *.apk / *.dex / *.class, and those are
+    legitimate packaged assets under app/src/main/assets/ -- so a planted asset is
+    invisible to plain `git status`, ships inside the signed APK, and previously left the
+    line claiming a clean source.
+    """
+
+    def make_repo(self):
+        import subprocess
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+
+        def git(*args):
+            subprocess.run(
+                ["git"] + list(args),
+                cwd=str(root),
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+        git("init", "-q")
+        git("config", "user.email", "test@example.invalid")
+        git("config", "user.name", "test")
+        # The real ignore rules that made the bypass possible.
+        (root / ".gitignore").write_text("*.apk\n*.dex\n*.class\n.gradle/\nbuild/\n")
+        (root / "app").mkdir()
+        (root / "app" / "build.gradle").write_text("// app\n")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        return root
+
+    def test_an_ignored_asset_under_app_src_still_dirties_the_source(self):
+        root = self.make_repo()
+        assets = root / "app" / "src" / "main" / "assets"
+        assets.mkdir(parents=True)
+        (assets / "hidden.apk").write_text("payload that ships inside the signed APK")
+
+        import subprocess
+
+        visible = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(root),
+            stdout=subprocess.PIPE,
+        ).stdout.decode()
+        self.assertEqual("", visible.strip(), "precondition: git must not see the file")
+
+        state = prov._source_state(prov._run, root)
+        self.assertTrue(
+            state.endswith("+dirty"),
+            "an ignored but packaged asset must taint the source, got {}".format(state),
+        )
+
+    def test_generated_build_outputs_do_not_dirty_the_source(self):
+        # The other half: after any build, app/build/ is full of ignored files. Counting
+        # those would make every post-build tree permanently unsignable.
+        root = self.make_repo()
+        out = root / "app" / "build" / "outputs" / "apk" / "release"
+        out.mkdir(parents=True)
+        (out / "app-release.apk").write_text("a legitimate build output")
+        (root / ".gradle").mkdir()
+        (root / ".gradle" / "cache.bin").write_text("cache")
+
+        state = prov._source_state(prov._run, root)
+        self.assertFalse(
+            state.endswith("+dirty"),
+            "build outputs are produced BY the build and must not count, got {}".format(state),
+        )
+
+    def test_an_ignored_class_file_outside_build_still_counts(self):
+        root = self.make_repo()
+        assets = root / "app" / "src" / "main" / "assets"
+        assets.mkdir(parents=True)
+        (assets / "Payload.class").write_text("cafebabe")
+        self.assertTrue(prov._source_state(prov._run, root).endswith("+dirty"))
+
+
 class MainTest(unittest.TestCase):
+    def test_build_and_a_path_together_are_rejected_at_the_cli(self):
+        emitted = []
+        code = prov.main(
+            ["--build", ":app:assembleRelease", "app/build/outputs/apk/release/app-release.apk"],
+            emit=emitted.append,
+        )
+        self.assertEqual(2, code)
+        self.assertEqual([], emitted)
+
     def test_harness_error_exits_2_and_prints_nothing_to_stdout(self):
         # Fail closed: a non-zero exit with an empty stdout is unusable as evidence,
         # which is the intent. A partial line would have looked usable.

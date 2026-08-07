@@ -77,9 +77,11 @@ APK_PROVENANCE apk=<name> apk_sha256=<64hex> source=<40hex>[+dirty] source_bindi
 
 ```sh
 JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
-  python3 scripts/apk_provenance.py --build :app:assembleRelease \
-    app/build/outputs/apk/release/app-release.apk
+  python3 scripts/apk_provenance.py --build :app:assembleRelease
 ```
+
+**不传产物路径**——`--build` 从任务推导产物，同时传路径会被拒绝（exit 2），即使它恰好相同。
+理由见下面第 6 点：两个真相源并存时，读证据行的人无法判断当时采信了哪一个。
 
 让"忘记标注"不可表达的几个设计点：
 
@@ -110,7 +112,8 @@ JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
    - 该产物在构建前被**清除**，构建后**重新出现**——只有"重现"才是因果证据，"构建后文件存在"
      会被任意旧构建的陈旧产物满足；
    - 构建前树 **clean**，构建后 source 未变；
-   - 产物路径由**任务推导**，不接受调用方传入（两个真相源就是那个洞）。
+   - 产物路径由**任务推导**，调用方传路径一律拒绝——**包括恰好相同的路径**。放行"反正一致"
+     会把契约变成"校验了但不使用"，而读证据行的人无从判断当时采信了哪个真相源。
 
    `source_binding` 字段必填且受校验：一条证据行不允许对"绑定是实测还是假定"保持沉默，因为
    沉默会被读成实测。结构上还禁止 `built` 与 `+dirty` 同时出现。
@@ -120,6 +123,20 @@ JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
    描述那些字节。现按 `is_build_input()` 判定：`app/`、`gradle/`、`*.gradle`、`gradle.properties`
    等算输入；docs / 治理文件 / 草稿不算——把后者也当脏会让任何真实 checkout 永远无法签发。
 
+8. **被 ignore 的文件同样要看**：`--untracked-files=all` **仍然漏**，因为它不含 ignored 条目，
+   而本仓库全局 ignore 了 `*.apk` / `*.dex` / `*.class`——这三种恰恰是 `app/src/main/assets/`
+   下的合法打包资产。review 实证：往 `app/src/main/assets/` 放一个 `.apk`，`git status` 全程
+   为空，工具照签 `built`，而 `unzip -l` 证明该文件**确实在已签名的 APK 里**。
+
+   现在改用 `git status --porcelain --untracked-files=all --ignored=matching`。选 `matching`
+   而非 `traditional`：前者把整体被忽略的根 collapse 成 `.gradle/`、`app/build/`、`build/`
+   三行，同时仍单独列出 `app/src/main/assets/hidden.apk`；后者会把那些根展开成上千行。
+   ignored 条目再经 `is_generated()` 排除构建产物与缓存——它们由构建**产生**，若算作脏，任何
+   构建完的树都将永远无法签发。
+
+   对应回归测试跑的是**真实 git 仓库与真实 ignore 语义**，不是手写的 porcelain 字符串——因为
+   这个缺陷的本质就是 git 从不报告该文件，mock 一行 `??` 永远发现不了它。
+
 ### claim ceiling（引用时的上限）
 
 - `source_binding=built` —— **可**作为"这些字节由该 exact clean source 在该 JDK 下构建"的凭证。
@@ -127,8 +144,8 @@ JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
   "在采集时刻，仓库处于 `source=` 所述状态"，与该 APK 的来源**无因果关联**。对已安装 /
   第三方 / 无法观测构建过程的 artifact，这是**正确**的声明，不是降级；但发布证据必须用 `built`。
 
-契约测试见 `scripts/test_apk_provenance.py`（35 项，其中 `BuiltBindingTest` 是上述击穿用例的
-回归套件）。
+契约测试见 `scripts/test_apk_provenance.py`（40 项）。其中 `BuiltBindingTest` 是 `built` 因果性
+击穿用例的回归套件，`RealGitIgnoreSemanticsTest` 驱动真实 git 仓库验证 ignore 语义。
 
 **仍未关闭的部分**：本轮**没有**固定 Gradle runtime JDK。`gradle.properties` 无
 `org.gradle.java.home`，也没有 `java { toolchain { } }`，`gradlew` 仍取环境 `JAVA_HOME`——漂移
