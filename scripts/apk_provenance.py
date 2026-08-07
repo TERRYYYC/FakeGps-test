@@ -22,12 +22,18 @@ The JDK reported is the **daemon** JVM -- the one that actually runs javac and D
 from ``gradlew --version`` and then identified from that JDK's own ``release`` file,
 rather than from an ambient ``java -version`` that may not be the JVM Gradle used.
 
-One honesty note the line carries itself. Reading the tree at *invocation* time does not
-prove the APK came from that tree: build at commit A, check out B, run this, and A's bytes
-would be labelled B. So ``--build`` brackets a real Gradle task between two source reads
-and refuses if the tree moved, emitting ``source_binding=built``; without it the line says
-``source_binding=asserted``, which is the correct claim for an APK whose build this
-process never observed. Prefer ``--build`` for anything that becomes release evidence.
+One honesty note the line carries itself, in ``source_binding``.
+
+``built`` is the release credential and means all four of: the task is one with a declared
+output; that output did not exist when the build started and does exist now, so this build
+produced these bytes; the tree was clean before and unchanged after; and the artifact path
+came from the task, never from the caller. Bracketing alone was NOT enough -- an earlier
+cut accepted any task with any file and happily signed the Gradle wrapper script as
+``built``, because holding the tree still says nothing about the bytes being hashed.
+
+``asserted`` is what remains when this process did not observe the build: an installed or
+third-party APK. It is the correct claim for those, not a weaker grade of the same claim,
+and it is NOT an exact-source binding -- do not quote it as one.
 
 Exit codes follow the harness convention: 0 emitted, 2 harness error.
 """
@@ -119,6 +125,35 @@ def source_token(head_sha, dirty):
 BINDING_BUILT = "built"
 BINDING_ASSERTED = "asserted"
 
+# The ONLY tasks that may sign anything, each mapped to the single artifact it is allowed
+# to vouch for. An open task/path pair is what let `--build help gradlew` sign the Gradle
+# wrapper script as `built`: bracketing a build proves the tree held still, never that the
+# hashed bytes came out of it. Deriving the path from the task -- and refusing any task
+# without a declared output -- removes the whole class.
+BUILD_TARGETS = {
+    ":app:assembleDebug": "app/build/outputs/apk/debug/app-debug.apk",
+    ":app:assembleRelease": "app/build/outputs/apk/release/app-release.apk",
+}
+
+# Untracked files that can still reach the APK. Everything else (docs, governance files,
+# scratch notes) provably cannot, and treating those as dirt would make every real
+# checkout permanently unsignable.
+_BUILD_INPUT_PREFIXES = ("app/", "gradle/")
+_BUILD_INPUT_EXACT = ("gradle.properties", "settings.gradle", "settings.gradle.kts")
+_BUILD_INPUT_SUFFIXES = (".gradle", ".gradle.kts", ".pro")
+
+
+def is_build_input(path):
+    """Can this repo-relative path change the APK's bytes?"""
+    path = path.strip()
+    if not path:
+        return False
+    return (
+        path.startswith(_BUILD_INPUT_PREFIXES)
+        or path in _BUILD_INPUT_EXACT
+        or path.endswith(_BUILD_INPUT_SUFFIXES)
+    )
+
 
 def format_line(apk_name, apk_sha256, source, jdk, gradle, source_binding):
     """Assemble the one evidence line -- or raise. The single sanctioned producer.
@@ -144,6 +179,10 @@ def format_line(apk_name, apk_sha256, source, jdk, gradle, source_binding):
         raise ProvenanceError("bad gradle version: {!r}".format(gradle))
     if source_binding not in (BINDING_BUILT, BINDING_ASSERTED):
         raise ProvenanceError("bad source_binding: {!r}".format(source_binding))
+    if source_binding == BINDING_BUILT and source.endswith(_DIRTY_SUFFIX):
+        raise ProvenanceError(
+            "'built' is the release credential and cannot be issued off a dirty tree"
+        )
     return "{} apk={} apk_sha256={} source={} source_binding={} jdk={} gradle={}".format(
         TOKEN, apk_name, apk_sha256, source, source_binding, jdk, gradle
     )
@@ -185,8 +224,26 @@ def _run(args, cwd):
 
 def _source_state(run, repo_root):
     head = run(["git", "rev-parse", "HEAD"], repo_root).strip()
-    # Tracked-file dirtiness only: untracked scratch files do not change build inputs.
-    dirty = bool(run(["git", "status", "--porcelain", "--untracked-files=no"], repo_root).strip())
+    # --untracked-files=all, not =no. An untracked app/src/**.java still compiles into the
+    # APK, so hiding it behind "git calls it untracked" would let the line claim a clean
+    # source=<HEAD> for bytes HEAD does not describe.
+    porcelain = run(["git", "status", "--porcelain", "--untracked-files=all"], repo_root)
+    dirty = False
+    for line in porcelain.splitlines():
+        if len(line) < 4:
+            continue
+        code, path = line[:2], line[3:]
+        if " -> " in path:  # rename: the destination is what exists now
+            path = path.split(" -> ", 1)[1]
+        path = path.strip().strip('"')
+        if code == "??":
+            if is_build_input(path):
+                dirty = True
+        else:
+            # Any tracked modification means HEAD no longer describes the tree.
+            dirty = True
+        if dirty:
+            break
     return source_token(head, dirty)
 
 
@@ -206,19 +263,56 @@ def collect(repo_root, apk_path, run=_run, read_text=None, build_task=None):
     repo_root = Path(repo_root)
 
     if build_task:
+        if build_task not in BUILD_TARGETS:
+            raise ProvenanceError(
+                "{!r} has no declared output, so it can vouch for nothing; "
+                "signable tasks: {}".format(build_task, ", ".join(sorted(BUILD_TARGETS)))
+            )
+        expected = repo_root / BUILD_TARGETS[build_task]
+        if apk_path is not None and Path(apk_path).resolve() != expected.resolve():
+            raise ProvenanceError(
+                "--build derives the artifact from the task ({}); a caller-supplied path "
+                "is a second source of truth and is refused".format(expected)
+            )
+
         before = _source_state(run, repo_root)
+        if before.endswith(_DIRTY_SUFFIX):
+            raise ProvenanceError(
+                "refusing to build release evidence from a dirty tree ({}); commit or "
+                "stash first".format(before)
+            )
+
+        # Clear the target so that its REAPPEARANCE is the proof. Without this, "the file
+        # exists afterwards" is satisfied by a stale artifact from any earlier build of
+        # any earlier source.
+        try:
+            expected.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise ProvenanceError("cannot clear {} before building: {}".format(expected, exc))
+
         run(["./gradlew", build_task, "--console=plain"], repo_root)
+
         after = _source_state(run, repo_root)
         if before != after:
             raise ProvenanceError(
                 "source changed during the build ({} -> {}); the APK cannot be bound to "
                 "either state".format(before, after)
             )
-        source, binding = after, BINDING_BUILT
+        if not expected.is_file():
+            raise ProvenanceError(
+                "{} did not produce {}; there is no artifact to sign".format(
+                    build_task, expected
+                )
+            )
+        apk, source, binding = expected, after, BINDING_BUILT
     else:
+        if apk_path is None:
+            raise ProvenanceError("an APK path is required without --build")
+        apk = Path(apk_path)
         source, binding = _source_state(run, repo_root), BINDING_ASSERTED
 
-    apk = Path(apk_path)
     if not apk.is_file():
         raise ProvenanceError("no such APK: {}".format(apk))
 
@@ -246,7 +340,11 @@ def collect(repo_root, apk_path, run=_run, read_text=None, build_task=None):
 
 def main(argv=None, emit=print):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("apk", help="path to the built APK")
+    parser.add_argument(
+        "apk",
+        nargs="?",
+        help="path to an existing APK (omit with --build, which derives it from the task)",
+    )
     parser.add_argument(
         "--repo-root",
         default=str(Path(__file__).resolve().parents[1]),
@@ -256,9 +354,9 @@ def main(argv=None, emit=print):
         "--build",
         metavar="TASK",
         help=(
-            "run this Gradle task first and bracket it with two source reads, so the "
-            "emitted source= is observed rather than assumed "
-            "(e.g. --build :app:assembleRelease). Strongly preferred for release evidence."
+            "build this task from a clean tree and sign the artifact it declares "
+            "(e.g. --build :app:assembleRelease). The output is cleared first, so only "
+            "its reappearance counts. Required for release evidence."
         ),
     )
     args = parser.parse_args(argv)

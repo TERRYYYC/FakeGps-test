@@ -8,6 +8,7 @@ same question: can a caller still get a hash out of this module without its buil
 """
 
 import unittest
+from pathlib import Path
 
 from scripts import apk_provenance as prov
 
@@ -27,6 +28,59 @@ OS:            Mac OS X 26.5.2 aarch64
 """
 
 JBR_RELEASE = 'JAVA_VERSION="21.0.10"\nIMPLEMENTOR="JetBrains s.r.o."\n'
+
+
+class BuildFixture:
+    """A throwaway repo whose fake Gradle really writes the task's declared output.
+
+    The previous fixture hashed a tempfile no build ever touched, which is exactly how a
+    contract that signs unrelated files got pinned green. Here the artifact only exists
+    if the fake build produced it, so 'built' has something real to be wrong about.
+    """
+
+    def __init__(self, produces=True, porcelain="", moves_tree=False):
+        self.produces = produces
+        self.porcelain = porcelain
+        self.moves_tree = moves_tree
+        self.tasks_run = []
+
+    def __enter__(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self._heads = iter([HEAD, "b" * 40] if self.moves_tree else [HEAD, HEAD, HEAD])
+        return self
+
+    def __exit__(self, *exc):
+        self._tmp.cleanup()
+        return False
+
+    def run(self, args, cwd):
+        if args[0] == "git" and args[1] == "rev-parse":
+            return next(self._heads) + "\n"
+        if args[0] == "git" and args[1] == "status":
+            return self.porcelain
+        if args[0] == "./gradlew" and "--version" in args:
+            return GRADLE_OUT
+        if args[0] == "./gradlew":
+            self.tasks_run.append(args[1])
+            if self.produces:
+                out = self.root / prov.BUILD_TARGETS[args[1]]
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(b"fresh apk bytes")
+            return ""
+        raise AssertionError("unexpected command {}".format(args))
+
+    def plant_stale_artifact(self, task):
+        out = self.root / prov.BUILD_TARGETS[task]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"STALE bytes from an older build")
+        return out
+
+    def collect(self, **kwargs):
+        kwargs.setdefault("read_text", lambda p: JBR_RELEASE)
+        return prov.collect(self.root, kwargs.pop("apk_path", None), run=self.run, **kwargs)
 
 
 class ParseDaemonJavaHomeTest(unittest.TestCase):
@@ -125,7 +179,10 @@ class FormatLineTest(unittest.TestCase):
                 self.line(apk_sha256=bad)
 
     def test_dirty_source_still_formats_but_stays_marked(self):
-        self.assertIn("source=" + HEAD + "+dirty", self.line(source=HEAD + "+dirty"))
+        self.assertIn(
+            "source=" + HEAD + "+dirty",
+            self.line(source=HEAD + "+dirty", source_binding=prov.BINDING_ASSERTED),
+        )
 
     def test_the_strength_of_the_source_claim_is_itself_a_required_field(self):
         # A line may not stay silent about whether its source binding was observed or
@@ -209,19 +266,10 @@ class CollectTest(unittest.TestCase):
         self.assertIn("source_binding=asserted", line)
 
     def test_building_here_upgrades_the_claim_to_observed(self):
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(suffix=".apk") as apk:
-            apk.write(b"payload")
-            apk.flush()
-            line = prov.collect(
-                ".",
-                apk.name,
-                run=self.fake_run(),
-                read_text=lambda p: JBR_RELEASE,
-                build_task=":app:assembleRelease",
-            )
+        with BuildFixture() as fx:
+            line = fx.collect(build_task=":app:assembleRelease")
         self.assertIn("source_binding=built", line)
+        self.assertIn("apk=app-release.apk", line)
 
     def test_a_tree_that_moves_mid_build_yields_no_line_at_all(self):
         # Neither the before-sha nor the after-sha honestly describes those bytes, so
@@ -251,6 +299,90 @@ class CollectTest(unittest.TestCase):
                     read_text=lambda p: JBR_RELEASE,
                     build_task=":app:assembleRelease",
                 )
+
+
+class BuiltBindingTest(unittest.TestCase):
+    """`built` must mean THIS build produced THIS file from an exact clean source.
+
+    Regression suite for the review finding that `--build help gradlew` exited 0 and
+    signed the Gradle wrapper script as `source_binding=built`. Bracketing the build with
+    two source reads only proves the tree held still; it proves nothing about the bytes
+    being hashed.
+    """
+
+    def test_an_unrecognised_task_cannot_sign_anything(self):
+        # `help` builds no artifact, so there is no artifact it could vouch for.
+        with BuildFixture() as fx:
+            with self.assertRaises(prov.ProvenanceError):
+                fx.collect(build_task="help")
+
+    def test_the_hashed_file_is_derived_from_the_task_not_supplied_by_the_caller(self):
+        # Accepting a caller-supplied path is what let an unrelated file ride along.
+        with BuildFixture() as fx:
+            (fx.root / "gradlew").write_bytes(b"#!/bin/sh\n")
+            with self.assertRaises(prov.ProvenanceError):
+                fx.collect(build_task=":app:assembleRelease", apk_path=str(fx.root / "gradlew"))
+
+    def test_a_task_that_produces_nothing_yields_no_line(self):
+        with BuildFixture(produces=False) as fx:
+            with self.assertRaises(prov.ProvenanceError):
+                fx.collect(build_task=":app:assembleRelease")
+
+    def test_a_stale_artifact_left_by_an_earlier_build_cannot_be_signed_as_built(self):
+        # The killing case: the output already exists, so "it exists afterwards" is not
+        # evidence. It must be cleared first, and only its REAPPEARANCE counts.
+        with BuildFixture(produces=False) as fx:
+            stale = fx.plant_stale_artifact(":app:assembleRelease")
+            stale_sha = __import__("hashlib").sha256(stale.read_bytes()).hexdigest()
+            with self.assertRaises(prov.ProvenanceError):
+                fx.collect(build_task=":app:assembleRelease")
+            self.assertNotIn(stale_sha, "")
+
+    def test_a_fresh_build_overwriting_a_stale_artifact_hashes_the_fresh_bytes(self):
+        with BuildFixture(produces=True) as fx:
+            stale = fx.plant_stale_artifact(":app:assembleRelease")
+            stale_sha = __import__("hashlib").sha256(stale.read_bytes()).hexdigest()
+            line = fx.collect(build_task=":app:assembleRelease")
+        self.assertNotIn(stale_sha, line)
+        self.assertIn("source_binding=built", line)
+
+    def test_release_evidence_refuses_a_dirty_tree(self):
+        # `built` is the release credential; it may not be issued off a modified tree.
+        with BuildFixture(porcelain=" M app/src/main/java/X.java\n") as fx:
+            with self.assertRaises(prov.ProvenanceError):
+                fx.collect(build_task=":app:assembleRelease")
+
+    def test_an_untracked_build_input_is_dirt_even_though_git_calls_it_untracked(self):
+        # --untracked-files=no hid these: an untracked app/src file still compiles into
+        # the APK, so a clean `source=<HEAD>` would be a false claim.
+        with BuildFixture(porcelain="?? app/src/main/java/Sneaky.java\n") as fx:
+            with self.assertRaises(prov.ProvenanceError):
+                fx.collect(build_task=":app:assembleRelease")
+
+    def test_untracked_non_build_input_does_not_taint_the_source(self):
+        # Governance files and scratch notes provably cannot enter the APK; treating them
+        # as dirt would make every real checkout permanently unsignable.
+        with BuildFixture(porcelain="?? BACKLOG.md\n?? .claude/settings.json\n") as fx:
+            line = fx.collect(build_task=":app:assembleRelease")
+        self.assertIn("source=" + HEAD + " ", line)
+        self.assertIn("source_binding=built", line)
+
+    def test_a_tree_that_moves_mid_build_still_yields_no_line(self):
+        with BuildFixture(moves_tree=True) as fx:
+            with self.assertRaises(prov.ProvenanceError):
+                fx.collect(build_task=":app:assembleRelease")
+
+    def test_built_and_dirty_can_never_appear_on_the_same_line(self):
+        # Structural backstop independent of the collection path.
+        with self.assertRaises(prov.ProvenanceError):
+            prov.format_line(
+                apk_name="app-release.apk",
+                apk_sha256=APK_SHA,
+                source=HEAD + "+dirty",
+                jdk="JetBrains-s.r.o.@21.0.10",
+                gradle="9.3.1",
+                source_binding=prov.BINDING_BUILT,
+            )
 
 
 class MainTest(unittest.TestCase):

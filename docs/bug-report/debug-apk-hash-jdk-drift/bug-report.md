@@ -97,14 +97,38 @@ JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
    `key=value` 行文法。此点由测试逼出——首版把它当字段，结果在本轮基线这个最常见环境下
    直接失败。
 
-6. **source 绑定的强度写在行里**：读取调用时刻的工作树并不能证明 APK 出自该树——在 commit A
-   构建、切到 B、再跑本工具，A 的字节就会被标成 B。所以 `--build` 把真实 Gradle 任务夹在
-   两次 source 读取之间，树在构建期间移动就拒绝出行，记 `source_binding=built`；不带
-   `--build` 时只能记 `source_binding=asserted`。这个字段是必填且受校验的：一条证据行不允许
-   对"绑定是实测还是假定"保持沉默，因为沉默会被读成实测。已安装 / 第三方 APK 没有可观测的
-   构建过程，`asserted` 是它们**正确**的声明，不是降级。
+6. **source 绑定的强度写在行里，且 `built` 必须证明因果**：读取调用时刻的工作树并不能证明
+   APK 出自该树——在 commit A 构建、切到 B、再跑本工具，A 的字节就会被标成 B。
 
-契约测试见 `scripts/test_apk_provenance.py`（25 项）。
+   第一版只做了"两次 source 读取夹住构建"，**这不够**，并在 review 中被实证击穿：
+   `--build help gradlew` 退出 0，把 Gradle wrapper 脚本签成了 `built`。夹住构建只证明树没动，
+   对被哈希的字节一无所知。
+
+   现在 `built` 同时意味着四件事，缺一不可：
+
+   - 任务在 `BUILD_TARGETS` 白名单内，**有声明产物**（没有产物的任务无从担保任何东西）；
+   - 该产物在构建前被**清除**，构建后**重新出现**——只有"重现"才是因果证据，"构建后文件存在"
+     会被任意旧构建的陈旧产物满足；
+   - 构建前树 **clean**，构建后 source 未变；
+   - 产物路径由**任务推导**，不接受调用方传入（两个真相源就是那个洞）。
+
+   `source_binding` 字段必填且受校验：一条证据行不允许对"绑定是实测还是假定"保持沉默，因为
+   沉默会被读成实测。结构上还禁止 `built` 与 `+dirty` 同时出现。
+
+7. **untracked 也算脏——只要它是构建输入**：`--untracked-files=no` 会漏掉未跟踪的
+   `app/src/**`，而它照样编进 APK，于是行里会出现一个"clean `source=<HEAD>`"，但 HEAD 并不
+   描述那些字节。现按 `is_build_input()` 判定：`app/`、`gradle/`、`*.gradle`、`gradle.properties`
+   等算输入；docs / 治理文件 / 草稿不算——把后者也当脏会让任何真实 checkout 永远无法签发。
+
+### claim ceiling（引用时的上限）
+
+- `source_binding=built` —— **可**作为"这些字节由该 exact clean source 在该 JDK 下构建"的凭证。
+- `source_binding=asserted` —— **不是** exact-source binding，**不得**这样引用。它只声明
+  "在采集时刻，仓库处于 `source=` 所述状态"，与该 APK 的来源**无因果关联**。对已安装 /
+  第三方 / 无法观测构建过程的 artifact，这是**正确**的声明，不是降级；但发布证据必须用 `built`。
+
+契约测试见 `scripts/test_apk_provenance.py`（35 项，其中 `BuiltBindingTest` 是上述击穿用例的
+回归套件）。
 
 **仍未关闭的部分**：本轮**没有**固定 Gradle runtime JDK。`gradle.properties` 无
 `org.gradle.java.home`，也没有 `java { toolchain { } }`，`gradlew` 仍取环境 `JAVA_HOME`——漂移
