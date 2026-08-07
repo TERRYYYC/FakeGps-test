@@ -2,6 +2,9 @@ package name.caiyao.fakegps.hook;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -184,6 +187,49 @@ public class DeliveryEvidencePolicyTest {
     }
 
     @Test
+    public void aChangedStateIsVisibleInTheSameCallbackEvenWhenTheOldRunHasPending() {
+        // Closing the old run must not cost the new state its immediate visibility. On a
+        // sparse or one-shot surface there may be no later delivery and no heartbeat to
+        // carry it, so deferring the edge makes it permanently invisible -- rebuilding the
+        // very ambiguity this policy exists to remove, and contradicting the class contract
+        // that "a classification change is emitted immediately".
+        DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L);
+        assertEquals(-1, covered(p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 500L)));
+
+        DeliveryEvidencePolicy.Emission head = p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_ABSENT, 1_000L);
+        // The run that ended is reported under its own tokens...
+        assertEquals(DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, head.input);
+        assertEquals(1, head.deliveries);
+        // ...and the state that just began is reported in the SAME callback.
+        assertNotNull("the new edge must not wait for a later delivery", head.next);
+        assertEquals(DeliveryEvidencePolicy.INPUT_ABSENT, head.next.input);
+        assertEquals(DeliveryEvidencePolicy.EQUALS_PROFILE, head.next.delivered);
+        assertEquals(1, head.next.deliveries);
+    }
+
+    @Test
+    public void aOneShotSurfaceStillLeavesEvidenceForItsFinalState() {
+        // No heartbeat will ever arrive here. If the edge is not emitted on the spot, the
+        // ABSENT state simply never existed as far as the acceptance harness can tell.
+        DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L);
+        p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 500L);
+        DeliveryEvidencePolicy.Emission last = p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
+                DeliveryEvidencePolicy.INPUT_ABSENT, 1_000L);
+        boolean absentIsRepresented = false;
+        for (DeliveryEvidencePolicy.Emission e = last; e != null; e = e.next) {
+            if (DeliveryEvidencePolicy.INPUT_ABSENT.equals(e.input)) absentIsRepresented = true;
+        }
+        assertTrue("final state has no evidence line at all", absentIsRepresented);
+    }
+
+    @Test
     public void anEmittedLineOnlyEverNamesTheRunItCloses() {
         // The count is only meaningful if every delivery it covers shared BOTH axes, so the
         // tokens must travel WITH the count. Printing the caller's current input against an
@@ -204,13 +250,19 @@ public class DeliveryEvidencePolicyTest {
         assertEquals(2, closingDiffers.deliveries);
         assertEquals(DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, closingDiffers.input);
         assertEquals(DeliveryEvidencePolicy.EQUALS_PROFILE, closingDiffers.delivered);
+        // The closing line must not swallow the edge: ABSENT opens in the same callback.
+        assertNotNull(closingDiffers.next);
+        assertEquals(DeliveryEvidencePolicy.INPUT_ABSENT, closingDiffers.next.input);
 
-        // Flips back. Now the ABSENT run is the one being closed, and it held one delivery.
-        DeliveryEvidencePolicy.Emission closingAbsent = p.record(
+        // Flips back. ABSENT's only delivery was already reported when it opened, so there
+        // is no leftover run to close -- just the DIFFERS edge, alone and count=1. Asserting
+        // a stale ABSENT line here would re-pin the very defect this contract removed.
+        DeliveryEvidencePolicy.Emission reopened = p.record(
                 DeliveryEvidencePolicy.EQUALS_PROFILE,
                 DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 4_000L);
-        assertEquals(1, closingAbsent.deliveries);
-        assertEquals(DeliveryEvidencePolicy.INPUT_ABSENT, closingAbsent.input);
+        assertEquals(DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, reopened.input);
+        assertEquals(1, reopened.deliveries);
+        assertNull("nothing left to close", reopened.next);
     }
 
     @Test

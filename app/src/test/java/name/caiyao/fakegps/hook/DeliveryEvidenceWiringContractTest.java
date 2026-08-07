@@ -87,6 +87,9 @@ public class DeliveryEvidenceWiringContractTest {
         // deliveries shared a state they did not.
         assertTrue("logs the emission's tokens", body.contains("e.delivered")
                 && body.contains("e.input") && body.contains("e.deliveries"));
+        // A state change produces two lines. Logging only the head silently drops the newly
+        // opened edge, which on a sparse surface is never reported at all.
+        assertTrue("walks the whole emission chain", body.contains("e = e.next"));
         assertEquals("must not log the current delivery's tokens", 0,
                 countOccurrences(body, "fusedDelivered(\n                        surface, delivered, intercepted"));
     }

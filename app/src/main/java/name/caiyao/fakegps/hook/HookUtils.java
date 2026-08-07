@@ -2130,11 +2130,14 @@ class HookUtils {
             //
             // elapsedRealtime, not wall clock: a time sync must not be able to move the
             // heartbeat window backwards and silence healthy deliveries.
-            DeliveryEvidencePolicy.Emission e =
-                    gate.record(delivered, intercepted, SystemClock.elapsedRealtime());
-            if (e != null) {
+            // Every line in the chain, not just the head: a state change owes both the
+            // closing run and the newly opened edge, and dropping the tail defers the edge
+            // to a delivery that may never come.
+            for (DeliveryEvidencePolicy.Emission e =
+                            gate.record(delivered, intercepted, SystemClock.elapsedRealtime());
+                    e != null; e = e.next) {
                 // The emission's own tokens, never this delivery's: a line must name the
-                // run it closes, or its count silently spans states it did not cover.
+                // run it describes, or its count silently spans states it did not cover.
                 XposedBridge.log(RuntimeEvidence.fusedDelivered(
                         surface, e.delivered, e.input, e.deliveries));
             }

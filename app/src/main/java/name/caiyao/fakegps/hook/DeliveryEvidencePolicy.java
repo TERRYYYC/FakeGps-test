@@ -72,10 +72,19 @@ final class DeliveryEvidencePolicy {
         final String input;
         final int deliveries;
 
-        Emission(String delivered, String input, int deliveries) {
+        /**
+         * A state change owes TWO lines: the run that just ended, and the state that just
+         * began. Chaining them keeps the common (single-line) path allocation-free while
+         * making the edge visible in the same callback -- a sparse or one-shot surface may
+         * never deliver again, and a deferred edge is an edge that never existed.
+         */
+        final Emission next;
+
+        Emission(String delivered, String input, int deliveries, Emission next) {
             this.delivered = delivered;
             this.input = input;
             this.deliveries = deliveries;
+            this.next = next;
         }
     }
 
@@ -115,8 +124,9 @@ final class DeliveryEvidencePolicy {
     /**
      * Record one delivery on this surface.
      *
-     * @return the number of deliveries the resulting evidence line covers, or {@code -1}
-     *         when this delivery is intentionally silent.
+     * @return the evidence line(s) this delivery produces -- a state change yields the
+     *         closing run chained to the newly opened one -- or {@code null} when the
+     *         delivery is intentionally silent.
      */
     synchronized Emission record(String delivered, String input, long nowMs) {
         if (runDelivered == null) {
@@ -124,24 +134,26 @@ final class DeliveryEvidencePolicy {
             runInput = input;
             lastEmitMs = nowMs;
             pending = 0;
-            return new Emission(delivered, input, 1);
+            return new Emission(delivered, input, 1, null);
         }
 
         boolean changed = !runDelivered.equals(delivered) || !runInput.equals(input);
         if (changed) {
-            // The suppressed deliveries belong to the run that just ENDED, so they are
-            // reported under that run's tokens. Gating on one axis made this invisible:
-            // `delivered` is near-constant by construction (the outgoing value is built
-            // from the very snapshot it is compared against), so `input` -- the axis that
-            // actually varies -- never triggered an edge at all.
-            Emission closing = pending > 0
-                    ? new Emission(runDelivered, runInput, pending)
-                    : new Emission(delivered, input, 1);
+            // Two facts, two lines. The suppressed deliveries belong to the run that just
+            // ENDED, so they are reported under that run's tokens -- and the state that
+            // just BEGAN is reported here too, never deferred. Returning only the closing
+            // line hid the edge until the next change or heartbeat, which on a sparse or
+            // one-shot surface means it is never reported at all.
+            Emission opening = new Emission(delivered, input, 1, null);
+            Emission head = pending > 0
+                    ? new Emission(runDelivered, runInput, pending, opening)
+                    : opening;
             runDelivered = delivered;
             runInput = input;
             lastEmitMs = nowMs;
-            pending = (pending > 0) ? 1 : 0;
-            return closing;
+            // This delivery is already accounted for by `opening`.
+            pending = 0;
+            return head;
         }
 
         pending++;
@@ -152,7 +164,7 @@ final class DeliveryEvidencePolicy {
         // window so suppression resumes immediately afterwards rather than latching open.
         long elapsed = nowMs - lastEmitMs;
         if (elapsed < 0 || elapsed >= HEARTBEAT_MS) {
-            Emission beat = new Emission(runDelivered, runInput, pending);
+            Emission beat = new Emission(runDelivered, runInput, pending, null);
             pending = 0;
             lastEmitMs = nowMs;
             return beat;
