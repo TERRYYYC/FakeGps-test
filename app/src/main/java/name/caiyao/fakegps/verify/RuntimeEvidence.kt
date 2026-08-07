@@ -91,4 +91,33 @@ object RuntimeEvidence {
     @JvmStatic
     fun fusedListenerWrapped(taskClass: String): String =
         "$HOOK_PREFIX event=fused_listener_wrapped task=$taskClass"
+
+    /**
+     * Per-delivery evidence: proves a hooked surface is still delivering, and whether the
+     * value it was about to carry was still the active profile.
+     *
+     * Every other fused event above is install-time, so their absence cannot distinguish
+     * "delivering quietly" from "stopped delivering". This one is emitted edge-triggered
+     * plus on a heartbeat (see DeliveryEvidencePolicy), and [deliveries] reports how many
+     * deliveries the line covers.
+     *
+     * Two disjoint axes, because they answer different questions and one vocabulary serving
+     * both inverted the verdict once already:
+     *  - [classification] describes what the target app RECEIVED (EQUALS_PROFILE /
+     *    NOT_EQUAL / NO_OBSERVED). This is what "delivered" means; a snap-back shows here.
+     *  - [input] describes what it would have received WITHOUT the hook
+     *    (INPUT_EQUALS_PROFILE / INPUT_DIFFERS_PROFILE / INPUT_ABSENT). INPUT_DIFFERS is a
+     *    positive fact — proof a real update was displaced — never a failure.
+     *
+     * Stays value-free by construction: both axes are fixed tokens, never a coordinate.
+     */
+    @JvmStatic
+    fun fusedDelivered(
+        surface: String,
+        classification: String,
+        input: String,
+        deliveries: Int,
+    ): String =
+        "$HOOK_PREFIX event=fused_delivered surface=$surface" +
+            " class=$classification input=$input deliveries=$deliveries"
 }

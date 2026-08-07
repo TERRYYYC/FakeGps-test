@@ -95,4 +95,33 @@ class RuntimeEvidenceTest {
             RuntimeEvidence.fusedListenerWrapped("bkwo"),
         )
     }
+
+    @Test
+    fun `per-delivery evidence separates what we delivered from what we intercepted`() {
+        // class= describes the value the target app actually received.
+        // input= describes what it would have received without the hook.
+        // Steady healthy operation is class=EQUALS_PROFILE input=INPUT_DIFFERS_PROFILE:
+        // we are delivering the profile AND actively displacing real updates.
+        assertEquals(
+            "FakeGPS-Hook: event=fused_delivered surface=LAST_LOCATION_TASK" +
+                " class=EQUALS_PROFILE input=INPUT_DIFFERS_PROFILE deliveries=1",
+            RuntimeEvidence.fusedDelivered(
+                "LAST_LOCATION_TASK", "EQUALS_PROFILE", "INPUT_DIFFERS_PROFILE", 1,
+            ),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_delivered surface=CURRENT_LOCATION_TASK" +
+                " class=NOT_EQUAL input=INPUT_ABSENT deliveries=17",
+            RuntimeEvidence.fusedDelivered(
+                "CURRENT_LOCATION_TASK", "NOT_EQUAL", "INPUT_ABSENT", 17,
+            ),
+        )
+        // Both axes stay value-free: the line answers the question without carrying the
+        // coordinate that would answer it directly.
+        assertFalse(
+            RuntimeEvidence.fusedDelivered(
+                "SYSTEM_LISTENER", "EQUALS_PROFILE", "INPUT_DIFFERS_PROFILE", 17,
+            ).contains("22222"),
+        )
+    }
 }
