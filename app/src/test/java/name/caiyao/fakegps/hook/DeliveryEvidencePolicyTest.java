@@ -230,11 +230,12 @@ public class DeliveryEvidencePolicyTest {
     }
 
     @Test
-    public void anEmittedLineOnlyEverNamesTheRunItCloses() {
+    public void everyLinesTokensDescribeEveryDeliveryThatLineCounts() {
         // The count is only meaningful if every delivery it covers shared BOTH axes, so the
         // tokens must travel WITH the count. Printing the caller's current input against an
         // accumulated count is precisely how one line came to claim N deliveries shared a
-        // state they did not.
+        // state they did not. Note this is NOT "a line only ever closes a run": the last
+        // assertion below is an OPENING line, naming the state it just began with count 1.
         DeliveryEvidencePolicy p = new DeliveryEvidencePolicy();
         p.record(DeliveryEvidencePolicy.EQUALS_PROFILE,
                 DeliveryEvidencePolicy.INPUT_DIFFERS_PROFILE, 0L);

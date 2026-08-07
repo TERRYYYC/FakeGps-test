@@ -50,3 +50,63 @@ R3 没有引入脏源码或残留 build。差异来自未纳入旧 provenance �
 - `apksigner verify --print-certs`：两者证书 SHA-256 均为 `7a598cbe6fb816ba74f01b58e3f43b8ff0f463989157e590ebd86c89b53f7e41`。
 - APK 逐 entry SHA：仅 `classes3.dex` 与 `classes11.dex` 不同。
 - Fable5 已用 JDK 17 产物完成 R3 全链真机验收 exit 0；作者此前用 JBR 21 产物完成两次全链 exit 0。
+
+## 结构性根治（2026-08-07 追加）
+
+上面的"修复方案"只产出了一条**约定**：以后写 hash 要带 JDK。这条约定在 PR #21 的 review 中
+再次被违反——作者报了一个无 JDK 限定词的 `44fdb130…903812`，reviewer 两个环境各得一个不同
+hash，三者互不相同，重新触发同一场"是不是脏源码"的怀疑。同一个坑踩第二次，说明缺的不是提醒
+而是机制。
+
+审计当时的仓库状态，可以看出为什么约定必然失效：
+
+- 没有任何脚本产出过 APK hash 证据。唯一计算 APK sha256 的地方是
+  `scripts/test-hook.sh:247`，且只用于 install 幂等判断，算完即丢，从不打印。
+- `scripts/mock_provider_acceptance.sh` 这条主验收链安装 APK 时完全不做摘要。
+- 全仓库 `javaVersion` 只出现过一次，就是本报告第 2 行手打的那次。
+- 因此**每一个进入文档的 APK hash 都是人手算、人手贴的**，JDK 限定词是否出现完全取决于
+  当事人当时记不记得。
+
+修复：新增 `scripts/apk_provenance.py`，作为 APK 证据行的唯一合法产出口。
+
+```
+APK_PROVENANCE apk=<name> apk_sha256=<64hex> source=<40hex>[+dirty] source_binding=built|asserted jdk=<vendor>@<version> gradle=<ver>
+```
+
+发布证据用（一条命令完成构建 + 绑定）：
+
+```sh
+JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
+  python3 scripts/apk_provenance.py --build :app:assembleRelease \
+    app/build/outputs/apk/release/app-release.apk
+```
+
+让"忘记标注"不可表达的几个设计点：
+
+1. **单一装配口**：所有路径都汇入 `format_line()`，它逐字段校验后原子拼行；JDK 缺失或形如
+   `unknown` / `TODO` 一律抛异常。不存在能产出裸 hash 的代码路径。
+2. **失败即静默**：任一输入不可确定就不输出**任何**行，stderr 打 `HARNESS_ERROR`、exit 2。
+   半条线看起来像能用的证据，空输出不会。
+3. **取 daemon 而非 launcher JVM**：真正跑 javac/D8 的是 daemon。二者在设了
+   `org.gradle.java.home` 时不同，报 launcher 会把字节归给错误的编译器。JDK 身份从该 JDK 自己的
+   `release` 文件读取，不用可能并非 Gradle 所用的环境 `java -version`。
+4. **dirty 是后缀不是邻列**：`source=<sha>+dirty`。邻列 `tree=dirty` 在有人把 sha 复制进文档时
+   会被落下，后缀跟着 sha 走。
+5. **不收 JDK 路径**：它不是构建身份（JBR 21.0.10 在 `/opt` 与 `/Applications` 产出相同字节），
+   而真实路径含空格（`/Applications/Android Studio.app/…`）会破坏 harness 依赖的
+   `key=value` 行文法。此点由测试逼出——首版把它当字段，结果在本轮基线这个最常见环境下
+   直接失败。
+
+6. **source 绑定的强度写在行里**：读取调用时刻的工作树并不能证明 APK 出自该树——在 commit A
+   构建、切到 B、再跑本工具，A 的字节就会被标成 B。所以 `--build` 把真实 Gradle 任务夹在
+   两次 source 读取之间，树在构建期间移动就拒绝出行，记 `source_binding=built`；不带
+   `--build` 时只能记 `source_binding=asserted`。这个字段是必填且受校验的：一条证据行不允许
+   对"绑定是实测还是假定"保持沉默，因为沉默会被读成实测。已安装 / 第三方 APK 没有可观测的
+   构建过程，`asserted` 是它们**正确**的声明，不是降级。
+
+契约测试见 `scripts/test_apk_provenance.py`（25 项）。
+
+**仍未关闭的部分**：本轮**没有**固定 Gradle runtime JDK。`gradle.properties` 无
+`org.gradle.java.home`，也没有 `java { toolchain { } }`，`gradlew` 仍取环境 `JAVA_HOME`——漂移
+向量本身还在，只是现在每条证据都会如实记下自己落在哪一侧。按原"修复方案"最后一条，toolchain
+pin 属于独立的 build-system change，应单独提 PR 并重新 review，不混进功能 PR。
