@@ -1894,9 +1894,14 @@ class HookUtils {
                 (proxy, method, args) -> {
                     if (method.equals(delivery.listenerMethod)) {
                         Snapshot s = currentSnapshot();
+                        Object incoming = (args != null && args.length > 0) ? args[0] : null;
+                        if (s.hasLocation()) {
+                            recordDelivery(
+                                    TASK_DELIVERY_EVIDENCE, "LAST_LOCATION_TASK", s, incoming);
+                        }
                         Object value = s.hasLocation()
                                 ? createFakeLocation(s)
-                                : (args != null && args.length > 0 ? args[0] : null);
+                                : incoming;
                         try {
                             delivery.listenerMethod.invoke(listener, value);
                         } catch (Throwable t) {
@@ -1980,6 +1985,8 @@ class HookUtils {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
+                        recordDelivery(
+                                SYSTEM_LISTENER_EVIDENCE, "SYSTEM_LISTENER", s, param.args[0]);
                         param.args[0] = createFakeLocation(s);
                     }
                 }));
@@ -1992,6 +1999,13 @@ class HookUtils {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
+                        Object firstSeen = null;
+                        if (param.args[0] instanceof java.util.List) {
+                            java.util.List<?> batch = (java.util.List<?>) param.args[0];
+                            if (!batch.isEmpty()) firstSeen = batch.get(0);
+                        }
+                        recordDelivery(
+                                SYSTEM_BATCH_EVIDENCE, "SYSTEM_LISTENER_BATCH", s, firstSeen);
                         ArrayList<Location> fake = new ArrayList<>();
                         fake.add(createFakeLocation(s));
                         param.args[0] = fake;
@@ -2010,6 +2024,7 @@ class HookUtils {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Snapshot s = currentSnapshot();
                         if (!s.hasLocation()) return;
+                        recordDelivery(GMS_LISTENER_EVIDENCE, "GMS_LISTENER", s, param.args[0]);
                         param.args[0] = createFakeLocation(s);
                     }
                 }));
@@ -2047,6 +2062,46 @@ class HookUtils {
         if (s.bearing != null) l.setBearing(s.bearing);
 
         return l;
+    }
+
+    // ---- Per-delivery evidence (release-safe) ----
+    //
+    // The DEBUG trace above cannot ship: it fires on every spoof and prints a stack. This
+    // does ship, because DeliveryEvidencePolicy bounds it (edge-triggered + heartbeat) and
+    // the line carries a classification token instead of the coordinate.
+    //
+    // One gate per surface: a snap-back on the system listener must not be masked by a
+    // healthy fused task, and vice versa.
+    private static final DeliveryEvidencePolicy TASK_DELIVERY_EVIDENCE = new DeliveryEvidencePolicy();
+    private static final DeliveryEvidencePolicy GMS_LISTENER_EVIDENCE = new DeliveryEvidencePolicy();
+    private static final DeliveryEvidencePolicy SYSTEM_LISTENER_EVIDENCE = new DeliveryEvidencePolicy();
+    private static final DeliveryEvidencePolicy SYSTEM_BATCH_EVIDENCE = new DeliveryEvidencePolicy();
+
+    /**
+     * Classify the value a delivery was about to carry, and emit bounded evidence.
+     * Called immediately BEFORE the value is replaced, so {@code observed} is still the
+     * value the target app would have seen without us.
+     */
+    private static void recordDelivery(
+            DeliveryEvidencePolicy gate, String surface, Snapshot s, Object observed) {
+        try {
+            Double obsLat = null;
+            Double obsLon = null;
+            if (observed instanceof Location) {
+                Location seen = (Location) observed;
+                obsLat = seen.getLatitude();
+                obsLon = seen.getLongitude();
+            }
+            String classification =
+                    DeliveryEvidencePolicy.classify(s.latitude, s.longitude, obsLat, obsLon);
+            int covered = gate.record(classification, System.currentTimeMillis());
+            if (covered >= 0) {
+                XposedBridge.log(
+                        RuntimeEvidence.fusedDelivered(surface, classification, covered));
+            }
+        } catch (Throwable ignored) {
+            // Evidence must never break delivery.
+        }
     }
 
     /** Scan method args for a LocationListener instance (any position). */

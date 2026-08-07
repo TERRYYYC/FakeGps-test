@@ -95,4 +95,23 @@ class RuntimeEvidenceTest {
             RuntimeEvidence.fusedListenerWrapped("bkwo"),
         )
     }
+
+    @Test
+    fun `per-delivery evidence reports a classification and never a coordinate`() {
+        assertEquals(
+            "FakeGPS-Hook: event=fused_delivered surface=LAST_LOCATION_TASK" +
+                " class=EQUALS_PROFILE deliveries=1",
+            RuntimeEvidence.fusedDelivered("LAST_LOCATION_TASK", "EQUALS_PROFILE", 1),
+        )
+        assertEquals(
+            "FakeGPS-Hook: event=fused_delivered surface=SYSTEM_LISTENER" +
+                " class=NOT_EQUAL deliveries=17",
+            RuntimeEvidence.fusedDelivered("SYSTEM_LISTENER", "NOT_EQUAL", 17),
+        )
+        // The whole point of this event is that it answers "did a delivery happen and was it
+        // still the profile" WITHOUT ever carrying the coordinate that would answer it directly.
+        assertFalse(
+            RuntimeEvidence.fusedDelivered("SYSTEM_LISTENER", "NOT_EQUAL", 17).contains("22222"),
+        )
+    }
 }
