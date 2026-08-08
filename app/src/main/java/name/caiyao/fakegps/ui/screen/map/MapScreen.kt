@@ -106,7 +106,7 @@ fun MapScreen(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
         if (grants.values.any { it }) {
-            recenterMap(context, mapViewRef, vm, scope, snackbarHostState)
+            recenterMap(context, mapViewRef, vm::resolveRecenterTarget, scope, snackbarHostState)
         } else {
             scope.launch { snackbarHostState.showSnackbar("未授予定位权限，无法获取当前设备位置") }
         }
@@ -189,7 +189,7 @@ fun MapScreen(
                             recenterMap(
                                 context,
                                 mapViewRef,
-                                vm,
+                                vm::resolveRecenterTarget,
                                 scope,
                                 snackbarHostState,
                                 permLauncher,
@@ -397,16 +397,28 @@ private fun OsmMapView(
     AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 }
 
+/**
+ * INV-5: recentering must never mutate the map selection.
+ *
+ * The signature carries part of this. This function receives a [MapRecenterTarget] producer
+ * instead of the ViewModel, so `onMapTap` is not in scope here and a selection write *inside
+ * this function* fails to compile.
+ *
+ * It does not carry all of it: `() -> MapRecenterTarget` constrains the shape, not the purity.
+ * A call site could still pass a lambda that writes the selection before resolving. Call sites
+ * must therefore keep passing a side-effect-free producer — today both pass the bound reference
+ * `vm::resolveRecenterTarget`. That half is a review obligation, not a compiler guarantee.
+ */
 @SuppressLint("MissingPermission")
 private fun recenterMap(
     context: Context,
     mapView: MapView?,
-    vm: MapViewModel,
+    resolveTarget: () -> MapRecenterTarget,
     scope: kotlinx.coroutines.CoroutineScope,
     snackbar: SnackbarHostState,
     permLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>? = null,
 ) {
-    when (val target = vm.resolveRecenterTarget()) {
+    when (val target = resolveTarget()) {
         is MapRecenterTarget.EffectiveCoordinate -> {
             centerMap(mapView, target.latitude, target.longitude)
             val source = when (target.source) {
