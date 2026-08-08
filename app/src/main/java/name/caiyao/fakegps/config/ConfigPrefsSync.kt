@@ -54,6 +54,14 @@ object ConfigPrefsSync {
     private const val KEY_STATE_INITIALIZED = "state_initialized"
 
     /**
+     * Serializes the whole publication transaction. UI callers run [sync] on the main thread while
+     * MockProviderService runs it on its command executor; without this, two overlapping syncs could
+     * interleave payload A/B and outcome A/B across the split payload/outcome stores — e.g. A verifies
+     * B's now-readable file and then persists active=A over payload B.
+     */
+    private val PUBLISH_LOCK = Any()
+
+    /**
      * Transport payload version. Bumped from SpoofConfig's v1 typed schema to the flat field map.
      * The hook rejects a payload it cannot interpret rather than silently mis-reading it, and keeps
      * its last-known-good config instead of reverting to real device data mid-test.
@@ -88,80 +96,90 @@ object ConfigPrefsSync {
         clearIfMissing: Boolean = false,
     ): Boolean {
         Log.w(TAG, "sync() ENTER")
-        return try {
-            val prior = readPublishState(context)
-            val requestedProfileId = profileId ?: prior.activeProfileId
-            val built = buildFieldMapJson(context, requestedProfileId)
-            if (ConfigPublicationContract.shouldKeepLastGoodPayload(
-                    requestedProfileId = requestedProfileId,
-                    resolvedProfileId = built.profileId,
-                    clearIfMissing = clearIfMissing,
+        return synchronized(PUBLISH_LOCK) {
+            try {
+                // Acquire the transport FIRST — before ANY other access to PREFS_NAME — so the mode call
+                // runs Vector's checkMode redirect and the ContextImpl cache binds this name to the
+                // world-readable mirror. A MODE_PRIVATE open of PREFS_NAME beforehand (e.g. a legacy
+                // read) poisons that cache: getSharedPreferences reuses the cached private instance
+                // without re-running checkMode, so the transport silently downgrades to unreadable
+                // app-private storage while the hook keeps consuming the stale mirror.
+                var modeWorldReadableAccepted = true
+                @Suppress("DEPRECATION")
+                val transport = try {
+                    context.getSharedPreferences(PREFS_NAME, Context.MODE_WORLD_READABLE)
+                } catch (se: Throwable) {
+                    modeWorldReadableAccepted = false
+                    Log.e(TAG, "MODE_WORLD_READABLE rejected (${se.javaClass.simpleName}) — MODE_PRIVATE fallback", se)
+                    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                }
+
+                // Prior outcome comes from the private store ONLY (never PREFS_NAME). The active pointer
+                // migrates once from the legacy transport — read from the SAME transport instance so no
+                // extra MODE_PRIVATE open of PREFS_NAME can poison the cache.
+                val stored = readPublishState(context)
+                val priorActive =
+                    if (isPublishStateInitialized(context)) stored.activeProfileId
+                    else legacyActiveProfileId(transport)
+                val prior = stored.copy(activeProfileId = priorActive)
+
+                val requestedProfileId = profileId ?: prior.activeProfileId
+                val built = buildFieldMapJson(context, requestedProfileId)
+                if (ConfigPublicationContract.shouldKeepLastGoodPayload(
+                        requestedProfileId = requestedProfileId,
+                        resolvedProfileId = built.profileId,
+                        clearIfMissing = clearIfMissing,
+                    )
+                ) {
+                    Log.w(TAG, "profileId=$requestedProfileId temporarily unavailable; keeping last-good payload")
+                    markPublicationFailure(context)
+                    return@synchronized false
+                }
+                val jsonStr = built.json
+
+                // Durable outcome lives in a SEPARATE private store, written FAIL-CLOSED: the fail marker
+                // must be DURABLY committed before the payload is touched (else a prior success marker
+                // could outlive the new payload), and success is recorded only after verification and only
+                // if that write is itself durable.
+                val preMarkDurable =
+                    writePublishState(context, ConfigPublicationContract.preCommitFailClosed(prior))
+                if (!preMarkDurable) {
+                    Log.e(TAG, "pre-commit fail marker not durable; aborting before payload write")
+                    return@synchronized false
+                }
+
+                val committed = transport.edit().putString(KEY_JSON, jsonStr).commit()
+                // "MODE_WORLD_READABLE did not throw" is NOT proof the hook can read the file. Make our own
+                // committed file other-readable and verify — and reject an app-private path outright, since
+                // its 0664 bit is a false positive under a 0700 dir.
+                val crossProcessReadable =
+                    modeWorldReadableAccepted && committed && ensureOtherReadable(context, transport)
+                val verified =
+                    ConfigPublicationContract.isCrossProcessPublishSuccessful(crossProcessReadable, committed)
+                val outcome = if (verified) {
+                    ConfigPublicationContract.onVerifiedPublish(System.currentTimeMillis(), built.profileId)
+                } else {
+                    ConfigPublicationContract.onVerifiedFailure(prior)
+                }
+                val outcomeDurable = writePublishState(context, outcome)
+                val published = ConfigPublicationContract.publicationResult(
+                    preMarkDurable = preMarkDurable,
+                    committed = committed,
+                    crossProcessReadable = crossProcessReadable,
+                    outcomeDurable = outcomeDurable,
                 )
-            ) {
                 Log.w(
                     TAG,
-                    "profileId=$requestedProfileId temporarily unavailable; keeping last-good payload",
+                    "published=$published readable=$crossProcessReadable transportAccepted=$modeWorldReadableAccepted " +
+                        "commit=$committed outcomeDurable=$outcomeDurable profileId=${built.profileId} " +
+                        "fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}",
                 )
+                published
+            } catch (e: Throwable) {
+                Log.e(TAG, "sync failed", e)
                 markPublicationFailure(context)
-                return false
+                false
             }
-            val jsonStr = built.json
-
-            // MODE_WORLD_READABLE throws SecurityException on Android N+ unless the Xposed
-            // framework suppresses it (Vector hooks checkMode for this). A suppressed (non-throwing)
-            // call does NOT imply a world-readable file: on N+ that mode no longer sets the
-            // other-read bit and the Vector mirror is written 0660, so this flag means only "the
-            // cross-process transport was accepted". Actual readability is ensured + verified after
-            // commit (below). Fall back to a private write so we can tell the failure modes apart.
-            var modeWorldReadableAccepted = true
-            @Suppress("DEPRECATION")
-            val prefs = try {
-                context.getSharedPreferences(PREFS_NAME, Context.MODE_WORLD_READABLE)
-            } catch (se: Throwable) {
-                modeWorldReadableAccepted = false
-                Log.e(TAG, "MODE_WORLD_READABLE rejected (${se.javaClass.simpleName}) — falling back to MODE_PRIVATE", se)
-                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            }
-            // Durable publication OUTCOME lives in a SEPARATE private store (see PublishState). Two
-            // reasons it is NOT in the payload file: the transported payload must stay world-readable,
-            // so a second write to it — to record a timestamp — would reset that mode; and a success
-            // marker written INTO the payload commit survives a process death that happens before
-            // readability is verified, resurrecting the false-green. So the outcome is written
-            // FAIL-CLOSED: marked failed BEFORE the payload commit, flipped to success ONLY after the
-            // committed file is verified other-readable. An interruption at any point therefore leaves
-            // a failure marker (never a live timestamp) and never advances the active pointer past the
-            // last verified-good profile.
-            writePublishState(context, ConfigPublicationContract.preCommitFailClosed(prior))
-
-            val committed = prefs.edit().putString(KEY_JSON, jsonStr).commit()
-            // "MODE_WORLD_READABLE did not throw" is NOT proof the hook can read the file: on N+ that
-            // mode no longer sets the other-read bit and the Vector mirror is written 0660. Make our
-            // own committed file other-readable and verify the bit actually landed; publication counts
-            // only when the target UID can really read it.
-            val crossProcessReadable =
-                modeWorldReadableAccepted && committed && ensureOtherReadable(prefs)
-            val published = ConfigPublicationContract.isCrossProcessPublishSuccessful(
-                crossProcessReadable,
-                committed,
-            )
-            val outcome = if (published) {
-                ConfigPublicationContract.onVerifiedPublish(System.currentTimeMillis(), built.profileId)
-            } else {
-                ConfigPublicationContract.onVerifiedFailure(prior)
-            }
-            writePublishState(context, outcome)
-
-            Log.w(
-                TAG,
-                "published crossProcess=$published readable=$crossProcessReadable " +
-                    "transportAccepted=$modeWorldReadableAccepted commit=$committed " +
-                    "profileId=${built.profileId} fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}",
-            )
-            published
-        } catch (e: Throwable) {
-            Log.e(TAG, "sync failed", e)
-            markPublicationFailure(context)
-            false
         }
     }
 
@@ -280,32 +298,32 @@ object ConfigPrefsSync {
     fun hasPublicationFailure(context: Context): Boolean = readPublishState(context).publishFailed
 
     /**
-     * The durable publication outcome. A never-written store migrates the active pointer once from
-     * the legacy transported prefs; a failed READ fails closed (treated as a publication failure) so
-     * the UI never softens a real failure into "pending".
+     * The durable publication outcome, from the private store ONLY (never PREFS_NAME) — so a UI read
+     * can never open the transport name with MODE_PRIVATE and poison its SharedPreferences cache. A
+     * failed read fails closed. The active pointer here is whatever the store holds; [sync] migrates
+     * the legacy pointer separately, from the already-acquired transport instance.
      */
     private fun readPublishState(context: Context): ConfigPublicationContract.PublishState =
         runCatching {
             val s = context.getSharedPreferences(PUBLISH_STATE_PREFS, Context.MODE_PRIVATE)
-            if (!s.getBoolean(KEY_STATE_INITIALIZED, false)) {
-                ConfigPublicationContract.PublishState(
-                    publishedAtMs = null,
-                    publishFailed = false,
-                    activeProfileId = legacyActiveProfileId(context),
-                )
-            } else {
-                ConfigPublicationContract.PublishState(
-                    publishedAtMs = s.getLong(KEY_PUBLISHED_AT, 0L).takeIf { it > 0L },
-                    publishFailed = s.getBoolean(KEY_PUBLISH_FAILED, false),
-                    activeProfileId = s.getLong(KEY_ACTIVE_PROFILE_ID, 0L).takeIf { it > 0L },
-                )
-            }
+            ConfigPublicationContract.PublishState(
+                publishedAtMs = s.getLong(KEY_PUBLISHED_AT, 0L).takeIf { it > 0L },
+                publishFailed = s.getBoolean(KEY_PUBLISH_FAILED, false),
+                activeProfileId = s.getLong(KEY_ACTIVE_PROFILE_ID, 0L).takeIf { it > 0L },
+            )
         }.getOrElse {
             Log.e(TAG, "could not read publish state; failing closed", it)
             ConfigPublicationContract.PublishState(null, publishFailed = true, activeProfileId = null)
         }
 
-    private fun writePublishState(context: Context, state: ConfigPublicationContract.PublishState) {
+    private fun isPublishStateInitialized(context: Context): Boolean =
+        runCatching {
+            context.getSharedPreferences(PUBLISH_STATE_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_STATE_INITIALIZED, false)
+        }.getOrDefault(false)
+
+    /** Returns whether the outcome was DURABLY committed; sync() consumes this to fail closed. */
+    private fun writePublishState(context: Context, state: ConfigPublicationContract.PublishState): Boolean =
         runCatching {
             val e = context.getSharedPreferences(PUBLISH_STATE_PREFS, Context.MODE_PRIVATE)
                 .edit()
@@ -322,8 +340,10 @@ object ConfigPrefsSync {
                 e.remove(KEY_ACTIVE_PROFILE_ID)
             }
             e.commit()
-        }.onFailure { Log.e(TAG, "could not persist publish state", it) }
-    }
+        }.getOrElse {
+            Log.e(TAG, "could not persist publish state", it)
+            false
+        }
 
     /** Mark the current publication failed while preserving the last verified-good active pointer. */
     private fun markPublicationFailure(context: Context) {
@@ -337,22 +357,36 @@ object ConfigPrefsSync {
      * a publish actually reachable. Returns false (a real publication failure) when the backing file
      * cannot be located or made other-readable.
      */
-    private fun ensureOtherReadable(prefs: SharedPreferences): Boolean =
+    private fun ensureOtherReadable(context: Context, prefs: SharedPreferences): Boolean =
         try {
             val file = sharedPrefsFileOrNull(prefs)
-            if (file == null) {
-                Log.e(TAG, "cannot resolve prefs file to verify cross-process readability")
-                false
-            } else {
-                // We own the file, so we can widen its mode; the commit's atomic rename resets it to
-                // the (non-world-readable) default, hence doing it here, right after commit.
-                file.setReadable(true, /* ownerOnly = */ false)
-                ConfigPublicationContract.isOtherReadable(Os.stat(file.path).st_mode)
+            when {
+                file == null -> {
+                    Log.e(TAG, "cannot resolve prefs file to verify cross-process readability")
+                    false
+                }
+                ConfigPublicationContract.isAppPrivatePath(file.canonicalPath, appDataDir(context)) -> {
+                    // Transport resolved to an app-private file (poisoned cache / MODE_PRIVATE fallback).
+                    // Its own 0664 bit is a false positive — the 0700 data dir keeps the target UID out —
+                    // so this is a real publication failure, not a readable transport.
+                    Log.e(TAG, "transport resolved to app-private file ${file.path}; not cross-process reachable")
+                    false
+                }
+                else -> {
+                    // We own the file, so we can widen its mode; the commit's atomic rename resets it to
+                    // the (non-world-readable) default, hence doing it here, right after commit.
+                    file.setReadable(true, /* ownerOnly = */ false)
+                    ConfigPublicationContract.isOtherReadable(Os.stat(file.path).st_mode)
+                }
             }
         } catch (t: Throwable) {
             Log.e(TAG, "cross-process readability could not be ensured", t)
             false
         }
+
+    private fun appDataDir(context: Context): String =
+        runCatching { context.dataDir.canonicalPath }
+            .getOrElse { context.applicationInfo.dataDir ?: "/data/data/${context.packageName}" }
 
     /** The concrete file behind a [SharedPreferences] (also the Vector mirror when redirected). */
     private fun sharedPrefsFileOrNull(prefs: SharedPreferences): File? =
@@ -386,13 +420,11 @@ object ConfigPrefsSync {
     }
 
     /**
-     * Legacy migration read: the active pointer as stored in the OLD transported prefs, before the
-     * publication outcome moved to its own private store. Consulted only until the new store is
-     * initialized, so an upgrade keeps its active profile.
+     * Legacy migration read of the active pointer from the OLD transported prefs — read from the
+     * ALREADY-ACQUIRED transport instance so it cannot open PREFS_NAME with a different mode and
+     * poison the ContextImpl cache. Consulted only until the private store is initialized, so an
+     * upgrade keeps its active profile.
      */
-    private fun legacyActiveProfileId(context: Context): Long? = runCatching {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getLong(KEY_ACTIVE_PROFILE_ID, 0L)
-            .takeIf { it > 0L }
-    }.getOrNull()
+    private fun legacyActiveProfileId(transport: SharedPreferences): Long? =
+        transport.getLong(KEY_ACTIVE_PROFILE_ID, 0L).takeIf { it > 0L }
 }

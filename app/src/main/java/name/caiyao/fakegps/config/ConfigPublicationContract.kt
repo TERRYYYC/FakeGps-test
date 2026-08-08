@@ -57,4 +57,27 @@ internal object ConfigPublicationContract {
      */
     fun onVerifiedFailure(prior: PublishState): PublishState =
         prior.copy(publishedAtMs = null, publishFailed = true)
+
+    /**
+     * A file under the app's private data dir cannot be read by another UID regardless of its own
+     * mode — the dir is 0700 / SELinux-labelled — so its 0664 bit is a false positive. Only a
+     * transport resolved OUTSIDE dataDir (the Vector mirror) is cross-process reachable. Guards
+     * against a poisoned SharedPreferences cache silently redirecting the transport to app-private
+     * storage.
+     */
+    fun isAppPrivatePath(filePath: String, appDataDir: String): Boolean =
+        filePath == appDataDir || filePath.startsWith("$appDataDir/")
+
+    /**
+     * The COMPLETE durability gate for a publish. It counts only when every step is durably committed:
+     * the fail-closed pre-marker (so no stale success survives), the payload, the verified
+     * cross-process readability, AND the success outcome. A dropped `commit()` at any step therefore
+     * cannot be reported as a successful publish.
+     */
+    fun publicationResult(
+        preMarkDurable: Boolean,
+        committed: Boolean,
+        crossProcessReadable: Boolean,
+        outcomeDurable: Boolean,
+    ): Boolean = preMarkDurable && committed && crossProcessReadable && outcomeDurable
 }
