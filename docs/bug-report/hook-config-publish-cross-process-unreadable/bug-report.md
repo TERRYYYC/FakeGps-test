@@ -9,7 +9,7 @@ fix_branch: fix/hook-config-publish-readability
 device: ZY22JHW9M4
 build_red: master@1e4a90b289764bc03660c8f7663c66240c80108a (apk_sha256 7c8c032b…b3ff, JBR21)
 build_green: fix/hook-config-publish-readability @791f41e (apk_sha256 b3299577…898a7, JBR21)
-green_intermediate: @35eafb7 (apk_sha256 f756bf2…09f5e) — historical, predates the first-upgrade active-loss and cold-read cache-poison fixes; NOT canonical
+green_intermediate: "@35eafb7 (apk_sha256 f756bf2…09f5e) — historical, predates the first-upgrade active-loss and cold-read cache-poison fixes; NOT canonical"
 ---
 
 # Hook config publish reports cross-process success while writing a target-unreadable (0660) prefs mirror
