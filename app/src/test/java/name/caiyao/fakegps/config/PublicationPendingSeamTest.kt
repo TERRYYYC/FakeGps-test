@@ -19,11 +19,13 @@ import org.junit.Test
  *    staleness, not failure, because the hook may still be sleeping on the previous timer.
  *
  * Composed, they must satisfy: **a failed publication can never soften a mismatch into "pending"**.
- * Otherwise a permanently broken transport (MODE_PRIVATE fallback — commits fine, unreadable from
- * another process) would render as "配置刚保存，稍等一下", forever, instead of a visible failure.
+ * Otherwise a permanently broken transport (unreadable payload — commits fine, but the hook's UID
+ * can never read it) would render as "配置刚保存，稍等一下", forever, instead of a visible failure.
  *
- * Neither PR's own tests cover this: #4 cannot see the UI status, #3 cannot see the write path.
- * Locked here so a future edit to either side cannot quietly resurrect the false red.
+ * PR #23 review (Sol) note: the durable outcome is now written FAIL-CLOSED as a state machine —
+ * pre-marked failed before the payload commit, flipped to success only after verification — so these
+ * helpers route through the SAME transitions [ConfigPrefsSync] applies, and additionally pin the
+ * interruption window (commit done, verification not yet) as a failure, not a stale success.
  */
 class PublicationPendingSeamTest {
 
@@ -31,13 +33,33 @@ class PublicationPendingSeamTest {
         "c" to listOf(FieldSpec("tac", "TAC", "", FieldType.INTEGER)),
     )
 
-    /** Mirrors ConfigPrefsSync#sync: the timestamp is written only when publication succeeded. */
-    private fun timestampAfterSync(worldReadable: Boolean, committed: Boolean, nowMs: Long): Long? =
-        if (ConfigPublicationContract.isCrossProcessPublishSuccessful(worldReadable, committed)) {
-            nowMs
+    /**
+     * Mirrors ConfigPrefsSync#sync as the real state machine: pre-mark fail-closed before the payload
+     * commit, then flip to the verified outcome. [interruptedBeforeVerify] returns the durable state
+     * at the window between payload commit and verification (a process death there).
+     */
+    private fun durableStateAfterSync(
+        crossProcessReadable: Boolean,
+        committed: Boolean,
+        nowMs: Long,
+        interruptedBeforeVerify: Boolean = false,
+    ): ConfigPublicationContract.PublishState {
+        val prior = ConfigPublicationContract.PublishState(
+            publishedAtMs = 500L,
+            publishFailed = false,
+            activeProfileId = 3L,
+        )
+        val precommit = ConfigPublicationContract.preCommitFailClosed(prior)
+        if (interruptedBeforeVerify) return precommit
+        return if (ConfigPublicationContract.isCrossProcessPublishSuccessful(crossProcessReadable, committed)) {
+            ConfigPublicationContract.onVerifiedPublish(nowMs, publishedProfileId = 3L)
         } else {
-            null
+            ConfigPublicationContract.onVerifiedFailure(precommit)
         }
+    }
+
+    private fun timestampAfterSync(crossProcessReadable: Boolean, committed: Boolean, nowMs: Long): Long? =
+        durableStateAfterSync(crossProcessReadable, committed, nowMs).publishedAtMs
 
     private fun statusFor(publishedAtMs: Long?, nowMs: Long): VerificationStatus =
         VerificationEngine.buildReport(
@@ -48,17 +70,28 @@ class PublicationPendingSeamTest {
         ).summary.status
 
     @Test
-    fun `world-readable fallback rejected means a mismatch is a real failure, never pending`() {
-        // MODE_WORLD_READABLE refused -> MODE_PRIVATE. commit() still returns true, but no other
-        // process can ever read the file: the spoof will never work, and the user must see that.
-        val ts = timestampAfterSync(worldReadable = false, committed = true, nowMs = 1_000)
+    fun `cross-process-unreadable payload means a mismatch is a real failure, never pending`() {
+        // Verification proved the committed file is not other-readable: the spoof can never reach the
+        // hook, and the user must see that instead of a perpetual "刚保存，稍等".
+        val ts = timestampAfterSync(crossProcessReadable = false, committed = true, nowMs = 1_000)
         assertFalse("a failed publication must not record a propagation timestamp", ts != null)
         assertEquals(VerificationStatus.FAILING, statusFor(ts, nowMs = 1_000))
     }
 
     @Test
     fun `a failed commit likewise cannot mask the mismatch`() {
-        val ts = timestampAfterSync(worldReadable = true, committed = false, nowMs = 1_000)
+        val ts = timestampAfterSync(crossProcessReadable = true, committed = false, nowMs = 1_000)
+        assertEquals(VerificationStatus.FAILING, statusFor(ts, nowMs = 1_000))
+    }
+
+    @Test
+    fun `an interruption after commit but before verification is a failure, not a stale success`() {
+        // PR #23 review P1: a process death here must not leave a live published_at beside a payload
+        // whose readability was never verified.
+        val ts = durableStateAfterSync(
+            crossProcessReadable = true, committed = true, nowMs = 1_000, interruptedBeforeVerify = true,
+        ).publishedAtMs
+        assertFalse("no live timestamp may survive an interruption before verify", ts != null)
         assertEquals(VerificationStatus.FAILING, statusFor(ts, nowMs = 1_000))
     }
 
@@ -66,39 +99,47 @@ class PublicationPendingSeamTest {
     fun `a successful publish does soften the mismatch inside the window`() {
         // The legitimate case this whole mechanism exists for: saved seconds ago, hook has not
         // re-read yet, so "未生效" would be a lie.
-        val ts = timestampAfterSync(worldReadable = true, committed = true, nowMs = 1_000)
+        val ts = timestampAfterSync(crossProcessReadable = true, committed = true, nowMs = 1_000)
         assertTrue(ts != null)
         assertEquals(VerificationStatus.PENDING_PROPAGATION, statusFor(ts, nowMs = 1_000))
     }
 
     @Test
     fun `a successful publish stops softening once the window elapses`() {
-        val ts = timestampAfterSync(worldReadable = true, committed = true, nowMs = 1_000)
+        val ts = timestampAfterSync(crossProcessReadable = true, committed = true, nowMs = 1_000)
         val afterWindow = 1_000L + PublishPropagation.MAX_PROPAGATION_DELAY_MS
         assertEquals(VerificationStatus.FAILING, statusFor(ts, afterWindow))
     }
 
     /**
-     * Models what actually lands in SharedPreferences across successive publishes.
+     * Models what actually lands in the outcome store across successive publishes.
      *
-     * [prior] is the timestamp already on disk. A failed publish must CLEAR it, not merely decline
-     * to write a new one — the file is persistent, so "don't write" leaves the previous success's
-     * timestamp behind.
+     * [prior] is the timestamp already on disk. A failed publish must CLEAR it, not merely decline to
+     * write a new one — the store is persistent, so "don't write" leaves the previous success's
+     * timestamp behind and resurrects the false-red.
      */
-    private fun storedTimestampAfter(prior: Long?, worldReadable: Boolean, nowMs: Long): Long? =
-        if (worldReadable) nowMs else PublishPropagation.timestampOnFailedPublish()
+    private fun storedTimestampAfter(prior: Long?, crossProcessReadable: Boolean, nowMs: Long): Long? {
+        val priorState = ConfigPublicationContract.PublishState(
+            publishedAtMs = prior,
+            publishFailed = false,
+            activeProfileId = 3L,
+        )
+        val precommit = ConfigPublicationContract.preCommitFailClosed(priorState)
+        return if (crossProcessReadable) {
+            ConfigPublicationContract.onVerifiedPublish(nowMs, publishedProfileId = 3L).publishedAtMs
+        } else {
+            ConfigPublicationContract.onVerifiedFailure(precommit).publishedAtMs
+        }
+    }
 
     @Test
     fun `a failed publish clears the timestamp left by a previous successful one`() {
-        // review 4822122472 P1. Reachable sequence: publish succeeds at T, then 5s later the
-        // MODE_WORLD_READABLE path is refused and the payload lands in a private file. The NEW
-        // payload is unreadable cross-process, but the OLD timestamp is still on disk and still
-        // inside its window — so the UI borrows it and reports "配置刚保存，尚未生效" for a
-        // publication that can never succeed.
-        //
-        // The earlier seam test could not catch this: it started from no history at all.
+        // review 4822122472 P1. Reachable sequence: publish succeeds at T, then 5s later the payload
+        // lands unreadable. The NEW payload is unreadable cross-process, but the OLD timestamp is
+        // still on disk and still inside its window — so the UI borrows it and reports
+        // "配置刚保存，尚未生效" for a publication that can never succeed.
         val priorSuccess = 1_000L
-        val stored = storedTimestampAfter(prior = priorSuccess, worldReadable = false, nowMs = 5_000)
+        val stored = storedTimestampAfter(prior = priorSuccess, crossProcessReadable = false, nowMs = 5_000)
 
         assertEquals("a failed publish must clear the stale timestamp", null, stored)
         assertFalse(PublishPropagation.isPending(stored, nowMs = 5_000))
@@ -107,15 +148,15 @@ class PublicationPendingSeamTest {
 
     @Test
     fun `back-to-back successful publishes keep refreshing the window`() {
-        val stored = storedTimestampAfter(prior = 1_000L, worldReadable = true, nowMs = 5_000)
+        val stored = storedTimestampAfter(prior = 1_000L, crossProcessReadable = true, nowMs = 5_000)
         assertEquals(5_000L, stored)
         assertEquals(VerificationStatus.PENDING_PROPAGATION, statusFor(stored, nowMs = 5_000))
     }
 
     @Test
-    fun `publication contract is exactly world-readable AND committed`() {
-        // Guards the assumption the seam is built on. If #4 ever widens this, the timestamp gate in
-        // ConfigPrefsSync#sync must be revisited in the same change.
+    fun `publication contract is exactly cross-process-readable AND committed`() {
+        // Guards the assumption the seam is built on. If #4 ever widens this, the outcome state
+        // machine in ConfigPrefsSync#sync must be revisited in the same change.
         assertTrue(ConfigPublicationContract.isCrossProcessPublishSuccessful(true, true))
         assertFalse(ConfigPublicationContract.isCrossProcessPublishSuccessful(false, true))
         assertFalse(ConfigPublicationContract.isCrossProcessPublishSuccessful(true, false))
