@@ -24,4 +24,37 @@ internal object ConfigPublicationContract {
     fun isOtherReadable(stMode: Int): Boolean = (stMode and S_IROTH) != 0
 
     private const val S_IROTH = 0b100 // POSIX 0o004
+
+    /**
+     * Durable publication outcome, persisted OUTSIDE the transported prefs. Two reasons it must not
+     * live in the payload file: (1) any second write to that file resets its cross-process-readable
+     * mode, and (2) a success timestamp written INTO the same commit as the payload survives a
+     * process death that happens before readability is verified, resurrecting the false-green. So the
+     * outcome lives in its own private store and is written fail-closed — [preCommitFailClosed]
+     * before the payload commit, flipped to [onVerifiedPublish] only after the committed file is
+     * verified other-readable, else [onVerifiedFailure].
+     */
+    data class PublishState(
+        val publishedAtMs: Long?,
+        val publishFailed: Boolean,
+        val activeProfileId: Long?,
+    )
+
+    /**
+     * Written BEFORE the payload commit. From here until verification, any interruption must read as
+     * a failure and must NOT advance the active pointer past the last verified-good profile.
+     */
+    fun preCommitFailClosed(prior: PublishState): PublishState =
+        prior.copy(publishedAtMs = null, publishFailed = true)
+
+    /** Written ONLY after the committed payload is verified cross-process readable. */
+    fun onVerifiedPublish(nowMs: Long, publishedProfileId: Long?): PublishState =
+        PublishState(publishedAtMs = nowMs, publishFailed = false, activeProfileId = publishedProfileId)
+
+    /**
+     * Written when the payload committed but is NOT verified readable (or verification threw): keep
+     * the last verified-good active pointer, never a success timestamp.
+     */
+    fun onVerifiedFailure(prior: PublishState): PublishState =
+        prior.copy(publishedAtMs = null, publishFailed = true)
 }

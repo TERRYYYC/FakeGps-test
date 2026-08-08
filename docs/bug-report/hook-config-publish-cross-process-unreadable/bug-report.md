@@ -3,9 +3,12 @@ feature_ids: [config-publish, hook-transport]
 topics: [xposed, vector, xshared-preferences, cross-process, silent-failure, terminal-acceptance]
 doc_kind: bug-report
 created: 2026-08-08
-status: bounded-red
+status: fixed
+fix_pr: 23
+fix_branch: fix/hook-config-publish-readability
 device: ZY22JHW9M4
-build: master@1e4a90b289764bc03660c8f7663c66240c80108a (apk_sha256 7c8c032b…b3ff, JBR21)
+build_red: master@1e4a90b289764bc03660c8f7663c66240c80108a (apk_sha256 7c8c032b…b3ff, JBR21)
+build_green: fix/hook-config-publish-readability (apk_sha256 0c116d78…6448f, JBR21)
 ---
 
 # Hook config publish reports cross-process success while writing a target-unreadable (0660) prefs mirror
@@ -72,15 +75,28 @@ cross-process publish and `published_at` is stamped, masking the failure.
 - Coordinate values deliberately omitted; evidence uses the transport fingerprint (a hash) and the
   boolean `location` flag only.
 
-## Fix direction (NOT applied on device — reported per "no on-device side-fix")
+## Fix (applied in PR #23)
 
-Make the publication contract verify **actual** cross-process readability before declaring success
-and stamping `published_at`, e.g. after commit `stat` the resulting file and require the target-
-readable bit (or perform a self-test read as the target-visibility check), and surface a
-`publish_failed` state when it is not. Optionally ensure the world-readable bit is applied to the
-mirror. Until then the UI's "published" state can diverge from actual hook visibility.
+- `ConfigPublicationContract`: the publication gate's first input is now the VERIFIED other-read
+  state (`crossProcessReadable`), with `isOtherReadable(stMode)` over a `stat` mode. Added a
+  fail-closed `PublishState` state machine (`preCommitFailClosed` / `onVerifiedPublish` /
+  `onVerifiedFailure`).
+- `ConfigPrefsSync`: after committing the payload it calls `File.setReadable(true, false)` on its own
+  file and verifies `S_IROTH` via `Os.stat`; publication counts only when the target UID can really
+  read it. The durable outcome (`published_at` / `publish_failed` / active pointer) moved to a
+  separate private store, written fail-closed — marked failed before the payload commit, flipped to
+  success only after verification — so a process death at any interruption point leaves a failure
+  marker (never a live timestamp) and never advances the active pointer past the last verified-good
+  profile.
 
-## Green bar (for a future fix, per reviewer)
+## Green (achieved in PR #23, device-validated — no chmod)
 
-Fresh **product** publish → target UID can read the mirror → fresh Maps emits a matching
-`transport accepted` + `location=true` / real delivery evidence — without any manual chmod.
+- TDD: `CrossProcessReadabilityContractTest` (committed-0660 ⇒ not published), `PublicationStateMachineTest`
+  (interruption-before-verify ⇒ failure; verified-failure keeps prior active pointer), and the
+  `PublicationPendingSeamTest` interruption case. Full JVM suite: 544 tests, 0 failures.
+- Device (`ZY22JHW9M4`, JBR21 build `0c116d78…6448f`): a fresh **product** publish flips the mirror
+  0660 → 0664 via the app's own `setReadable`; Maps UID can read; fresh Maps emits
+  `transport accepted schema=4 fp=sha256:39daec…` → `Loaded config … location=true | cellRebuild=true`.
+
+Follow-up review (PR #23 exact-HEAD, Sol) hardened the process-death window and active-pointer
+invariant; see the state machine above.
