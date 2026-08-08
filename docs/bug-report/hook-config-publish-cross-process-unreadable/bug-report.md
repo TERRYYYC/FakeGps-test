@@ -8,7 +8,7 @@ fix_pr: 23
 fix_branch: fix/hook-config-publish-readability
 device: ZY22JHW9M4
 build_red: master@1e4a90b289764bc03660c8f7663c66240c80108a (apk_sha256 7c8c032b…b3ff, JBR21)
-build_green: fix/hook-config-publish-readability (apk_sha256 0c116d78…6448f, JBR21)
+build_green: fix/hook-config-publish-readability @35eafb7 (apk_sha256 f756bf2…09f5e, JBR21)
 ---
 
 # Hook config publish reports cross-process success while writing a target-unreadable (0660) prefs mirror
@@ -94,9 +94,17 @@ cross-process publish and `published_at` is stamped, masking the failure.
 - TDD: `CrossProcessReadabilityContractTest` (committed-0660 ⇒ not published), `PublicationStateMachineTest`
   (interruption-before-verify ⇒ failure; verified-failure keeps prior active pointer), and the
   `PublicationPendingSeamTest` interruption case. Full JVM suite: 544 tests, 0 failures.
-- Device (`ZY22JHW9M4`, JBR21 build `0c116d78…6448f`): a fresh **product** publish flips the mirror
-  0660 → 0664 via the app's own `setReadable`; Maps UID can read; fresh Maps emits
-  `transport accepted schema=4 fp=sha256:39daec…` → `Loaded config … location=true | cellRebuild=true`.
+- Device (`ZY22JHW9M4`, JBR21 build `f756bf2…09f5e`): a fresh **product** publish keeps the mirror
+  world-readable (0664); Maps UID can read; fresh Maps emits `transport accepted schema=4` →
+  `Loaded config … location=true | cellRebuild=true`.
+- **Changed-fingerprint propagation proof** (defeats stale-byte equality): changing a non-sensitive
+  setting via the product UI (refresh interval 5→10) produced a unique payload `sha256:93e630c…`
+  (`refreshIntervalSec=10`) that appeared in the Vector mirror (fresh mtime) AND in fresh Maps'
+  `transport accepted`, while the app-private copy was untouched; the private outcome store recorded a
+  fresh `published_at` with `publish_failed=false`. Restored to 5 afterward.
 
-Follow-up review (PR #23 exact-HEAD, Sol) hardened the process-death window and active-pointer
-invariant; see the state machine above.
+Follow-up reviews (PR #23 exact-HEAD, Sol) hardened: the process-death window and active-pointer
+invariant (state machine above); then a SharedPreferences cache-poisoning where a MODE_PRIVATE read
+of the transport name silently downgraded the transport to app-private storage — fixed by acquiring
+the world-readable transport first, migrating the legacy pointer from that instance, rejecting an
+app-private resolved path, gating on every `commit()`, and serializing the transaction.
