@@ -8,7 +8,8 @@ fix_pr: 23
 fix_branch: fix/hook-config-publish-readability
 device: ZY22JHW9M4
 build_red: master@1e4a90b289764bc03660c8f7663c66240c80108a (apk_sha256 7c8c032b…b3ff, JBR21)
-build_green: fix/hook-config-publish-readability @35eafb7 (apk_sha256 f756bf2…09f5e, JBR21)
+build_green: fix/hook-config-publish-readability @791f41e (apk_sha256 b3299577…898a7, JBR21)
+green_intermediate: @35eafb7 (apk_sha256 f756bf2…09f5e) — historical, predates the first-upgrade active-loss and cold-read cache-poison fixes; NOT canonical
 ---
 
 # Hook config publish reports cross-process success while writing a target-unreadable (0660) prefs mirror
@@ -96,17 +97,27 @@ cross-process publish and `published_at` is stamped, masking the failure.
   `PublicationPendingSeamTest` interruption case, `TransportCachePoisonContractTest` (app-private
   rejection + full durability gate), and the first-upgrade active-pointer-preservation cases. Full
   JVM suite: 552 tests, 0 failures.
-- Device (`ZY22JHW9M4`, JBR21 build `f756bf2…09f5e`): a fresh **product** publish keeps the mirror
-  world-readable (0664); Maps UID can read; fresh Maps emits `transport accepted schema=4` →
-  `Loaded config … location=true | cellRebuild=true`.
-- **Changed-fingerprint propagation proof** (defeats stale-byte equality): changing a non-sensitive
-  setting via the product UI (refresh interval 5→10) produced a unique payload `sha256:93e630c…`
-  (`refreshIntervalSec=10`) that appeared in the Vector mirror (fresh mtime) AND in fresh Maps'
-  `transport accepted`, while the app-private copy was untouched; the private outcome store recorded a
-  fresh `published_at` with `publish_failed=false`. Restored to 5 afterward.
+- Device (`ZY22JHW9M4`, JBR21 canonical fixed build **code/HEAD `791f41e` + APK `b3299577…898a7`**):
+  a fresh **product** publish keeps the mirror world-readable (0664); Maps UID can read; fresh Maps
+  emits `transport accepted schema=4` → `Loaded config … location=true | cellRebuild=true`.
+- **Changed-fingerprint propagation proof** (defeats stale-byte equality), on `791f41e`: changing a
+  non-sensitive setting via the product UI (refresh interval 5→60, a value never previously on this
+  device) produced a unique payload `sha256:ef8b9dc1…` (`refreshIntervalSec=60`) that appeared in the
+  Vector mirror (fresh mtime) AND in fresh Maps' `transport accepted` with `location=true`, while the
+  app-private copy stayed untouched (refresh=30, mtime 03:29, target-unreadable); the private outcome
+  store recorded a fresh `published_at` with `publish_failed=false`, `active=8`.
+- **Restored terminal**: setting returned 60→5; mirror republished to `refreshIntervalSec=5`, fp
+  `sha256:39daec…`, mode 0664; fresh Maps accepted the same fp (logged interval 60000→5000) with
+  continued deliveries.
+- Historical intermediate (NOT canonical): an earlier `@35eafb7` / `f756bf2…` build with a 5→10 /
+  `sha256:93e630c…` run proved the same propagation, but predates the first-upgrade active-loss and
+  cold-read cache-poison fixes below, so it is not the fixed build of record.
 
-Follow-up reviews (PR #23 exact-HEAD, Sol) hardened: the process-death window and active-pointer
-invariant (state machine above); then a SharedPreferences cache-poisoning where a MODE_PRIVATE read
-of the transport name silently downgraded the transport to app-private storage — fixed by acquiring
-the world-readable transport first, migrating the legacy pointer from that instance, rejecting an
-app-private resolved path, gating on every `commit()`, and serializing the transaction.
+Follow-up reviews (PR #23 exact-HEAD, Sol) hardened, in order: the process-death window and active-
+pointer invariant (state machine above); a SharedPreferences cache-poisoning where a MODE_PRIVATE
+read of the transport name silently downgraded the transport to app-private storage — fixed by
+acquiring the world-readable transport first, migrating the legacy pointer from that instance,
+rejecting an app-private resolved path, gating on every `commit()`, and serializing the transaction;
+then two remaining edges — a first-upgrade failure path that dropped the migrated active pointer
+(now resolved once and preserved on every failure branch) and a `readPublished` that opened the
+transport name MODE_PRIVATE-first (now routed through the world-first `acquireTransport`).
