@@ -89,11 +89,13 @@ cross-process publish and `published_at` is stamped, masking the failure.
   marker (never a live timestamp) and never advances the active pointer past the last verified-good
   profile.
 
-## Green (achieved in PR #23, device-validated — no chmod)
+## Green (achieved in PR #23, device-validated — no manual/out-of-band chmod)
 
 - TDD: `CrossProcessReadabilityContractTest` (committed-0660 ⇒ not published), `PublicationStateMachineTest`
   (interruption-before-verify ⇒ failure; verified-failure keeps prior active pointer), and the
-  `PublicationPendingSeamTest` interruption case. Full JVM suite: 544 tests, 0 failures.
+  `PublicationPendingSeamTest` interruption case, `TransportCachePoisonContractTest` (app-private
+  rejection + full durability gate), and the first-upgrade active-pointer-preservation cases. Full
+  JVM suite: 552 tests, 0 failures.
 - Device (`ZY22JHW9M4`, JBR21 build `f756bf2…09f5e`): a fresh **product** publish keeps the mirror
   world-readable (0664); Maps UID can read; fresh Maps emits `transport accepted schema=4` →
   `Loaded config … location=true | cellRebuild=true`.

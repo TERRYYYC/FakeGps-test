@@ -97,31 +97,29 @@ object ConfigPrefsSync {
     ): Boolean {
         Log.w(TAG, "sync() ENTER")
         return synchronized(PUBLISH_LOCK) {
+            var resolvedPrior: ConfigPublicationContract.PublishState? = null
             try {
-                // Acquire the transport FIRST — before ANY other access to PREFS_NAME — so the mode call
-                // runs Vector's checkMode redirect and the ContextImpl cache binds this name to the
-                // world-readable mirror. A MODE_PRIVATE open of PREFS_NAME beforehand (e.g. a legacy
-                // read) poisons that cache: getSharedPreferences reuses the cached private instance
-                // without re-running checkMode, so the transport silently downgrades to unreadable
-                // app-private storage while the hook keeps consuming the stale mirror.
-                var modeWorldReadableAccepted = true
-                @Suppress("DEPRECATION")
-                val transport = try {
-                    context.getSharedPreferences(PREFS_NAME, Context.MODE_WORLD_READABLE)
-                } catch (se: Throwable) {
-                    modeWorldReadableAccepted = false
-                    Log.e(TAG, "MODE_WORLD_READABLE rejected (${se.javaClass.simpleName}) — MODE_PRIVATE fallback", se)
-                    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                }
+                // Transport (PREFS_NAME) is acquired world-readable FIRST via acquireTransport, before
+                // ANY other access to that name, so Vector's checkMode redirect binds the ContextImpl
+                // cache to the mirror and no earlier MODE_PRIVATE open can downgrade it (P2). Every
+                // PREFS_NAME reader (incl. readPublished) goes through the same accessor.
+                val t = acquireTransport(context)
+                val transport = t.prefs
+                val modeWorldReadableAccepted = t.worldReadableAccepted
 
-                // Prior outcome comes from the private store ONLY (never PREFS_NAME). The active pointer
-                // migrates once from the legacy transport — read from the SAME transport instance so no
-                // extra MODE_PRIVATE open of PREFS_NAME can poison the cache.
+                // Prior outcome comes from the private store ONLY (never PREFS_NAME). Resolve the
+                // effective active pointer ONCE (store-if-initialized, else legacy migration from the
+                // already-acquired transport) and reuse it on every branch — a failure path must not
+                // re-derive null from the uninitialized store and destroy the migrated last-good pointer.
                 val stored = readPublishState(context)
-                val priorActive =
-                    if (isPublishStateInitialized(context)) stored.activeProfileId
-                    else legacyActiveProfileId(transport)
-                val prior = stored.copy(activeProfileId = priorActive)
+                val prior = stored.copy(
+                    activeProfileId = ConfigPublicationContract.resolveActiveProfileId(
+                        storeInitialized = isPublishStateInitialized(context),
+                        storeActive = stored.activeProfileId,
+                        legacyActive = legacyActiveProfileId(transport),
+                    ),
+                )
+                resolvedPrior = prior
 
                 val requestedProfileId = profileId ?: prior.activeProfileId
                 val built = buildFieldMapJson(context, requestedProfileId)
@@ -132,7 +130,7 @@ object ConfigPrefsSync {
                     )
                 ) {
                     Log.w(TAG, "profileId=$requestedProfileId temporarily unavailable; keeping last-good payload")
-                    markPublicationFailure(context)
+                    markPublicationFailure(context, prior)
                     return@synchronized false
                 }
                 val jsonStr = built.json
@@ -177,7 +175,10 @@ object ConfigPrefsSync {
                 published
             } catch (e: Throwable) {
                 Log.e(TAG, "sync failed", e)
-                markPublicationFailure(context)
+                // Persist failure from the already-resolved prior when available; if the exception
+                // preceded resolution, markPublicationFailure resolves the effective active world-first
+                // so a first-upgrade legacy pointer is still preserved.
+                markPublicationFailure(context, resolvedPrior)
                 false
             }
         }
@@ -272,8 +273,10 @@ object ConfigPrefsSync {
     /**
      * Read back the exact payload the hook consumes.
      *
-     * Returns null when nothing has ever been published. The file is written MODE_WORLD_READABLE for
-     * other processes; reading it from our own process needs no special mode.
+     * Returns null when nothing has ever been published. Reads via [acquireTransport] (world-first),
+     * NOT a direct MODE_PRIVATE open: a cold caller (e.g. MockProviderService → LocationDelivery
+     * Orchestrator.enable) reaching this before its later publish would otherwise cache the private
+     * transport first and poison the ContextImpl cache for the whole process.
      *
      * The verify UI reconciles against THIS rather than the DB row on purpose — a DB read proves
      * only that the editor saved something, while the defect that actually shipped lived in the gap
@@ -281,8 +284,7 @@ object ConfigPrefsSync {
      */
     @JvmStatic
     fun readPublished(context: Context): PayloadRead = try {
-        val text = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_JSON, null)
+        val text = acquireTransport(context).prefs.getString(KEY_JSON, null)
         if (text == null) PayloadRead.Absent else PayloadRead.Raw(text)
     } catch (t: Throwable) {
         // Distinct from Absent on purpose: a failed read means the hook is still running its
@@ -345,10 +347,53 @@ object ConfigPrefsSync {
             false
         }
 
-    /** Mark the current publication failed while preserving the last verified-good active pointer. */
-    private fun markPublicationFailure(context: Context) {
-        writePublishState(context, ConfigPublicationContract.onVerifiedFailure(readPublishState(context)))
+    /**
+     * Mark the current publication failed while PRESERVING the last verified-good active pointer.
+     * Callers pass the already-resolved [prior] so the pointer migrated this transaction is kept; when
+     * absent (an exception before resolution) the effective active is re-resolved world-first so a
+     * first-upgrade legacy pointer is not destroyed.
+     */
+    private fun markPublicationFailure(
+        context: Context,
+        prior: ConfigPublicationContract.PublishState? = null,
+    ) {
+        writePublishState(
+            context,
+            ConfigPublicationContract.onVerifiedFailure(prior ?: resolvePriorState(context)),
+        )
     }
+
+    /**
+     * The effective prior state resolved the SAME way [sync] does — the store if initialized, else a
+     * world-first legacy migration — safe to call standalone from a failure path.
+     */
+    private fun resolvePriorState(context: Context): ConfigPublicationContract.PublishState {
+        val stored = readPublishState(context)
+        return stored.copy(
+            activeProfileId = ConfigPublicationContract.resolveActiveProfileId(
+                storeInitialized = isPublishStateInitialized(context),
+                storeActive = stored.activeProfileId,
+                legacyActive = legacyActiveProfileId(acquireTransport(context).prefs),
+            ),
+        )
+    }
+
+    /**
+     * World-first acquisition of the transport prefs ([PREFS_NAME]). EVERY reader/writer of that name
+     * must route through here so the MODE_WORLD_READABLE checkMode redirect binds the ContextImpl
+     * cache to the Vector mirror before any MODE_PRIVATE open can downgrade it.
+     */
+    private fun acquireTransport(context: Context): Transport =
+        try {
+            @Suppress("DEPRECATION")
+            Transport(context.getSharedPreferences(PREFS_NAME, Context.MODE_WORLD_READABLE), true)
+        } catch (se: Throwable) {
+            Log.e(TAG, "MODE_WORLD_READABLE rejected (${se.javaClass.simpleName}) — MODE_PRIVATE fallback", se)
+            @Suppress("DEPRECATION")
+            Transport(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE), false)
+        }
+
+    private class Transport(val prefs: SharedPreferences, val worldReadableAccepted: Boolean)
 
     /**
      * Grant other-read on our just-committed prefs file (the hook runs as the TARGET app's UID) and

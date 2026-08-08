@@ -80,4 +80,16 @@ internal object ConfigPublicationContract {
         crossProcessReadable: Boolean,
         outcomeDurable: Boolean,
     ): Boolean = preMarkDurable && committed && crossProcessReadable && outcomeDurable
+
+    /**
+     * The effective active pointer: the private outcome store once it is initialized (which may hold
+     * a deliberately-null pointer), else the one-time legacy migration value. Callers must resolve
+     * this ONCE per operation and reuse it — a failure path that re-derives it from a still-
+     * uninitialized store would read null and destroy the migrated last-good pointer.
+     */
+    fun resolveActiveProfileId(
+        storeInitialized: Boolean,
+        storeActive: Long?,
+        legacyActive: Long?,
+    ): Long? = if (storeInitialized) storeActive else legacyActive
 }

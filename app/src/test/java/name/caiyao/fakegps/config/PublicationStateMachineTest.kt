@@ -57,4 +57,45 @@ class PublicationStateMachineTest {
         assertTrue(out.publishFailed)
         assertEquals("must not advance active on a failed actual publication", 5L, out.activeProfileId)
     }
+
+    @Test
+    fun `an uninitialized store migrates the legacy active pointer`() {
+        assertEquals(
+            8L,
+            ConfigPublicationContract.resolveActiveProfileId(
+                storeInitialized = false, storeActive = null, legacyActive = 8L,
+            ),
+        )
+    }
+
+    @Test
+    fun `an initialized store uses its own active and never resurrects legacy`() {
+        assertEquals(
+            3L,
+            ConfigPublicationContract.resolveActiveProfileId(
+                storeInitialized = true, storeActive = 3L, legacyActive = 8L,
+            ),
+        )
+        assertNull(
+            "a deliberately-cleared pointer must not be resurrected from legacy",
+            ConfigPublicationContract.resolveActiveProfileId(
+                storeInitialized = true, storeActive = null, legacyActive = 8L,
+            ),
+        )
+    }
+
+    @Test
+    fun `first-upgrade transient-missing failure preserves the migrated active pointer`() {
+        // PR #23 review P1: on an uninitialized store, sync resolves prior.active from the legacy
+        // transport; a transient-missing profile (or an exception) must persist the failure from THAT
+        // prior — not re-derive null from the still-uninitialized store and destroy the pointer.
+        val migratedActive = ConfigPublicationContract.resolveActiveProfileId(
+            storeInitialized = false, storeActive = null, legacyActive = 8L,
+        )
+        val prior = PublishState(publishedAtMs = null, publishFailed = false, activeProfileId = migratedActive)
+        val failure = ConfigPublicationContract.onVerifiedFailure(prior)
+        assertEquals("active must remain the migrated last-good (8), not null", 8L, failure.activeProfileId)
+        assertTrue(failure.publishFailed)
+        assertNull(failure.publishedAtMs)
+    }
 }
