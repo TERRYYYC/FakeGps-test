@@ -43,27 +43,27 @@ class ConfigPrefsSyncPublicationTest {
     fun privateFallbackCommitDoesNotCountAsCrossProcessPublication() {
         assertFalse(
             ConfigPublicationContract.isCrossProcessPublishSuccessful(
-                worldReadable = false,
+                crossProcessReadable = false,
                 committed = true,
             ),
         )
     }
 
     @Test
-    fun worldReadableCommitCountsAsCrossProcessPublication() {
+    fun otherReadableCommitCountsAsCrossProcessPublication() {
         assertTrue(
             ConfigPublicationContract.isCrossProcessPublishSuccessful(
-                worldReadable = true,
+                crossProcessReadable = true,
                 committed = true,
             ),
         )
     }
 
     @Test
-    fun failedWorldReadableCommitDoesNotCountAsPublication() {
+    fun readableButUncommittedDoesNotCountAsPublication() {
         assertFalse(
             ConfigPublicationContract.isCrossProcessPublishSuccessful(
-                worldReadable = true,
+                crossProcessReadable = true,
                 committed = false,
             ),
         )

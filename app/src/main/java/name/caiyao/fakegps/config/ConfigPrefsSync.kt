@@ -1,9 +1,12 @@
 package name.caiyao.fakegps.config
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.database.Cursor
 import android.net.Uri
+import android.system.Os
 import android.util.Log
+import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 import name.caiyao.fakegps.data.ProviderAuthority
@@ -95,37 +98,40 @@ object ConfigPrefsSync {
             val jsonStr = built.json
 
             // MODE_WORLD_READABLE throws SecurityException on Android N+ unless the Xposed
-            // framework suppresses it (Vector hooks checkMode for this). Fall back to a private
-            // write so we can tell the two failure modes apart in the log.
-            var worldReadable = true
+            // framework suppresses it (Vector hooks checkMode for this). A suppressed (non-throwing)
+            // call does NOT imply a world-readable file: on N+ that mode no longer sets the
+            // other-read bit and the Vector mirror is written 0660, so this flag means only "the
+            // cross-process transport was accepted". Actual readability is ensured + verified after
+            // commit (below). Fall back to a private write so we can tell the failure modes apart.
+            var modeWorldReadableAccepted = true
             @Suppress("DEPRECATION")
             val prefs = try {
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_WORLD_READABLE)
             } catch (se: Throwable) {
-                worldReadable = false
+                modeWorldReadableAccepted = false
                 Log.e(TAG, "MODE_WORLD_READABLE rejected (${se.javaClass.simpleName}) — falling back to MODE_PRIVATE", se)
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             }
-            // The publish timestamp rides in the SAME commit as the payload, and only when the
-            // write is cross-process readable.
+            // The publish timestamp rides in the SAME commit as the payload, written optimistically
+            // when the cross-process transport was accepted. Immediately after commit we make the
+            // file other-readable and VERIFY the bit actually landed (ensureOtherReadable): on the
+            // normal path that confirms the optimistic stamp, so the invariant holds — timestamp
+            // present <=> published. A genuine readability failure (rare: the file handle is
+            // unavailable or the mode cannot be widened) is corrected by markPublicationFailure,
+            // which clears the stamp.
             //
-            // Both halves matter, for different reasons:
             //  - same commit: the UI reads the timestamp to tell "the hook has not re-read yet"
             //    from "the hook is ignoring this config". A second commit could be interrupted
             //    (PR #4 hardens exactly this against SIGKILL), leaving a new payload beside a stale
             //    timestamp — which reads as "not pending" and resurrects the false-red this was
             //    added to remove.
-            //  - only when worldReadable: a MODE_PRIVATE fallback still commits successfully, but
-            //    XSharedPreferences can never read it from another process. Recording a timestamp
-            //    there would let the UI soften a permanent publication failure into "刚保存，稍等".
-            //
-            // `worldReadable` is known before edit(), and `committed` is atomic, so this yields
-            // exactly: timestamp present <=> published == true. No divergence window.
+            //  - MODE_PRIVATE fallback: still commits, but XSharedPreferences can never read it from
+            //    another process, so it must never record a live timestamp.
             //
             // Timestamp is stored ALONGSIDE the payload, never inside it — embedding it would
             // change the bytes on every sync and destroy the fingerprint's value as content identity.
             val editor = prefs.edit().putString(KEY_JSON, jsonStr)
-            val stamp = if (worldReadable) {
+            val stamp = if (modeWorldReadableAccepted) {
                 System.currentTimeMillis()
             } else {
                 PublishPropagation.timestampOnFailedPublish()
@@ -142,7 +148,7 @@ object ConfigPrefsSync {
             // The active row is routing state for this exact payload. Commit both together so a
             // process death can never leave a new Hook payload beside an old active-row pointer.
             // A MODE_PRIVATE fallback is not a publication and must not advance that pointer.
-            if (worldReadable) {
+            if (modeWorldReadableAccepted) {
                 if (built.profileId != null) {
                     editor.putLong(KEY_ACTIVE_PROFILE_ID, built.profileId)
                 } else {
@@ -150,13 +156,20 @@ object ConfigPrefsSync {
                 }
             }
             val committed = editor.commit()
+            // "MODE_WORLD_READABLE did not throw" is NOT proof the hook can read the file: on N+
+            // that mode no longer sets the other-read bit and the Vector mirror is written 0660.
+            // Make our own committed file other-readable and verify the bit actually landed;
+            // publication counts only when the target UID can really read it.
+            val crossProcessReadable =
+                modeWorldReadableAccepted && committed && ensureOtherReadable(prefs)
             val published = ConfigPublicationContract.isCrossProcessPublishSuccessful(
-                worldReadable,
+                crossProcessReadable,
                 committed,
             )
             Log.w(
                 TAG,
-                "published crossProcess=$published worldReadable=$worldReadable commit=$committed " +
+                "published crossProcess=$published readable=$crossProcessReadable " +
+                    "transportAccepted=$modeWorldReadableAccepted commit=$committed " +
                     "profileId=${built.profileId} fp=${fingerprint(jsonStr)} bytes=${jsonStr.length}",
             )
             if (!published) {
@@ -300,6 +313,41 @@ object ConfigPrefsSync {
                 .commit()
         }.onFailure { Log.e(TAG, "could not persist publication failure", it) }
     }
+
+    /**
+     * Grant other-read on our just-committed prefs file (the hook runs as the TARGET app's UID) and
+     * confirm the bit actually landed. MODE_WORLD_READABLE no longer applies it on Android N+ and
+     * the Vector mirror is written 0660, so this — not "the mode call did not throw" — is what makes
+     * a publish actually reachable. Returns false (a real publication failure) when the backing file
+     * cannot be located or made other-readable.
+     */
+    private fun ensureOtherReadable(prefs: SharedPreferences): Boolean =
+        try {
+            val file = sharedPrefsFileOrNull(prefs)
+            if (file == null) {
+                Log.e(TAG, "cannot resolve prefs file to verify cross-process readability")
+                false
+            } else {
+                // We own the file, so we can widen its mode; the commit's atomic rename resets it to
+                // the (non-world-readable) default, hence doing it here, right after commit.
+                file.setReadable(true, /* ownerOnly = */ false)
+                ConfigPublicationContract.isOtherReadable(Os.stat(file.path).st_mode)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "cross-process readability could not be ensured", t)
+            false
+        }
+
+    /** The concrete file behind a [SharedPreferences] (also the Vector mirror when redirected). */
+    private fun sharedPrefsFileOrNull(prefs: SharedPreferences): File? =
+        try {
+            prefs.javaClass.getDeclaredField("mFile")
+                .apply { isAccessible = true }
+                .get(prefs) as? File
+        } catch (t: Throwable) {
+            Log.e(TAG, "reflective prefs file lookup failed", t)
+            null
+        }
 
     /** SHA-256 of the published payload — config provenance, comparable across UI / log / probe. */
     private fun fingerprint(json: String): String = PublishedConfig.fingerprint(json)
